@@ -11,6 +11,7 @@ Rickshaw needs the following:
     <pre>[ "--rw=read --bs=4k", "--rw=write --bs=4k" ]</pre>
   - The [multiplex](https://github.com/perftool-incubator/multiplex) project can be used to generate this array (it can convert things like "--rw=read,write --bs=4k" into the array above), and it will do parameter validation for you as well.
 - Endpoint extension
+  - An endpoint is a place a benchmark or tool runs.  An endpoint could be almost anything as long as there is an extension to support that endpoint type.  The most basic endpoint extension is 'local'.  Other endpoint extensions planned are 'ssh' for exeucting on a remote host, 'k8s' for executing on kubernetes (with dynamic creation of pods/containers), 'osp' for execution on Openstack (with built-in support to create VMs on demand).  Other extension could exist, like 'ec2' for Amazon-elastic-compute, 'gce' for Google-cloud, and 'azure' for Microsoft-cloud.   
   - This determines how the benchmark gets executed on different endpoints.  The default extension, local, simply runs the benchmark command on the local host.  Rickshaw supports using multiple extensions for different endpoints.  For example, if you want to run uperf benchmark, you need both a client and server uperf.  If you want to run the uperf server on Kuberbetes, but you want to run the uperf client on a baremetal host, you can use the 'k8s' extension for the server and the 'ssh' extension for the client
   - <pre>--endpoint:k8s:server[1]:$master-hostname --endpoint:ssh:client[1]:$client-hostname</pre>
   - Other examples
