@@ -12,12 +12,18 @@ Rickshaw needs the following:
   - The [multiplex](https://github.com/perftool-incubator/multiplex) project can be used to generate this array (it can convert things like "--rw=read,write --bs=4k" into the array above), and it will do parameter validation for you as well.
 - Endpoint extension
   - This determines how the benchmark gets executed on different endpoints.  The default extension, local, simply runs the benchmark command on the local host.  Rickshaw supports using multiple extensions for different endpoints.  For example, if you want to run uperf benchmark, you need both a client and server uperf.  If you want to run the uperf server on Kuberbetes, but you want to run the uperf client on a baremetal host, you can use the 'k8s' extension for the server and the 'ssh' extension for the client
-  - <pre>--endpoint:server[1]:k8s:$master-hostname --endpoint:client[1]:ssh:$client-hostname</pre>
+  - <pre>--endpoint:k8s:server[1]:$master-hostname --endpoint:ssh:client[1]:$client-hostname</pre>
   - Other examples
     - 8 servers running in 8 containers in k8s and 8 clients running on the same barmetal host:  
-      - <pre>--endpoint:server[1-8]:k8s:$master-hostname --endpoint:client[1-8]:ssh:$client-hostname</pre>
+      <pre>--endpoint:k8s:server[1-8]:$master-hostname --endpoint:ssh:client[1-8]:$client-hostname</pre>
+    - 8 servers running in 8 containers in k8s and 8 clients running on 8 different barmetal host:  
+      <pre>--endpoint:k8s:server[1-8]:$master-hostname --endpoint:ssh:client[1]:$client1-hostname \
+      --endpoint:ssh:client[2]:$client2-hostname --endpoint:ssh:client[3]:$client3-hostname \
+      --endpoint:ssh:client[4]:$client4-hostname --endpoint:ssh:client[5]:$client5-hostname \
+      --endpoint:ssh:client[6]:$client6-hostname --endpoint:ssh:client[7]:$client7-hostname \
+      --endpoint:ssh:client[8]:$client8-hostname </pre>  
     - 8 servers running in 8 containers in k8s cluster A and 8 clients running in 8 containers in k8s cluster B:  
-      - <pre>--endpoint:server[1-8]:k8s:$cluster-a-master-hostname --endpoint:client[1-8]:k8s:$cluster-b-master-hostname</pre>
+      <pre>--endpoint:k8s:server[1-8]:$cluster-a-master-hostname --endpoint:k8s:client[1-8]:$cluster-b-master-hostname</pre>
   - If you don't provide any endpoint options, rickshaw will assume you want to run on the local system, and only 1 client will be used, and if the benchmark requires a server, only 1 server will be used, also on the local host.  
 - User and test information
   - The following is optional, but is highly recommended to use so that your run can be easily searchable later.  Rickshaw looks for the following
