@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+echo "This is the local extension"
+echo "ARGV: $@"
+exit 0

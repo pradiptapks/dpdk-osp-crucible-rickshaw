@@ -1,0 +1,214 @@
+#!/usr/bin/perl
+# -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=perl
+#
+# Author: Andrew Theurer
+#
+# Rickshaw will run a benhcmark for you.  It "takes" your benchmark wherever you need it to
+# go, as long as there is an extension for your particular endpoint (a host, cloud,
+# container-runtime, etc). Extensions are in ./endpoints, and as of this version,
+# only the 'local' extension exists.
+#
+# Rickshaw needs to know how a benchmark gets executed and what it should do with the output.
+# It requires a JSON file that is specific to your benchmark that declares this information.
+#
+# Rickshaw also needs to know what benchmark parameters you want to use to run the benchmark.
+# This is also JSON file, and can include multiple sets of parameters if you want to run the
+# benchmark multiple times (iterations), and with each set of unique parameters, it can run
+# multiple times (samples) so you know if the result is consistent or not.
+
+use strict;
+use warnings;
+use JSON::XS;
+use Data::Dumper;
+
+print Dumper \@ARGV;
+
+my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "i-s");
+my $debug = 1;
+my $bench_config_file;
+my $bench_config_ref;
+my %bench_config;
+my $params_ref;
+my @params;
+my @endpoints;
+my %run; # A multi-dimensional, nested hash, schema TBD
+         # This hash documents what was run.
+         # CDM utilities will convert this into many CDM documents.
+chomp(my $base_dir = `/bin/pwd`);
+
+sub debug_log {
+    if ($debug) {
+        print "[DEBUG]" . $_[0];
+    }
+}
+
+sub put_json_file {
+    my $filename = shift;
+    my $json_ref = shift;
+    my $coder = JSON::XS->new;
+    debug_log(sprintf "trying to write [%s]\n", $filename);
+    my $json_text = $coder->encode($json_ref);
+    open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
+    printf JSON_FH "%s", $json_text;
+    close JSON_FH;
+}
+
+sub get_json_file {
+    my $filename = shift;
+    my $coder = JSON::XS->new;
+    debug_log(sprintf "trying to open [%s]\n", $filename);
+    open(JSON_FH, $filename) || die("Could not open file $filename\n");
+    my $json_text = "";
+    while ( <JSON_FH> ) {
+        $json_text .= $_;
+    }
+    close JSON_FH;
+    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";;
+    return $perl_scalar;
+}
+
+foreach my $e (qw(RS_USER RS_EMAIL RS_TAGS RS_DESC)) {
+    if (exists $ENV{$e}) {
+        my $var = ($e =~ s/^RS_//);
+        $run{$var} = $ENV{$e};
+    }
+}
+
+# Process the cmdline params
+while (scalar @ARGV > 0) {
+    my $p = shift @ARGV;
+    debug_log(sprintf "processing \@ARGV, param: [%s]\n", $p);
+    my $arg;
+    my $val;
+    if ( $p =~ /^\-\-(\S+)/ ) {
+        if ( $p =~ /^\-\-(\S+)=(.*)/ ) { # '--arg=val'
+            $arg = $1;
+            $val = $2;
+        } else { # '--arg val'
+            $arg = $p;
+            $val = shift @ARGV;
+        }
+        debug_log(sprintf "processing \@ARGV, arg is: [%s], val is: [%s]\n", $arg, $val);
+    } else {
+        print "[ERROR]malformed cmdline parameter: %s\n";
+        exit 1;
+    }
+    if ($arg eq "bench-config" ) {
+        debug_log(sprintf "found bench-config param\n");
+        $bench_config_file = $val;
+        $bench_config_ref = get_json_file($bench_config_file);
+        %bench_config = %{ $bench_config_ref };
+        if (exists $bench_config{'benchmark'}) {
+            printf "Preparing to run %s\n", $bench_config{'benchmark'};
+            $run{'benchmark'} = $bench_config{'benchmark'};
+        } else {
+            print "[ERROR]benchmark was not defined in %s\n", $bench_config_file;
+            exit 1;
+        }
+    } elsif ($arg eq "bench-params") {
+        $params_ref = get_json_file($val);
+        @params = @{ $params_ref };
+    } elsif ($arg eq "dir") {
+        $base_dir = $val;
+    } elsif ($arg eq "endpoint") {
+        push(@endpoints, $val);
+    } elsif ($arg =~ /^test-order$|^tool-group$|^num-samples$|^name$|^email$|^tags$|^desc|/) {
+        $run{$arg} = $val;
+    } else {
+        printf "[ERROR]parameter not valid: %s\n";
+        exit 1;
+    }
+}
+
+# Apply defaults
+foreach my $p (keys %defaults) {
+    if (! exists $run{$p}) {
+        $run{$p} = $defaults{$p};
+    }
+}
+# Confirm we have required params
+defined $bench_config_ref || die "[ERROR]You must use --bench-config=/path/to/benchmark-config.json\n";
+debug_log(sprintf Dumper $bench_config_ref);
+defined $params_ref || die "[ERROR]Your must use --bench-params=/path/to/benchmark-params.json\n";
+
+-e $base_dir || mkdir($base_dir);
+
+# If there are no endpoints, assume 1 endpoint using the 'local' extension
+if (scalar @endpoints == 0) {
+    if (exists $bench_config{'client'} and exists $bench_config{'server'}) {
+        push(@endpoints, "local:client[1],server[1]");
+    } else {
+        push(@endpoints, "local:client[1]");
+    }
+}
+
+print "\nEndpoints that will be used:\n";
+foreach my $endpoint (@endpoints) {
+    printf "%s\n", $endpoint;
+}
+$run{'endpoints'} = \@endpoints;
+
+
+# Deploy the endpoints so they are ready to run benchmark and tools
+foreach my $endpoint (@endpoints) {
+    (my $type, my $opts) = split(/:/, $endpoint);
+    if (-e "./endpoints/" . $type) {
+        my $cmd = "./endpoints/" . $type . " " . $opts . " \"" . $bench_config_file . "\"";
+        debug_log(sprintf "going to run %s\n", $cmd);
+        # The below 'system' needs to be forked, then wait for all to finish.
+        # The endpoint program should get all clients/servers "ready", that is,
+        # waiting for instructions from roadblock.  The above command needs
+        # info about how to contact roadblock.
+        my $rc = system ($cmd);
+        printf "exit code from endpoint: %d\n", $rc;
+    } else {
+        printf "[ERROR]could not find endpoint ./endpoints/%s\n", $type;
+        exit 1;
+    }
+}
+
+# Build test execution order
+my @tests;
+if ($run{'test-order'} eq 'i-s') { # Run all samples for first iteration, then all samples for next iteration.
+    for (my $iid = 0; $iid < scalar @params; $iid++) {
+        for (my $sid = 0; $sid < $run{'num-samples'}; $sid++) {
+            my %test = ('iter_id' => $iid, 'samp_id' => $sid);
+            push(@tests, \%test);
+        }
+    }
+} elsif ($run{'test-order'} eq 's-i') { # Run all iterations for first sample, then all for next sample, etc.
+    for (my $sid = 0; $sid < $run{'num-samples'}; $sid++) {
+        for (my $iid = 0; $iid < scalar @params; $iid++) {
+            my %test = ('iter_id' => $iid, 'samp_id' => $sid);
+            push(@tests, \%test);
+        }
+    }
+}
+
+# Cycle through the list of tests using roadblock to kick them off
+my @iterations;
+printf "\nRequesting endpoints to start tools\n";
+# TODO: tell roadblock to request tool-start at endpoints
+# TODO: wait for roadblock to get ack that tools have started
+printf "Tools have started on endpoints\n";
+for (my $tid = 0; $tid < scalar @tests; $tid++) {
+    printf "\nRequesting endpoints to start test for iteration %d, sample %d\n",
+            $tests[$tid]{'iter_id'}, $tests[$tid]{'samp_id'};
+    # TODO: build per-client/server commands to run benchmark and send to roadblock
+    # TODO: wait for roadbloack to get ack from endpoints that they have started the test
+    printf "Test has started\n";
+    # TODO: wait for roadblock to get ack that test is complete (also have timeout)
+    printf "Test has completed\n";
+    $iterations[$tests[$tid]{'iter_id'}]{'params'} = \%{ $params[$tests[$tid]{'iter_id'}] };
+}
+printf "\nRequesting endpoints to stop tools\n";
+# TODO: tell roadblock to request tool-stop at endpoints
+# TODO: wait for roadblock to get ack that tools have stopped
+printf "Tools have stopped on endpoints\n";
+printf "Requesting endpoints to send test results\n";
+# TODO: tell roadblock to request test data
+printf "Test results from endpoints received\n";
+
+$run{'iterations'} = \@iterations;
+put_json_file("rickshaw.json", \%run);
