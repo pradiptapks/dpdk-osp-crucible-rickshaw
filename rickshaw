@@ -22,10 +22,8 @@ use warnings;
 use JSON::XS;
 use Data::Dumper;
 
-print Dumper \@ARGV;
-
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "i-s");
-my $debug = 1;
+my $debug = 0;
 my $bench_config_file;
 my $bench_config_ref;
 my %bench_config;
@@ -129,7 +127,6 @@ foreach my $p (keys %defaults) {
 }
 # Confirm we have required params
 defined $bench_config_ref || die "[ERROR]You must use --bench-config=/path/to/benchmark-config.json\n";
-debug_log(sprintf Dumper $bench_config_ref);
 defined $params_ref || die "[ERROR]Your must use --bench-params=/path/to/benchmark-params.json\n";
 
 -e $base_dir || mkdir($base_dir);
@@ -150,6 +147,7 @@ foreach my $endpoint (@endpoints) {
 $run{'endpoints'} = \@endpoints;
 
 
+printf "\nendpoint output:\n";
 # Deploy the endpoints so they are ready to run benchmark and tools
 foreach my $endpoint (@endpoints) {
     (my $type, my $opts) = split(/:/, $endpoint);
