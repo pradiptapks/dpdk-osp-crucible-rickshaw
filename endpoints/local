@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+this_endpoint="$1"
+shift
+echo "[$0:$this_endpoint]this is the output from the endpoint 'local'"
+echo "[$0:$this_endpoint]ARGV: $@"
+exit 0
