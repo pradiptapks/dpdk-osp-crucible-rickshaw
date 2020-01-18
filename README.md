@@ -1,5 +1,5 @@
 # rickshaw
-Rickshaw will run a benhcmark for you.  It "takes" your benchmark wherever you need it to go, as long as there is an implementation for your particular endpoint (a host, cloud, container-runtime, etc).  These endpoints are in ./endpoints, and as of this version, only the 'local' endpoint exists.  
+Rickshaw will run a benchmark for you.  It "takes" your benchmark wherever you need it to go, as long as there is an implementation for your particular endpoint (a host, cloud, container-runtime, etc).  These endpoints are in ./endpoints, and as of this version, only the 'local' endpoint exists.
 
 ### Input
 
@@ -10,7 +10,7 @@ Rickshaw needs the following:
   - This tells rickshaw all the different ways you want to run the benchmark
   - The [multiplex](https://github.com/perftool-incubator/multiplex) project can be used to generate this array (it can convert things like "--rw=read,write --bs=4k" into the proper JSON), and it will do parameter validation for you as well.
 - Endpoints
-  - An endpoint is a place a benchmark or tool runs.  An endpoint could be almost anything as long as there is an implementation to support that endpoint type.  The most basic endpoint is 'local'.  Other endpoints planned are 'ssh' for exeucting on a remote host, 'k8s' for executing on kubernetes (with dynamic creation of pods/containers), 'osp' for execution on Openstack (with built-in support to create VMs on demand).  Other endpoints could exist, like 'ec2' for Amazon-elastic-compute, 'gce' for Google-cloud, and 'azure' for Microsoft-cloud.   
+  - An endpoint is a place a benchmark or tool runs.  An endpoint could be almost anything as long as there is an implementation to support that endpoint type.  The most basic endpoint is 'local'.  Other endpoints planned are 'ssh' for executing on a remote host, 'k8s' for executing on kubernetes (with dynamic creation of pods/containers), 'osp' for execution on Openstack (with built-in support to create VMs on demand).  Other endpoints could exist, like 'ec2' for Amazon cloud, 'gce' for Google cloud, and 'azure' for Microsoft cloud.
   - Specifying the endpoint (and what clients/servers it will run) determines how the benchmark gets executed on different systems.  The default endpoint, local, simply runs the benchmark command on the local host.  Rickshaw supports using multiple endpoints for the same run.  For example, if you want to run uperf benchmark, you need both a client and server uperf.  If you want to run the uperf server on Kuberbetes, but you want to run the uperf client on a baremetal host, you can use the 'k8s' endpoint for the server and the 'ssh' endpoint for the client.
   - <pre>--endpoint:k8s:server[1]:$master-hostname --endpoint:ssh:client[1]:$client-hostname</pre>
   - Other examples
