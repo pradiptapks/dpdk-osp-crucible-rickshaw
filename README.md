@@ -4,12 +4,14 @@ Rickshaw will run a benchmark for you.  It "takes" your benchmark wherever you n
 ### Input
 
 Rickshaw needs the following:
-- Benchmark config JSON file
-  - Rickshaw really does not care what the benchmark is; however, rickshaw must have a config file to know how to run the benchmark.  These config files are not bundled with the rickshaw project, but some from other benchmark-helper projects, or you write this config file yourself for your own benchmark.  The config file instructs rickshaw on what to execute on the controller (the host where you are running rickshaw as well as what to run on any benchmark clients and servers. 
-- Benchmark parameters JSON file
-  - This tells rickshaw all the different ways you want to run the benchmark
-  - The [multiplex](https://github.com/perftool-incubator/multiplex) project can be used to generate this array (it can convert things like "--rw=read,write --bs=4k" into the proper JSON), and it will do parameter validation for you as well.
-- Endpoints
+- Benchmark \[helper\] directory (--bench-dir):
+  - To automate a benchmark execution, rickshaw needs a collection of configuration and scripts to assist running that benchmark.  This collection of config and scripts is usually not the benchmark itself; it is another project/git-repo which contains
+    - config JSON which describes to rickshaw how to run the benchmark
+    - any pre and post-processing scripts which aid in the execution of the benchmark.
+    The "--bench-dir" argument should be used to provide the location of that benchmark [helper] project. 
+- Benchmark parameters JSON file (--bench-params):
+  - This tells rickshaw all the different ways you want to run the benchmark.  The [multiplex](https://github.com/perftool-incubator/multiplex) project can be used to generate this array (it can convert things like "--rw=read,write --bs=4k" into the proper JSON), and it will do parameter validation for you as well.
+- Endpoints (--endpoint:\<endpoint-type\>:\<endpoint-options\>):
   - An endpoint is a place a benchmark or tool runs.  An endpoint could be almost anything as long as there is an implementation to support that endpoint type.  The most basic endpoint is 'local'.  Other endpoints planned are 'ssh' for executing on a remote host, 'k8s' for executing on kubernetes (with dynamic creation of pods/containers), 'osp' for execution on Openstack (with built-in support to create VMs on demand).  Other endpoints could exist, like 'ec2' for Amazon cloud, 'gce' for Google cloud, and 'azure' for Microsoft cloud.
   - Specifying the endpoint (and what clients/servers it will run) determines how the benchmark gets executed on different systems.  The default endpoint, local, simply runs the benchmark command on the local host.  Rickshaw supports using multiple endpoints for the same run.  For example, if you want to run uperf benchmark, you need both a client and server uperf.  If you want to run the uperf server on Kuberbetes, but you want to run the uperf client on a baremetal host, you can use the 'k8s' endpoint for the server and the 'ssh' endpoint for the client.
   - <pre>--endpoint:k8s:server[1]:$master-hostname --endpoint:ssh:client[1]:$client-hostname</pre>
@@ -33,11 +35,11 @@ Rickshaw needs the following:
     - RS_DESC Environment variable or --desc containing a free form description of the purpose, conditions, or any other relevant information about this test.
 
 Other, optional paramers include:
-- <pre>--test-order</pre>
-  - i-s = run one iteration and all its samples, then run the next iteration and its samples, etc.
-  - s-i = run the first sample for all iterations, then run all the iterations for the second sample, etc.
-- <pre> --num-samples</pre>
-  - N = number of sample executions to run per iteration
+- Specifying the test order (--test-order):
+  - 'i-s' = run one iteration and all its samples, then run the next iteration and its samples, etc.
+  - 's-i' = run the first sample for all iterations, then run all the iterations for the second sample, etc.
+- Specifying the number of samples per iteration (--num-samples):
+  - \<int\> = number of sample executions to run per iteration
 
 Example rickshaw command:
 
