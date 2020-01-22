@@ -197,6 +197,7 @@ foreach my $endpoint (@endpoints) {
         my $opts = $2;
         my $dir = pushd("./endpoints/" . $type);
         my $cmd = "./" . $type . " --validate " . $opts;
+        debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
         my @output = `$cmd`;
         # Output from endpoint's validation should be 1 or more lines with "client" or "server"
         # followed by 1 or more positive integers representing the client/server IDs this
@@ -209,7 +210,9 @@ foreach my $endpoint (@endpoints) {
                 my $t = $1;
                 my $ids = $2;
                 foreach my $id (split(/\s+/, $ids)) {
+                    die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
                     my %info = ( 'endpoint-type' => $type, 'id' => $id );
+                    printf "ID: [%d]\n", $id;
                     $clients_servers{$t}[$id - 1] = \%info;
                     $min_id = $id if (! defined $min_id or $id < $min_id);
                     $max_id = $id if (! defined $max_id or $id > $max_id);
@@ -259,16 +262,16 @@ $run{'endpoints'} = \@endpoints;
 # Build test execution order
 my @tests;
 if ($run{'test-order'} eq 's') {
-    for (my $iid = 0; $iid < scalar @params; $iid++) {
-        for (my $sid = 0; $sid < $run{'num-samples'}; $sid++) {
-            my %test = ('iter_id' => $iid, 'samp_id' => $sid);
+    for (my $iid = 1; $iid <= scalar @params; $iid++) {
+        for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
+            my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
         }
     }
 } elsif ($run{'test-order'} eq 'i') {
-    for (my $sid = 0; $sid < $run{'num-samples'}; $sid++) {
-        for (my $iid = 0; $iid < scalar @params; $iid++) {
-            my %test = ('iter_id' => $iid, 'samp_id' => $sid);
+    for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
+        for (my $iid = 1; $iid <= scalar @params; $iid++) {
+            my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
         }
     }
@@ -279,7 +282,6 @@ if ($run{'test-order'} eq 's') {
 }
 
 # Run on the controller (the host running this script) the benchmark-specific "pre-script"
-my $endpoint_scripts_dir = $run{'run-dir'} . "/endpoint-scripts";
 if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controller"}{"pre-script"} ne "") {
     my $dir = pushd($run{'run-dir'});
     # Note that the user params for the benchmark are from the first set only
@@ -299,35 +301,38 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
 # Build the client and server scripts
 # TODO: include roadblock commands
 # TODO: run all tests, not just the first one (requires roadblock for synchronization)
+my $endpoint_scripts_dir = $run{'run-dir'} . "/endpoint-scripts";
+-e $endpoint_scripts_dir || mkdir($endpoint_scripts_dir) ||
+    die "[ERROR]Could not create directory for endpoint scripts: [" . $endpoint_scripts_dir . "]\n";
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
         printf "type: [%s]\n", $cs_type;
-        my $id = $$cs_ref{'id'};
-        my $param_id = $id - 1;
+        my $cs_id = $$cs_ref{'id'};
+        my $script_file = $endpoint_scripts_dir . "/" . $cs_type . "-" . $cs_id;
+        open(FH, ">" . $script_file) || die "[ERROR]could not open script file for writing: ["
+                                            . $script_file . "]\n";
+        debug_log(sprintf "writing script file [%s]\n", $script_file);
+        print FH "#!/usr/bin/env bash\n";
+        print FH "exec 1>" . $cs_type . "-" . $cs_id . "-stdout.txt 2>" . $cs_type . "-" . $cs_id . "-stderr.txt\n";
+        print FH "echo Hello\n";
         foreach my $test_ref (@tests) {
-            my $test_iter = $$test_ref{'iter-id'};
-            my $test_samp = $$test_ref{'samp-id'};
+            print "this test:\n" . Dumper $test_ref;
+            my $test_iter = $$test_ref{'iteration-id'};
+            printf "iteration id: [%d]\n", $$test_ref{'iteration-id'};
+            my $test_samp = $$test_ref{'sample-id'};
+            my $param_id = $test_iter - 1;
             # For each client/server and for each test, we need:
             # -pre-benchmark-execution command
             # -roadblock sync to begin this test (not yet implmented here)
             # -apply regex to the benchmark command and run command
             # -roadblock sync to end this test (not yet implmented here)
             # -post-benchmark-execution command
-            -e $endpoint_scripts_dir || mkdir($endpoint_scripts_dir) ||
-                die "[ERROR]Could not create directory for endpoint" .
-                    " scripts: [" . $endpoint_scripts_dir . "]\n";
         
-            my $script_file = $endpoint_scripts_dir . "/" . $cs_type . "-" . $id;
-            open(FH, ">" . $script_file) || die "[ERROR]could not open script file for writing: ["
-                                                . $script_file . "]\n";
-            debug_log(sprintf "writing script file [%s]\n", $script_file);
-            print FH "#!/usr/bin/env bash\n";
-            print FH "exec 1>" . $cs_type . "-" . $id . "-stdout.txt 2>" . $cs_type . "-" . $id . "-stderr.txt\n";
-            print FH "echo Hello\n";
-            if (exists $bench_config{$cs_type}{"pre-script"} and
-            $bench_config{$cs_type}{"pre-script"} ne "") {
-                printf FH "%s\n", $bench_config{$cs_type}{"pre-script"};
-            }
+            printf FH "# Running iteration %d, sample %d\n", $test_iter, $test_samp;
+            #if (exists $bench_config{$cs_type}{"pre-script"} and
+                #$bench_config{$cs_type}{"pre-script"} ne "") {
+                #printf FH "%s\n", $bench_config{$cs_type}{"pre-script"};
+            #}
             if (exists $bench_config{$cs_type}{"bin"} and
             $bench_config{$cs_type}{"bin"} ne "") {
                 die "[ERROR][BUG]param missing\n" if ! defined $params[$param_id];
@@ -348,10 +353,10 @@ foreach my $cs_type (keys %clients_servers) {
             } else {
                 die "[ERROR]Could not find client binary in bench_config\n";
             }
-            close FH;
-            chmod 0755, $script_file;
-            last; # for now only do the first test since we don't have roadblock integrated
+            #last; # for now only do the first test since we don't have roadblock integrated
         }
+        close FH;
+        chmod 0755, $script_file;
     }
 }
 
@@ -399,7 +404,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     # printf "Test has started\n";
     # TODO: wait for roadblock to get ack that test is complete (also have timeout)
     # printf "Test has completed\n";
-    $iterations[$tests[$tid]{'iter_id'}]{'params'} = \%{ $params[$tests[$tid]{'iter_id'}] };
+    $iterations[$tests[$tid]{'iteration-id'}]{'params'} = \%{ $params[$tests[$tid]{'iteration-id'}] };
 }
 # printf "\nRequesting endpoints to stop tools\n";
 # TODO: tell roadblock to request tool-stop at endpoints

@@ -64,9 +64,9 @@ for i in `echo $endpoint_opts | sed -e 's/],/] /g'`; do
             done           
         else
             if [ "$type" == "client" ]; then
-                clients[$j]="client-$ids"
+                clients[$ids]="client-$ids"
             elif [ "$type" == "server" ]; then
-                servers[$j]="server-$ids"
+                servers[$ids]="server-$ids"
             fi
         fi
     done
