@@ -12,11 +12,12 @@ use Cwd;
 use Data::UUID;
 use File::pushd;
 use File::Temp qw(tempdir);
+use File::Copy;
 use JSON::XS;
 use Data::Dumper;
 
 my $ug = Data::UUID->new;
-my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "i-s",
+my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "run-dir" => tempdir(), "run-id" => $ug->create_str());
 
 my $debug = 1;
@@ -27,6 +28,13 @@ my @endpoints;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
          # CDM utilities will convert this into many CDM documents.
+my $redis_passwd = "flubber"; # TODO: make this cmdline setting
+my $rb_base_uuid = $run{'run-id'};
+my $rb_bin = "roadblock";
+my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --timeout=300" .
+                         " --redis-password=" . $redis_passwd;
+my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
+                           " --redis-password=" . $redis_passwd . "\$abort_opt";
 print "\n";
 
 sub usage {
@@ -38,6 +46,35 @@ sub usage {
     print "                'i' = run all iterations of a sample first\n\n";
 }
 
+sub roadblock_leader_sync {
+    my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
+    my $follower_param = "";
+    while (scalar @_ > 0) {
+        $follower_param .= " --followers=" . shift;
+    }
+    my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
+    debug_log(sprintf "roadblock leader command:%s\n", $cmd);
+    my $output = `$cmd`;
+    my $rc = $? & 127;
+    debug_log($output);
+    debug_log(sprintf "roadblock exit code: %d\n", $rc);
+    # Becasue roadblock leader does not exit with right code
+    if ( my $g_output = grep(/Exiting\swith\sabort/, $output) ) {
+        printf "Found \"Exiting with abort\"\n%s\n", $g_output;
+        $rc = 3;
+    } else {
+        $rc = 0;
+    }
+    return $rc;
+}
+
+sub roadblock_follower_sync_cmd {
+    my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
+    my $follower_id = shift;
+    return $base_rb_follower_cmd . $uuid_param . " --follower-id=" . $follower_id .
+    "\nif [ \$\? -gt 0 ]; then\n    exit 1\nfi\n";
+}
+
 sub debug_log {
     if ($debug) {
         print "[DEBUG]" . shift;
@@ -46,9 +83,14 @@ sub debug_log {
 
 sub dump_params {
     my $params_ref = shift;
+    my $cs_id = shift;
     my $params_str = "";
     foreach my $arg (keys %{ $params_ref }) {
-        $params_str .= " --" . $arg . "=" . $$params_ref{$arg};
+        my $val = $$params_ref{$arg};
+        if (defined $cs_id) {
+            $val =~ s/\%client-id\%/$cs_id/;
+        }
+        $params_str .= " --" . $arg . "=" . $val;
     }
     $params_str =~ s/^\s//;
     return $params_str;
@@ -186,6 +228,7 @@ if (scalar @endpoints == 0) {
 # This ensures the format of the specific endpoint option string is completely up to that endpoint
 # and not rickshaw.
 my %clients_servers;
+my @rb_cs_ids; # unique IDs for roadblock
 my $min_id;
 my $max_id;
 printf "Confirming the endpoints will satisfy the benchmark-client ";
@@ -212,8 +255,8 @@ foreach my $endpoint (@endpoints) {
                 foreach my $id (split(/\s+/, $ids)) {
                     die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
                     my %info = ( 'endpoint-type' => $type, 'id' => $id );
-                    printf "ID: [%d]\n", $id;
                     $clients_servers{$t}[$id - 1] = \%info;
+                    push(@rb_cs_ids, $t . "-" . $id);
                     $min_id = $id if (! defined $min_id or $id < $min_id);
                     $max_id = $id if (! defined $max_id or $id > $max_id);
                 }
@@ -298,45 +341,27 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
     debug_log(sprintf "controller pre-script output:\n%s\n", $pre_cmd_output);
 }
 
-# Build the client and server scripts
-# TODO: include roadblock commands
-# TODO: run all tests, not just the first one (requires roadblock for synchronization)
-my $endpoint_scripts_dir = $run{'run-dir'} . "/endpoint-scripts";
--e $endpoint_scripts_dir || mkdir($endpoint_scripts_dir) ||
-    die "[ERROR]Could not create directory for endpoint scripts: [" . $endpoint_scripts_dir . "]\n";
+# Build the client and server benchmark-command files
+my $cs_cmds_dir = $run{'run-dir'} . "/client-server-commands";
+-e $cs_cmds_dir || mkdir($cs_cmds_dir) ||
+    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_cmds_dir . "]\n";
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
-        printf "type: [%s]\n", $cs_type;
         my $cs_id = $$cs_ref{'id'};
-        my $script_file = $endpoint_scripts_dir . "/" . $cs_type . "-" . $cs_id;
-        open(FH, ">" . $script_file) || die "[ERROR]could not open script file for writing: ["
-                                            . $script_file . "]\n";
-        debug_log(sprintf "writing script file [%s]\n", $script_file);
-        print FH "#!/usr/bin/env bash\n";
-        print FH "exec 1>" . $cs_type . "-" . $cs_id . "-stdout.txt 2>" . $cs_type . "-" . $cs_id . "-stderr.txt\n";
-        print FH "echo Hello\n";
+        my $cs_type_id = $cs_type . "-" . $cs_id;
+        my $cmd_file = $cs_cmds_dir . "/" . $cs_type_id;
+        open(FH, ">" . $cmd_file) || die "[ERROR]could not open cmd file for writing: ["
+                                            . $cmd_file . "]\n";
+        debug_log(sprintf "writing script file [%s]\n", $cmd_file);
         foreach my $test_ref (@tests) {
-            print "this test:\n" . Dumper $test_ref;
             my $test_iter = $$test_ref{'iteration-id'};
-            printf "iteration id: [%d]\n", $$test_ref{'iteration-id'};
             my $test_samp = $$test_ref{'sample-id'};
             my $param_id = $test_iter - 1;
-            # For each client/server and for each test, we need:
-            # -pre-benchmark-execution command
-            # -roadblock sync to begin this test (not yet implmented here)
-            # -apply regex to the benchmark command and run command
-            # -roadblock sync to end this test (not yet implmented here)
-            # -post-benchmark-execution command
-        
-            printf FH "# Running iteration %d, sample %d\n", $test_iter, $test_samp;
-            #if (exists $bench_config{$cs_type}{"pre-script"} and
-                #$bench_config{$cs_type}{"pre-script"} ne "") {
-                #printf FH "%s\n", $bench_config{$cs_type}{"pre-script"};
-            #}
+            my $rb_session = "start-test:" . $test_iter . "-" . $test_samp;
             if (exists $bench_config{$cs_type}{"bin"} and
             $bench_config{$cs_type}{"bin"} ne "") {
                 die "[ERROR][BUG]param missing\n" if ! defined $params[$param_id];
-                my $cmd = $bench_config{$cs_type}{"bin"} . " " . dump_params($params[$param_id]);
+                my $cmd = $bench_config{$cs_type}{"bin"} . " " . dump_params($params[$param_id], $cs_id);
                 debug_log(sprintf "cmd: [%s]\n", $cmd);
                 # Apply a regex from the benchmark config file to the command
                     # This is used to remove things like "--clients=" because the
@@ -349,24 +374,34 @@ foreach my $cs_type (keys %clients_servers) {
                         $cmd = eval "\$_='$cmd'; $r; return scalar \$_";
                     }
                 }
-                printf FH "%s\n", $cmd;
+                printf FH "%d-%d %s\n", $test_iter, $test_samp, $cmd;
             } else {
                 die "[ERROR]Could not find client binary in bench_config\n";
             }
-            #last; # for now only do the first test since we don't have roadblock integrated
         }
         close FH;
-        chmod 0755, $script_file;
+        chmod 0755, $cmd_file;
     }
 }
 
 # Deploy ths endpoints so they are ready to run benchmark and tools
-printf "\nendpoint output:\n";
+copy("./client-server-script", $run{'run-dir'} . "/client-server-script") || die "Could not copy client-server-script to " . $run{'run-dir'} . "/client-server-script";
+chmod 0755, $run{'run-dir'} . "/client-server-script";
+print "Deploying endpoints\n";
+my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
+mkdir($base_endpoint_run_dir);
+debug_log(sprintf "\nendpoint output:\n");
 foreach my $endpoint (@endpoints) {
+    my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $endpoint;
+    mkdir($this_endpoint_run_dir);
+    die if ! -e $this_endpoint_run_dir;
     (my $type, my $endpoint_opts) = split(/:/, $endpoint);
     if (-e "./endpoints/" . $type) {
         my $dir = pushd("./endpoints/" . $type);
-        my $cmd = "./" . $type . " " . $endpoint_opts . " " . $run{'run-dir'} . " " . $endpoint_scripts_dir;
+        my $cmd = "./" . $type . " " . $endpoint_opts . " " . $run{'run-id'} . " " . $run{'run-dir'}
+                  . " " . $cs_cmds_dir
+                  . "  >" . $this_endpoint_run_dir . "/endpoint-stdout.txt"
+                  . " 2>" . $this_endpoint_run_dir . "/endpoint-stderr.txt";
         debug_log(sprintf "going to run %s\n", $cmd);
         # The below 'system' needs to be forked, then wait for all to finish.
         # The endpoint program should get all clients/servers "ready", that is,
@@ -375,44 +410,54 @@ foreach my $endpoint (@endpoints) {
         # Endpoints should return for each client and server started:
         # - the ID of the client/server
         # - the roadblock client ID
-        my $rc = system ($cmd);
-        debug_log(sprintf "exit code from endpoint: %d\n", $rc);
+        system($cmd . " &");
+        #my $rc = $?;
+        #debug_log(sprintf "exit code from endpoint: %d\n", $rc) if ($rc);
+        #debug_log(sprintf "output from endpoint:\n%s\n", $output);
     } else {
         printf "[ERROR]could not find endpoint ./endpoints/%s\n", $type;
         exit 1;
     }
 }
-
-# Build the benchmark command for the clients and servers for each iteration
-####my %endpoint_cmds;
-####for (my $iid = 0; $iid < scalar @params; $iid++) {
-####debug_log(sprintf "building %s number %d pre-benchmark command for iteration %d\n",
-####"client", 1, $iid);
-####}
+roadblock_leader_sync("endpoint-deploy", @endpoints);
 
 # Cycle through the list of tests using roadblock to kick them off
 my @iterations;
-# printf "\nRequesting endpoints to start tools\n";
-# TODO: tell roadblock to request tool-start at endpoints
-# TODO: wait for roadblock to get ack that tools have started
-# printf "Tools have started on endpoints (not really)\n";
-for (my $tid = 0; $tid < scalar @tests; $tid++) {
-    # printf "\nRequesting endpoints to start test for iteration %d, sample %d\n",
-    #        $tests[$tid]{'iter_id'}, $tests[$tid]{'samp_id'};
-    # TODO: build per-client/server commands to run benchmark and send to roadblock
-    # TODO: wait for roadbloack to get ack from endpoints that they have started the test
-    # printf "Test has started\n";
-    # TODO: wait for roadblock to get ack that test is complete (also have timeout)
-    # printf "Test has completed\n";
-    $iterations[$tests[$tid]{'iteration-id'}]{'params'} = \%{ $params[$tests[$tid]{'iteration-id'}] };
+roadblock_leader_sync("client-server-script-start", @rb_cs_ids);
+my $rc = roadblock_leader_sync("client-server-start-tools", @rb_cs_ids);
+printf "return code from roadblock_leader_sync: %s\n", $rc;
+if ($rc > 0) {
+    die "Roadblock said to abort";
 }
-# printf "\nRequesting endpoints to stop tools\n";
-# TODO: tell roadblock to request tool-stop at endpoints
-# TODO: wait for roadblock to get ack that tools have stopped
-# printf "Tools have stopped on endpoints\n";
-# printf "Requesting endpoints to send test results\n";
-# TODO: tell roadblock to request test data
-# printf "Test results from endpoints received\n";
-
+print "Clients/servers starting tools\n";
+for (my $tid = 0; $tid < scalar @tests; $tid++) {
+    my $iter_id = $tests[$tid]{'iteration-id'};
+    my $samp_id = $tests[$tid]{'sample-id'};
+    my $rc = roadblock_leader_sync("client-server-start-test:" . $iter_id . "-" . $samp_id, @rb_cs_ids);
+    printf "roadblock client-server-start-test:%s return code: %d\n", $iter_id . "-" . $samp_id, $rc;
+    if ($rc > 0) {
+        printf "abort from last start-test so breaking out of test-loop\n";
+        last;
+    }
+    printf "Clients/servers starting test number %d: iteration %d, sample %d\n", $tid + 1, $iter_id, $samp_id;
+    $iterations[$tests[$tid]{'iteration-id'}]{'params'} = \%{ $params[$tests[$tid]{'iteration-id'}] };
+    my $rc = roadblock_leader_sync("client-server-stop-test:" . $iter_id . "-" . $samp_id, @rb_cs_ids);
+    printf "roadblock client-server-stop-test:%s return code: %d\n", $iter_id . "-" . $samp_id, $rc;
+    if ($rc > 0) {
+        printf "abort from last stop-test so breaking out of test-loop\n";
+        last;
+    }
+}
+roadblock_leader_sync("client-server-stop-tools", @rb_cs_ids);
+print "Clients/servers stopping tools\n";
+roadblock_leader_sync("client-server-send-data", @rb_cs_ids);
+print "Clients/servers sending back results to endpoints\n";
+roadblock_leader_sync("client-server-script-finish", @rb_cs_ids);
+print "Client/server scripts finished\n";
+roadblock_leader_sync("endpoint-move-data", @endpoints);
+print "Endpoints moving data to controller\n";
+roadblock_leader_sync("endpoint-finish", @endpoints);
+print "Endpoints finished\n";
+print "Post-processing data\n";
 $run{'iterations'} = \@iterations;
-put_json_file("rickshaw.json", \%run);
+put_json_file($run{'run-dir'} . "/rickshaw.json", \%run);

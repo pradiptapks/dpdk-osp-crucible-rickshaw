@@ -20,8 +20,9 @@
 #
 # If --validate is used all options after client/server will be ignored
 # If not using --validate script-dir and --run-dir are required
-# The --run-dir tells this script what directory rickshaw's current-working-directory,
-# The --script-dir tells this script where the client/server scripts are located
+# The --run-id is rickshaw's run ID
+# The --run-dir is rickshaw's current-working-directory,
+# The --script-dir is where the client/server scripts are located
 # where controller-generated files the endpoint might need will be located
 
 function exit_error() {
@@ -32,11 +33,11 @@ function exit_error() {
 function start_tmux() {
     session_id="$1"
     script="$2"
-    if tmux list-sessions | awk -F: '{print $1}' | grep -q -- "$session_id"; then
+    if tmux list-sessions 2>/dev/null | awk -F: '{print $1}' | grep -q -- "$session_id"; then
         echo "killing existing tmux session $session_id"
-        tmux kill-session -t "$session_id"
+        tmux kill-session -t "$session_id" >/dev/null 2>&1
     fi
-    tmux new -d -s "$session_id" "$script"
+    tmux new -d -s "$session_id" "$script" >start-tmux.txt 2>&1
 }
 
 if [ "$1" == "--validate" ]; then
@@ -46,6 +47,7 @@ fi
 
 # Next argument must be the endpoint options which determine the 
 # clients and servers
+endpoint_name="local"
 endpoint_opts="$1"
 shift
 for i in `echo $endpoint_opts | sed -e 's/],/] /g'`; do
@@ -81,15 +83,8 @@ if [ "$do_validate" == 1 ]; then
     exit
 fi
 
-# The last argument is a directory where there is a script for each client [and server if used].
-# The scripts are named client|server-<id>, and they will contain all of the commands to:
-# -tell roadblock leader it is ready to run all the tests
-# -wait for roadblock to tell it to start tools, then start tools
-# -loop over the tests, for each test:
-#  -wait for roadblock leader to tell it to start next test
-#  -start next test
-# -wait for roadblock leader to tell it stop tools, then stop tools
-# -wait for roadblock leader to tell it to send all data back, then send data back
+run_id="$1"
+shift
 if [ -z "$1" ]; then
     exit_error "The run-directory ws not provided"
 fi
@@ -101,35 +96,52 @@ fi
 if [ -z "$1" ]; then
     exit_error "The script-direcotry ws not provided"
 fi
-script_dir=$1
+cmd_dir=$1
 shift
-if [ ! -d "$script_dir" ]; then
-    exit_error "The script directory [$script_dir] does not exist"
+if [ ! -d "$cmd_dir" ]; then
+    exit_error "The script directory [$cmd_dir] does not exist"
 fi
 
 # For each client and server launch the actual script which will run it.
-local_run_dir=`mktemp -d`
+endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_name:$endpoint_opts"
+mkdir -p $endpoint_run_dir;
 for i in ${clients[@]} ${servers[@]}; do
-    cs_run_dir="$local_run_dir/$i"
+    cs_run_dir="$endpoint_run_dir/$i"
     mkdir -p "$cs_run_dir" || exit_error "Could not create client/server run dir: [$cs_run_dir]"
     echo running $i in $cs_run_dir
     # Below is a HACK.  We should not copy everything from the rickshaw run_dir to the clients/servers
     # We should be using from the bench config JSON, controller.files-to-[client|server]
     pushd $rickshaw_run_dir >/dev/null || exit_error "Could not chdir to $rickshaw_run_dir"
-    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" || exit_error "Could not copy files from run dir to $i"
+    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || exit_error "Could not copy files from run dir to $i"
     popd >/dev/null
-    script="$script_dir/$i"
-    if [ -e "$script" ]; then
-        echo "about to start $i"
-        pushd "$cs_run_dir" >/dev/null ||
-            exit_error "Could not pushd to client/server run dir: [$cs_run_dir]"
-        start_tmux "$i" "$script" || exit_error "Failed to starte tmux"
-        popd >/dev/null
+    cmd="$rickshaw_run_dir/client-server-script localhost flubber $run_id $i $cmd_dir/$i"
+    if [ -e "$rickshaw_run_dir/client-server-script" ]; then
+        if [ -e "$cmd_dir/$i" ]; then
+            echo "about to start $i"
+            pushd "$cs_run_dir" >/dev/null ||
+                exit_error "Could not pushd to client/server run dir: [$cs_run_dir]"
+            start_tmux "$i" "$cmd" || exit_error "Failed to start tmux"
+            popd >/dev/null
+        else
+            echo "[ERROR]could not find command file $cmd_dir/$i"
+            exit 1
+        fi
     else
-        echo "[ERROR]could not find script $script"
+        echo "[ERROR]could not find script $rickshaw_run_dir/client-server-script"
         exit 1
     fi
 done
+echo "This endpiont deployed"
+roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
+          --uuid=$run_id:endpoint-deploy --follower-id="$endpoint_name:$endpoint_opts"
+echo "Waiting for all client/server scripts to finish"
+# The next roadblock does not sync until the controller (rickshaw/leader) finishes a "client/server-finish" sync
+roadblock --role=follower --redis-server=localhost --timeout=7200 --redis-password=flubber\
+          --uuid=$run_id:endpoint-move-data --follower-id="$endpoint_name:$endpoint_opts"
+echo "Moving endpoint data"
+roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
+          --uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
+echo "All endpionts finished"
     
 # At this point the endpoint is "deployed" and can exit
 exit 0
