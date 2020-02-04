@@ -2,7 +2,7 @@
 	{
 		"rw": "read",
 		"bs": "4k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -15,14 +15,14 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	},
 	{
 		"rw": "read",
 		"bs": "8k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -35,14 +35,14 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	},
 	{
 		"rw": "read",
 		"bs": "64k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -55,14 +55,14 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	},
 	{
 		"rw": "read",
 		"bs": "4k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
@@ -75,14 +75,14 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	},
 	{
 		"rw": "read",
 		"bs": "8k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
@@ -95,14 +95,14 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	},
 	{
 		"rw": "read",
 		"bs": "64k",
-		"runtime": "30s",
+		"runtime": "180s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
@@ -115,7 +115,7 @@
                 "log_unix_epoch": "1",
                 "output-format": "json",
 		"time_based": "1",
-		"filesize": "256M",
+		"filesize": "6M",
                 "output": "fio-result.json",
 		"filename": "/data/fio-%client-id%"
 	}

@@ -109,12 +109,14 @@ for i in ${clients[@]} ${servers[@]}; do
     cs_run_dir="$endpoint_run_dir/$i"
     mkdir -p "$cs_run_dir" || exit_error "Could not create client/server run dir: [$cs_run_dir]"
     echo running $i in $cs_run_dir
-    # Below is a HACK.  We should not copy everything from the rickshaw run_dir to the clients/servers
+    # Below is a HACK.  We should not copy everything from the
+    # rickshaw run_dir to the clients/servers
     # We should be using from the bench config JSON, controller.files-to-[client|server]
     pushd $rickshaw_run_dir >/dev/null || exit_error "Could not chdir to $rickshaw_run_dir"
-    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || exit_error "Could not copy files from run dir to $i"
+    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
+        exit_error "Could not copy files from run dir to $i"
     popd >/dev/null
-    cmd="$rickshaw_run_dir/client-server-script localhost flubber $run_id $i $cmd_dir/$i"
+    cmd="$rickshaw_run_dir/client-server-script localhost $rickshaw_run_dir flubber $run_id $i $cmd_dir/$i"
     if [ -e "$rickshaw_run_dir/client-server-script" ]; then
         if [ -e "$cmd_dir/$i" ]; then
             echo "about to start $i"
@@ -142,6 +144,6 @@ echo "Moving endpoint data"
 roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
           --uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
 echo "All endpionts finished"
-    
+/bin/rm -rf "$endpoint_run_dir"
 # At this point the endpoint is "deployed" and can exit
 exit 0

@@ -3,15 +3,18 @@
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
 
-host=$1
+host=$1 # The controller
 shift
-passwd=$1
+host_rundir=$1 # The controller's run directory
 shift
-uuid=$1
+passwd=$1 # The password for roadblock/redis
 shift
-cs_id=$1
+uuid=$1 # This run's UUID (needed for roadblock)
 shift
-tests=$1 # local file, one test per line: <iteration-id>-<sample-id> <cmd>
+cs_id=$1 # This client or server ID
+shift
+tests=$1 # The file containing the benchmark commands,
+         # one test per line: <iteration-id>-<sample-id> <cmd>
 shift
 
 exec 1>$cs_id-stdout.txt 2>$cs_id-stderr.txt
@@ -28,7 +31,7 @@ function do_roadblock() {
 
 do_roadblock client-server-script-start 300 || exit
 do_roadblock client-server-start-tools 300 || exit
-echo "Starting tools"
+echo -e "\nStarting tools"
 # start-tools command here
 
 testloop_abort_opt=" --abort 1"
@@ -41,9 +44,11 @@ while read line; do
     find . -mindepth 1 -maxdepth 1 -type f | grep -v -- $cs_id-std | cpio -pdum iteration-$iter/sample-$samp/
     pushd iteration-$iter/sample-$samp
     do_roadblock client-server-start-test:$iter-$samp 300 || break
-    echo "Running iteration $iter, sample $samp"
+    echo -e "\nRunning iteration $iter, sample $samp"
+    echo -e "Benchmark command: $cmd"
     $cmd
     if [ $? -gt 0 ]; then
+        echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
         do_roadblock client-server-stop-test:$iter-$samp 300 " --abort=1"
         break
     else
@@ -53,9 +58,12 @@ while read line; do
 done < "$tests"
 
 do_roadblock client-server-stop-tools 300 || exit
-echo "stoppong tools"
+echo -e "\nStopping tools"
 # stop-tools command here
 do_roadblock client-server-send-data 300
-echo "clients/servers copying data back to endpoint" || exit
+echo -e \n"Clients/servers copying data back to endpoint" || exit
+tar czf $cs_id-data.tgz *
+scp $cs_id-data.tgz $host:$host_rundir
 do_roadblock client-server-script-finish 300 || exit
-echo "all client/server scripts are finished"
+echo -e "\nAll client/server scripts are finished"
+/bin/rm -rf iteration-*

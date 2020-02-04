@@ -11,8 +11,10 @@ use warnings;
 use Cwd;
 use Data::UUID;
 use File::pushd;
+use File::Basename;
 use File::Temp qw(tempdir);
 use File::Copy;
+use File::Path qw(make_path);
 use JSON::XS;
 use Data::Dumper;
 
@@ -20,7 +22,7 @@ my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "run-dir" => tempdir(), "run-id" => $ug->create_str());
 
-my $debug = 1;
+my $debug = 0;
 my $use_roadblock = 0;
 my %bench_config;
 my @params;
@@ -35,7 +37,13 @@ my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --ti
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
-print "\n";
+
+my $rickshaw_dir;
+{
+    # Get the absolute path of the rickshaw project directory
+    my $dir = pushd(dirname($0));
+    $rickshaw_dir = getcwd();
+}
 
 sub usage {
     print "\nusage:\n\n";
@@ -60,19 +68,13 @@ sub roadblock_leader_sync {
     debug_log(sprintf "roadblock exit code: %d\n", $rc);
     # Becasue roadblock leader does not exit with right code
     if ( my $g_output = grep(/Exiting\swith\sabort/, $output) ) {
-        printf "Found \"Exiting with abort\"\n%s\n", $g_output;
+        printf "Found \"Exiting with abort:\"\n%s\n", $g_output;
+        printf "%s\n", $output;
         $rc = 3;
     } else {
         $rc = 0;
     }
     return $rc;
-}
-
-sub roadblock_follower_sync_cmd {
-    my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
-    my $follower_id = shift;
-    return $base_rb_follower_cmd . $uuid_param . " --follower-id=" . $follower_id .
-    "\nif [ \$\? -gt 0 ]; then\n    exit 1\nfi\n";
 }
 
 sub debug_log {
@@ -99,7 +101,7 @@ sub dump_params {
 sub put_json_file {
     my $filename = shift;
     my $json_ref = shift;
-    my $coder = JSON::XS->new;
+    my $coder = JSON::XS->new->canonical->pretty;
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
     open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
@@ -117,10 +119,46 @@ sub get_json_file {
         $json_text .= $_;
     }
     close JSON_FH;
-    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";;
+    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";
     return $perl_scalar;
 }
 
+# This will consolidate chronologically sequential metric samples with same
+# value, and if samples have no 'begin' a timestamp will be derived.
+sub dedup_metric {
+    my $metric_ref = shift;
+    my $count = 0;
+    my $num_samples = scalar @{ $$metric_ref{'data'} };
+    return if ($num_samples == 0);
+    my $native_interval = $$metric_ref{'data'}[1]{'end'} - $$metric_ref{'data'}[0]{'end'};
+    for (my $i = scalar @{ $$metric_ref{'data'} } - 1; $i >= 0; $i--) {
+        my $this_value = $$metric_ref{'data'}[$i]{'value'};
+        # If 'begin' is missing or the previous sample has the same value as the current sample,
+        # search backwards until we find an earlier sample that has a different value from the
+        # current one.
+        if (! defined $$metric_ref{'data'}[$i]{'begin'} or
+            $$metric_ref{'data'}[$i - 1]{'vaule'} == $this_value) {
+            # Need to find a "begin" based on earlier samples
+            my $look_back = 0;
+            while ($i - $look_back >= 0 and 
+                   $$metric_ref{'data'}[$i - $look_back]{'value'} == $this_value) {
+                $look_back++;
+            }
+            if ($i - $look_back >= 0) {
+                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[$i - $look_back]{'end'} + 1;
+            } else {
+                $i - $look_back + 1, $native_interval;
+                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[0]{'end'} - $native_interval + 1;
+            }
+            if ($look_back > 1) { # deduping 1 or more samples
+                splice @{ $$metric_ref{'data'} }, $i - $look_back + 1, $look_back - 1;
+                $i -= $look_back + 1; # Adjust the loop variable since the array is shortened
+            }
+        }
+    }
+}
+
+# Apply envinronment variables
 foreach my $e (qw(RS_USER RS_EMAIL RS_TAGS RS_DESC)) {
     if (exists $ENV{$e}) {
         my $var = ($e =~ s/^RS_//);
@@ -302,20 +340,23 @@ printf "\n";
 
 $run{'endpoints'} = \@endpoints;
 
-# Build test execution order
+# Build test execution order (and the iteration/sample dirs)
+$run{'num-iterations'} = scalar @params;
 my @tests;
 if ($run{'test-order'} eq 's') {
-    for (my $iid = 1; $iid <= scalar @params; $iid++) {
+    for (my $iid = 1; $iid <= $run{'num-iterations'}; $iid++) {
         for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
             my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
+            #make_path($run{'run-dir'} . "/iteration-" . $iid . "/sample-" . $sid);
         }
     }
 } elsif ($run{'test-order'} eq 'i') {
     for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
-        for (my $iid = 1; $iid <= scalar @params; $iid++) {
+        for (my $iid = 1; $iid <= $run{'num-iterations'}; $iid++) {
             my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
+            #make_path($run{'run-dir'} . "/iteration-" . $iid . "/sample-" . $sid);
         }
     }
 } else {
@@ -385,7 +426,8 @@ foreach my $cs_type (keys %clients_servers) {
 }
 
 # Deploy ths endpoints so they are ready to run benchmark and tools
-copy("./client-server-script", $run{'run-dir'} . "/client-server-script") || die "Could not copy client-server-script to " . $run{'run-dir'} . "/client-server-script";
+copy($rickshaw_dir . "/client-server-script", $run{'run-dir'} . "/client-server-script")
+    || die "Could not copy client-server-script to " . $run{'run-dir'} . "/client-server-script";
 chmod 0755, $run{'run-dir'} . "/client-server-script";
 print "Deploying endpoints\n";
 my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
@@ -396,8 +438,8 @@ foreach my $endpoint (@endpoints) {
     mkdir($this_endpoint_run_dir);
     die if ! -e $this_endpoint_run_dir;
     (my $type, my $endpoint_opts) = split(/:/, $endpoint);
-    if (-e "./endpoints/" . $type) {
-        my $dir = pushd("./endpoints/" . $type);
+    if (-e $rickshaw_dir . "/endpoints/" . $type) {
+        my $dir = pushd($rickshaw_dir . "/endpoints/" . $type);
         my $cmd = "./" . $type . " " . $endpoint_opts . " " . $run{'run-id'} . " " . $run{'run-dir'}
                   . " " . $cs_cmds_dir
                   . "  >" . $this_endpoint_run_dir . "/endpoint-stdout.txt"
@@ -425,26 +467,27 @@ roadblock_leader_sync("endpoint-deploy", @endpoints);
 my @iterations;
 roadblock_leader_sync("client-server-script-start", @rb_cs_ids);
 my $rc = roadblock_leader_sync("client-server-start-tools", @rb_cs_ids);
-printf "return code from roadblock_leader_sync: %s\n", $rc;
 if ($rc > 0) {
     die "Roadblock said to abort";
 }
 print "Clients/servers starting tools\n";
+my $abort_test_id;
 for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $iter_id = $tests[$tid]{'iteration-id'};
     my $samp_id = $tests[$tid]{'sample-id'};
+    my $iter_array_idx = $iter_id - 1;
     my $rc = roadblock_leader_sync("client-server-start-test:" . $iter_id . "-" . $samp_id, @rb_cs_ids);
-    printf "roadblock client-server-start-test:%s return code: %d\n", $iter_id . "-" . $samp_id, $rc;
     if ($rc > 0) {
-        printf "abort from last start-test so breaking out of test-loop\n";
+        printf "[ERROR]Abort from last start-test so breaking out of test-loop\n";
         last;
     }
     printf "Clients/servers starting test number %d: iteration %d, sample %d\n", $tid + 1, $iter_id, $samp_id;
-    $iterations[$tests[$tid]{'iteration-id'}]{'params'} = \%{ $params[$tests[$tid]{'iteration-id'}] };
-    my $rc = roadblock_leader_sync("client-server-stop-test:" . $iter_id . "-" . $samp_id, @rb_cs_ids);
-    printf "roadblock client-server-stop-test:%s return code: %d\n", $iter_id . "-" . $samp_id, $rc;
+    $iterations[$iter_array_idx]{'params'} = \%{ $params[$iter_array_idx] };
+    #print "iterations array now has:\n" . Dumper \@iterations;
+    $rc = roadblock_leader_sync("client-server-stop-test:" . $iter_id . "-" . $samp_id, @rb_cs_ids);
     if ($rc > 0) {
-        printf "abort from last stop-test so breaking out of test-loop\n";
+        printf "[ERROR]Received abort from last test so discontinuing tests\n";
+        $abort_test_id = $tid;
         last;
     }
 }
@@ -459,5 +502,116 @@ print "Endpoints moving data to controller\n";
 roadblock_leader_sync("endpoint-finish", @endpoints);
 print "Endpoints finished\n";
 print "Post-processing data\n";
+# Organize the data from the clients into a common directory structure, organized by
+# iteration, then by sample, then finally by client/server.  This is needed to have
+# the benchmark's postprocessing script work.  Also background the post-process script
+# for each test.
+opendir(my $dh, $run{'run-dir'});
+my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
+my $pp_cmd = $bench_config{'controller'}{'post-script'};
+$pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
+$pp_cmd =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+my @pids;
+close $dh;
+{
+    mkdir($run{'run-dir'} . "/tmp-data-dir");
+    my $dir = pushd($run{'run-dir'} . "/tmp-data-dir");
+    foreach my $archive (@data_archives) {
+        $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or continue;
+        my $cs_type = $1;
+        my $cs_id = $2;
+        my $tar_cmd = "tar zxf ../" . $archive;
+        my $tar_output = `$tar_cmd`;
+        for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
+            my $params = dump_params($params[$i - 1]);
+            for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+                my $cs_path = "/iteration-" . $i . "/sample-" . $s . "/clients/" . $cs_id;
+                make_path($run{'run-dir'} . $cs_path);
+                my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
+                my $mv_cmd = "/bin/mv * " . $run{'run-dir'} . $cs_path;
+                my $mv_output = `$mv_cmd`;
+                if (my $pid = fork) {
+                    push(@pids, $pid);
+                } else {
+                    my $dir = pushd($run{'run-dir'} . $cs_path);
+                    system($pp_cmd . " " . $params);
+                    #system("gzip -9 *");
+                    exit;
+                }
+            }
+        }
+        system("/bin/rm ../" . $archive);
+    }
+    rmdir($run{'run-dir'} . "/tmp-data-dir/*");
+    system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");
+    system("/bin/ls " . $run{'run-dir'} . "/tmp-data-dir");
+}
+printf "Waiting for %d per-client/server post-processing jobs to complete\n", scalar @pids;
+while (wait > -1) {
+}
+rmdir($run{'run-dir'} . "/tmp-data-dir/");
+
+print "Waiting for consolidation of per-client/server data into sample data to complete\n";
+# For each iteration and sample, generate a combined metrics.json, joining the metrics from each
+# client/server.  The benchmark metrics need to be grouped by the benchmark period they ran in.
+for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
+    my $iter_array_idx = $i -1;
+    my $params = dump_params($params[$i - 1]);
+    my @samples;
+    for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+        my %sample; # sample data from all clients/servers
+        my @cons_periods; # consolidated periods across clients/servers get merged here
+        my $samp_dir = $run{'run-dir'} . "/iteration-" . $i . "/sample-" . $s;
+        opendir(my $samp_dh, $samp_dir);
+        my @cs_names = grep(/^(clients|servers)$/, readdir($samp_dh));
+        for my $cs_name (@cs_names) { 
+            my $cs_name_dir = $samp_dir . "/" . $cs_name;
+            opendir(my $cs_name_dh, $cs_name_dir);
+            my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
+            for my $cs_id (@cs_ids) {
+                my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
+                my $data_file = $cs_id_dir . "/" . "post-process-data.json";
+                if (-e $data_file) {
+                    my $data_ref = get_json_file($data_file);
+                    my %data = %$data_ref;
+                    if (defined $data{'periods'}) {
+                        for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
+                            my $period_name = $data{'periods'}[$k]{'name'};
+                            my $cons_period_id;
+                            for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
+                                if ($cons_periods[$cons_id]{'name'} eq $period_name) {
+                                    $cons_period_id = $cons_id;
+                                    last;
+                                }
+                            }
+                            for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
+                                # Add the client info to the metric desc
+                                $$metric{'names'}{'client-id'} = $cs_id;
+                                $$metric{'desc'}{'name-format'} = '%client-id%' . "-" .
+                                                                 $$metric{'desc'}{'name-format'};
+                                if (! defined $cons_period_id) {
+                                    my @metrics;
+                                    my %period = ('name' => $period_name, 'metrics' => \@metrics);
+                                    push(@cons_periods, \%period);
+                                    $cons_period_id = scalar @cons_periods - 1;
+                                }
+                                dedup_metric($metric);
+                                push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        $sample{'periods'} = \@cons_periods;
+        push(@samples, \%sample);
+    }
+    $iterations[$iter_array_idx]{'samples'} = \@samples;
+}
+print "Consolidation complete\n";
+
 $run{'iterations'} = \@iterations;
 put_json_file($run{'run-dir'} . "/rickshaw.json", \%run);
+if (defined $abort_test_id) {
+    printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
+}
