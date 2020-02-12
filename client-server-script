@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+
+
+host=$1 # The controller
+shift
+host_rundir=$1 # The controller's run directory
+shift
+passwd=$1 # The password for roadblock/redis
+shift
+uuid=$1 # This run's UUID (needed for roadblock)
+shift
+cs_id=$1 # This client or server ID
+shift
+tests=$1 # The file containing the benchmark commands,
+         # one test per line: <iteration-id>-<sample-id> <cmd>
+shift
+
+exec 1>$cs_id-stdout.txt 2>$cs_id-stderr.txt
+echo args: $@
+
+function do_roadblock() {
+    label=$1
+    timeout=$2
+    extra=$3
+    roadblock --role=follower --redis-server=$host --timeout=$timeout --redis-password=$passwd \
+              --uuid=$uuid:$label --follower-id=$cs_id $extra
+    return $?
+}
+
+do_roadblock client-server-script-start 300 || exit
+do_roadblock client-server-start-tools 300 || exit
+echo -e "\nStarting tools"
+# start-tools command here
+
+testloop_abort_opt=" --abort 1"
+while read line; do
+    iter_samp=`echo $line | awk '{print $1}'`
+    cmd=`echo $line | sed -e s/^$iter_samp//`
+    iter=`echo $iter_samp | awk -F- '{print $1}'`
+    samp=`echo $iter_samp | awk -F- '{print $2}'`
+    mkdir -p iteration-$iter/sample-$samp
+    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- $cs_id-std | cpio -pdum iteration-$iter/sample-$samp/
+    pushd iteration-$iter/sample-$samp
+    do_roadblock client-server-start-test:$iter-$samp 300 || break
+    echo -e "\nRunning iteration $iter, sample $samp"
+    echo -e "Benchmark command: $cmd"
+    $cmd
+    if [ $? -gt 0 ]; then
+        echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+        do_roadblock client-server-stop-test:$iter-$samp 300 " --abort=1"
+        break
+    else
+        do_roadblock client-server-stop-test:$iter-$samp 300 || break
+    fi
+    popd
+done < "$tests"
+
+do_roadblock client-server-stop-tools 300 || exit
+echo -e "\nStopping tools"
+# stop-tools command here
+do_roadblock client-server-send-data 300
+echo -e \n"Clients/servers copying data back to endpoint" || exit
+tar czf $cs_id-data.tgz *
+scp $cs_id-data.tgz $host:$host_rundir
+do_roadblock client-server-script-finish 300 || exit
+echo -e "\nAll client/server scripts are finished"
+/bin/rm -rf iteration-*
