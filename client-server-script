@@ -2,8 +2,6 @@
 # -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
-exec 1>$cs_id-stdout.txt 2>$cs_id-stderr.txt
-echo args: $@
 
 longopts="rickshaw-host:,run-dir:,cs-id:,cmd-dir:,roadblock-server:,roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
@@ -62,6 +60,8 @@ while true; do
     esac
 done
 
+exec &> >(tee -a "$cs_id-log.txt")
+
 if [ -z "$rickshaw_host" ]; then
 	echo "Exiting due to rickshaw host not being set"
 	exit 1
@@ -104,7 +104,7 @@ while read line; do
     iter=`echo $iter_samp | awk -F- '{print $1}'`
     samp=`echo $iter_samp | awk -F- '{print $2}'`
     mkdir -p iteration-$iter/sample-$samp
-    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- $cs_id-std | cpio -pdum iteration-$iter/sample-$samp/
+    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | cpio -pdum iteration-$iter/sample-$samp/
     pushd iteration-$iter/sample-$samp
     do_roadblock client-server-start-test:$iter-$samp 300 || break
     echo -e "\nRunning iteration $iter, sample $samp"
@@ -128,9 +128,8 @@ echo -e "\nClients/servers copying data back to endpoint"
 if [ -e $cs_id-data.tgz ]; then
     /bin/rm -f $cs_id-data.tgz
 fi
-tar czf $cs_id-data.tgz *
-echo scp $cs_id-data.tgz $rickshaw_host:$run_dir
-scp $cs_id-data.tgz $rickshaw_host:$run_dir
+tar czf - . | ssh $rickshaw_host "dd of=$run_dir/$cs_id-data.tgz"
+#scp $cs_id-data.tgz $rickshaw_host:$run_dir
 do_roadblock client-server-script-finish 300 || exit
 echo -e "\nAll client/server scripts are finished"
-/bin/rm -rf iteration-*
+# /bin/rm -rf iteration-*

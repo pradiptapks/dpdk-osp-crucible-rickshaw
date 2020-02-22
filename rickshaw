@@ -22,7 +22,7 @@ my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "run-dir" => tempdir(), "run-id" => $ug->create_str());
 
-my $debug = 1;
+my $debug = 0;
 my $use_roadblock = 0;
 my %bench_config;
 my @params;
@@ -661,7 +661,9 @@ close $dh;
                 }
             }
         }
-        system("/bin/rm ../" . $archive);
+        if (!$debug) {
+            system("/bin/rm ../" . $archive);
+        }
     }
     rmdir($run{'run-dir'} . "/tmp-data-dir/*");
     system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");

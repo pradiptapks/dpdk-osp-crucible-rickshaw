@@ -213,7 +213,7 @@ if [ "$osruntime" == "builtin" ]; then
         # rickshaw run_dir to the clients/servers
         # We should be using from the bench config JSON, controller.files-to-[client|server]
         pushd $run_dir >/dev/null || exit_error "Could not chdir to $run_dir"
-        find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
+        find . -mindepth 1 -maxdepth 1 -type f -print | grep -v client-server-script | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
             exit_error "Could not copy files from run dir to $i"
         popd >/dev/null
         cmd="$run_dir/client-server-script --rickshaw-host=localhost --run-dir=$run_dir --cs-id=$i --cmd-dir=$cmd_dir $cs_roadblock_opts"
@@ -250,14 +250,10 @@ run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:en
 echo "Waiting for all client/server scripts to finish"
 # The next roadblock does not sync until the controller (rickshaw/leader) finishes a "client/server-finish" sync
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:endpoint-move-data" "$endpoint_name:$endpoint_opts"
-#roadblock --role=follower --redis-server=localhost --timeout=7200 --redis-password=flubber\
-          #--uuid=$run_id:endpoint-move-data --follower-id="$endpoint_name:$endpoint_opts"
 echo "Moving endpoint data"
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:endpoint-finish" "$endpoint_name:$endpoint_opts"
-#roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
-          #--uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
 echo "All endpionts finished"
-/bin/rm -rf "$endpoint_run_dir"
+#/bin/rm -rf "$endpoint_run_dir"
 # At this point the endpoint is "deployed" and can exit
 exit 0
 
