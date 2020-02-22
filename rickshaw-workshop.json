@@ -1,0 +1,19 @@
+{
+    "targets": {
+	"default": {
+	    "packages": [
+		"rickshaw-script"
+	    ]
+	}
+    },
+    "packages": {
+        "rickshaw-script": {
+            "type": "files",
+            "file_info": {
+		"type": "local-copy",
+	    	"src": "/home/atheurer/repos/crucible/subprojects/core/rickshaw/client-server-script",
+            	"dst": "/"	
+            }
+	}
+    }
+}

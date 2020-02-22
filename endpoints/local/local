@@ -16,7 +16,7 @@
 #   -mount the filesystem image (plus /proc & /sys) then chroot to it
 #
 # Usage:
-# local [--validate] client[n-m,o-p],server[n-m,o-p] run-dir script-dir
+# local [--validate] --endpoint-opts=client:n-m,o-p,server:n-m,o-p --run-dir --script-dir
 #
 # If --validate is used all options after client/server will be ignored
 # If not using --validate script-dir and --run-dir are required
@@ -40,110 +40,225 @@ function start_tmux() {
     tmux new -d -s "$session_id" "$script" >start-tmux.txt 2>&1
 }
 
-if [ "$1" == "--validate" ]; then
-    shift
-    do_validate=1
-fi
+function run_roadblock_follower() {
+    local host=$1; shift
+    local passwd=$1; shift
+    local uuid=$1; shift
+    local follower=$1; shift
+    if [ -z "$cs_roadblock_opts" ]; then
+        return 0
+    fi
+    roadblock --role=follower --redis-server=$host --timeout=300 --redis-password=$passwd\
+              --uuid=$uuid --follower-id=$follower
+    return $?
+}
 
-# Next argument must be the endpoint options which determine the 
-# clients and servers
 endpoint_name="local"
-endpoint_opts="$1"
-shift
-for i in `echo $endpoint_opts | sed -e 's/],/] /g'`; do
-    type=`echo $i | awk -F[ '{print $1}'`
-    range_ids=`echo $i | awk -F[ '{print $2}' | awk -F] '{print $1}'`
+osruntime="builtin" # to be changed to "chroot" when implemented
+longopts="validate,endpoint-opts:,run-id:,run-dir:,image-id:,roadblock-server:,roadblock-passwd:,roadblock-id:"
+opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
+if [ $? -ne 0 ]; then
+    printf -- "\tUnrecognized option specified\n\n"
+    usage
+    exit 1
+fi
+eval set -- "$opts";
+while true; do
+    case "$1" in
+        --validate)
+            do_validate=1
+            shift;
+            ;;
+        --endpoint-opts)
+            shift;
+            endpoint_opts="$1"
+            shift;
+            ;;
+        --run-id)
+            shift;
+            run_id="$1"
+            shift;
+            ;;
+        --run-dir)
+            shift;
+            run_dir="$1"
+            shift;
+            ;;
+        --image-id)
+            shift;
+            image_id="$1"
+            shift;
+            ;;
+        --roadblock-server)
+            shift;
+            roadblock_server="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-server=$roadblock_server"
+            shift;
+            ;;
+        --roadblock-passwd)
+            shift;
+            roadblock_passwd="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-passwd=$roadblock_passwd"
+            shift;
+            ;;
+        --roadblock-id)
+            shift;
+            roadblock_id="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-id=$roadblock_id"
+            shift;
+            ;;
+        --)
+            shift;
+            break;
+           ;;
+        *)
+           exit_error "Unexpected argument [$1]"
+           shift;
+           break;
+           ;;
+    esac
+done
 
-    for ids in `echo $range_ids | sed -e 's/,/ /'`; do
-        if echo $ids | grep -q -- "-"; then
-            range=`echo $ids | sed 's/-/ /'`
-            for j in `seq $range`; do
-                if [ "$type" == "client" ]; then
-                    clients[$j]="client-$j"
-                elif [ "$type" == "server" ]; then
-                    servers[$j]="server-$j"
+for i in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+    arg=`echo $i | awk -F: '{print $1}'`
+    val=`echo $i | awk -F: '{print $2}'`
+    case "$arg" in
+        client|server|clients|servers)
+            for ids in `echo $val | sed -e 's/,/ /'`; do
+                if echo $ids | grep -q -- "-"; then
+                    range=`echo $ids | sed 's/-/ /'`
+                    for j in `seq $range`; do
+                        if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                            clients[$j]="client-$j"
+                        elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                            servers[$j]="server-$j"
+                        fi
+                    done
+                else
+                    if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                        clients[$ids]="client-$ids"
+                    elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                        servers[$ids]="server-$ids"
+                    fi
                 fi
-            done           
-        else
-            if [ "$type" == "client" ]; then
-                clients[$ids]="client-$ids"
-            elif [ "$type" == "server" ]; then
-                servers[$ids]="server-$ids"
-            fi
-        fi
-    done
+            done
+            ;;
+        osruntime)
+            case "$val" in
+                builtin|chroot|podman)
+                    osruntime=$val
+                    ;;
+                *)
+                    exit_error "osruntime $val not supported"
+                    ;;
+            esac
+            ;;
+        *)
+            exit_error "endpoint options $arg not supported"
+            ;;
+    esac
 done
 
 # Validation just returns what clients and servers would be used
 if [ "$do_validate" == 1 ]; then
-    echo "client ${!clients[@]}"
+    if [ ${#clients[@]} -gt 0 ]; then
+        echo "client ${!clients[@]}"
+    fi
     if [ ${#servers[@]} -gt 0 ]; then
         echo "server ${!servers[@]}"
     fi
     exit
 fi
 
-run_id="$1"
-shift
-if [ -z "$1" ]; then
-    exit_error "The run-directory ws not provided"
-fi
-rickshaw_run_dir=$1
-shift
-if [ ! -d "$rickshaw_run_dir" ]; then
-    exit_error "The run directory [$rickshaw_run_dir] does not exist"
-fi
-if [ -z "$1" ]; then
-    exit_error "The script-direcotry ws not provided"
-fi
-cmd_dir=$1
-shift
-if [ ! -d "$cmd_dir" ]; then
-    exit_error "The script directory [$cmd_dir] does not exist"
+if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; then
+    echo "Not using roadblock to synchronize since some or all options were missing"
+    cs_roadblock_opts=""
+    rb_do_exit=0
+    if [ ${#clients[@]} -gt 1 ]; then
+        echo "Refusing to run because roadblock is not being used and number of clients is > 1"
+        rb_do_exit=1
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo "Refusing to run because roadblock is not being used and servers are used"
+        rb_do_exit=1
+    fi
+    if [ "$rb_do_exit" == "1" ]; then
+        exit_error "Exiting do to roadblock/client/server conflict"
+    fi
 fi
 
-# For each client and server launch the actual script which will run it.
-endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_name:$endpoint_opts"
-mkdir -p $endpoint_run_dir;
-for i in ${clients[@]} ${servers[@]}; do
-    cs_run_dir="$endpoint_run_dir/$i"
-    mkdir -p "$cs_run_dir" || exit_error "Could not create client/server run dir: [$cs_run_dir]"
-    echo running $i in $cs_run_dir
-    # Below is a HACK.  We should not copy everything from the
-    # rickshaw run_dir to the clients/servers
-    # We should be using from the bench config JSON, controller.files-to-[client|server]
-    pushd $rickshaw_run_dir >/dev/null || exit_error "Could not chdir to $rickshaw_run_dir"
-    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
-        exit_error "Could not copy files from run dir to $i"
-    popd >/dev/null
-    cmd="$rickshaw_run_dir/client-server-script localhost $rickshaw_run_dir flubber $run_id $i $cmd_dir/$i"
-    if [ -e "$rickshaw_run_dir/client-server-script" ]; then
-        if [ -e "$cmd_dir/$i" ]; then
-            echo "about to start $i"
-            pushd "$cs_run_dir" >/dev/null ||
-                exit_error "Could not pushd to client/server run dir: [$cs_run_dir]"
-            start_tmux "$i" "$cmd" || exit_error "Failed to start tmux"
-            popd >/dev/null
+
+if [ -z "$run_id" ]; then
+    exit_error "The run ID was not provided"
+fi
+if [ -z "$run_dir" ]; then
+    exit_error "--run-dir was not provided"
+fi
+if [ ! -d "$run_dir" ]; then
+    exit_error "The run directory [$run_dir] does not exist"
+fi
+
+echo osruntime: $osruntime
+
+if [ "$osruntime" == "builtin" ]; then
+    cmd_dir="$run_dir/client-server-commands"
+    # For each client and server launch the actual script which will run it.
+    endpoint_run_dir="$run_dir/endpoint-run/$endpoint_name:$endpoint_opts"
+    mkdir -p $endpoint_run_dir;
+    for i in ${clients[@]} ${servers[@]}; do
+        cs_run_dir="$endpoint_run_dir/$i"
+        mkdir -p "$cs_run_dir" || exit_error "Could not create client/server run dir: [$cs_run_dir]"
+        echo running $i in $cs_run_dir
+        # Below is a HACK.  We should not copy everything from the
+        # rickshaw run_dir to the clients/servers
+        # We should be using from the bench config JSON, controller.files-to-[client|server]
+        pushd $run_dir >/dev/null || exit_error "Could not chdir to $run_dir"
+        find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
+            exit_error "Could not copy files from run dir to $i"
+        popd >/dev/null
+        cmd="$run_dir/client-server-script --rickshaw-host=localhost --run-dir=$run_dir --cs-id=$i --cmd-dir=$cmd_dir $cs_roadblock_opts"
+        if [ -e "$run_dir/client-server-script" ]; then
+            if [ -e "$cmd_dir/$i" ]; then
+                echo "about to start $i: $cmd"
+                pushd "$cs_run_dir" >/dev/null ||
+                    exit_error "Could not pushd to client/server run dir: [$cs_run_dir]"
+                if [ -z "$cs_roadblock_opts" ]; then
+                    # Only when not using roadblock run the client in the foreground
+                    $cmd
+                else
+                    echo "using tmux"
+                    start_tmux "$i" "$cmd" || exit_error "Failed to start tmux"
+                fi
+                popd >/dev/null
+            else
+                echo "[ERROR]could not find command file $cmd_dir/$i"
+                exit 1
+            fi
         else
-            echo "[ERROR]could not find command file $cmd_dir/$i"
+            echo "[ERROR]could not find script $run_dir/client-server-script"
             exit 1
         fi
-    else
-        echo "[ERROR]could not find script $rickshaw_run_dir/client-server-script"
-        exit 1
-    fi
-done
+    done
+elif [ "$osruntime" == "chroot" ]; then
+    echo doing chroot runtime
+elif [ "$osruntime" == "podman"]; then
+    echo doing podman runtime
+fi
+
 echo "This endpiont deployed"
-roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
-          --uuid=$run_id:endpoint-deploy --follower-id="$endpoint_name:$endpoint_opts"
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:endpoint-deploy" "$endpoint_name:$endpoint_opts"
 echo "Waiting for all client/server scripts to finish"
 # The next roadblock does not sync until the controller (rickshaw/leader) finishes a "client/server-finish" sync
-roadblock --role=follower --redis-server=localhost --timeout=7200 --redis-password=flubber\
-          --uuid=$run_id:endpoint-move-data --follower-id="$endpoint_name:$endpoint_opts"
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:endpoint-move-data" "$endpoint_name:$endpoint_opts"
+#roadblock --role=follower --redis-server=localhost --timeout=7200 --redis-password=flubber\
+          #--uuid=$run_id:endpoint-move-data --follower-id="$endpoint_name:$endpoint_opts"
 echo "Moving endpoint data"
-roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
-          --uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" "$roadblock_id:endpoint-finish" "$endpoint_name:$endpoint_opts"
+#roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
+          #--uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
 echo "All endpionts finished"
 /bin/rm -rf "$endpoint_run_dir"
 # At this point the endpoint is "deployed" and can exit
 exit 0
+
+

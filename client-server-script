@@ -2,37 +2,100 @@
 # -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
-
-host=$1 # The controller
-shift
-host_rundir=$1 # The controller's run directory
-shift
-passwd=$1 # The password for roadblock/redis
-shift
-uuid=$1 # This run's UUID (needed for roadblock)
-shift
-cs_id=$1 # This client or server ID
-shift
-tests=$1 # The file containing the benchmark commands,
-         # one test per line: <iteration-id>-<sample-id> <cmd>
-shift
-
 exec 1>$cs_id-stdout.txt 2>$cs_id-stderr.txt
 echo args: $@
+
+longopts="rickshaw-host:,run-dir:,cs-id:,cmd-dir:,roadblock-server:,roadblock-passwd:,roadblock-id:"
+opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
+if [ $? -ne 0 ]; then
+    printf -- "\tUnrecognized option specified\n\n"
+    usage
+    exit 1
+fi
+eval set -- "$opts";
+while true; do
+    case "$1" in
+        --rickshaw-host)
+            shift;
+            rickshaw_host="$1"
+            shift;
+            ;;
+        --run-dir)
+            shift;
+            run_dir=$1
+            shift;
+            ;;
+        --cs-id)
+            shift;
+            cs_id="$1"
+            shift;
+            ;;
+        --cmd-dir)
+            shift;
+            cmd_dir="$1"
+            shift;
+            ;;
+        --roadblock-server)
+            shift;
+            roadblock_server="$1"
+            shift;
+            ;;
+        --roadblock-passwd)
+            shift;
+            roadblock_passwd="$1"
+            shift;
+            ;;
+        --roadblock-id)
+            shift;
+            roadblock_id="$1"
+            shift;
+            ;;
+        --)
+            shift;
+            break;
+           ;;
+        *)
+           exit_error "Unexpected argument [$1]"
+           shift;
+           break;
+           ;;
+    esac
+done
+
+if [ -z "$rickshaw_host" ]; then
+	echo "Exiting due to rickshaw host not being set"
+	exit 1
+fi
+
+use_roadblock=1
+if [ -z "$roadblock_server" ]; then
+    echo "Cannot use roadblock for synchronizaton because a server was not provided"
+    use_roadblock=0
+fi
+if [ -z "$roadblock_id" ]; then
+    echo "Cannot use roadblock for synchronizaton because an ID was not provided"
+    use_roadblock=0
+fi
+if [ -z "$roadblock_passwd" ]; then
+    echo "Cannot use roadblock for synchronizaton because a password was not provided"
+    use_roadblock=0
+fi
 
 function do_roadblock() {
     label=$1
     timeout=$2
     extra=$3
-    roadblock --role=follower --redis-server=$host --timeout=$timeout --redis-password=$passwd \
-              --uuid=$uuid:$label --follower-id=$cs_id $extra
-    return $?
+    if [ "$use_roadblock" == "1" ]; then
+        roadblock --role=follower --redis-server=$roadblock_server --timeout=$timeout --redis-password=$roadblock_passwd \
+                     --uuid=$roadblock_id:$label --follower-id=$cs_id $extra
+        return $?
+    fi
+    return 0
 }
 
 do_roadblock client-server-script-start 300 || exit
 do_roadblock client-server-start-tools 300 || exit
 echo -e "\nStarting tools"
-# start-tools command here
 
 testloop_abort_opt=" --abort 1"
 while read line; do
@@ -55,15 +118,19 @@ while read line; do
         do_roadblock client-server-stop-test:$iter-$samp 300 || break
     fi
     popd
-done < "$tests"
+done < "$cmd_dir/$cs_id"
 
 do_roadblock client-server-stop-tools 300 || exit
 echo -e "\nStopping tools"
 # stop-tools command here
-do_roadblock client-server-send-data 300
-echo -e \n"Clients/servers copying data back to endpoint" || exit
+do_roadblock client-server-send-data 300 || exit
+echo -e "\nClients/servers copying data back to endpoint"
+if [ -e $cs_id-data.tgz ]; then
+    /bin/rm -f $cs_id-data.tgz
+fi
 tar czf $cs_id-data.tgz *
-scp $cs_id-data.tgz $host:$host_rundir
+echo scp $cs_id-data.tgz $rickshaw_host:$run_dir
+scp $cs_id-data.tgz $rickshaw_host:$run_dir
 do_roadblock client-server-script-finish 300 || exit
 echo -e "\nAll client/server scripts are finished"
 /bin/rm -rf iteration-*
