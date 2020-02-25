@@ -3,11 +3,10 @@
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
 
-longopts="rickshaw-host:,run-dir:,cs-id:,cmd-dir:,roadblock-server:,roadblock-passwd:,roadblock-id:"
+longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:,roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
-    printf -- "\tUnrecognized option specified\n\n"
-    usage
+    printf -- "\tUnrecognized option specified\n\n" $@
     exit 1
 fi
 eval set -- "$opts";
@@ -18,9 +17,9 @@ while true; do
             rickshaw_host="$1"
             shift;
             ;;
-        --run-dir)
+        --rickshaw-run-dir)
             shift;
-            run_dir=$1
+            rickshaw_run_dir=$1
             shift;
             ;;
         --cs-id)
@@ -28,9 +27,9 @@ while true; do
             cs_id="$1"
             shift;
             ;;
-        --cmd-dir)
+        --endpoint-run-dir)
             shift;
-            cmd_dir="$1"
+            endpoint_run_dir="$1"
             shift;
             ;;
         --roadblock-server)
@@ -60,7 +59,10 @@ while true; do
     esac
 done
 
-exec &> >(tee -a "$cs_id-log.txt")
+#exec &> >(tee -a "$cs_id-log.txt")
+exec 2>&1 >$endpoint_run_dir/$cs_id-stderrout.txt
+
+/bin/mkdir -p $rickshaw_run_dir
 
 if [ -z "$rickshaw_host" ]; then
 	echo "Exiting due to rickshaw host not being set"
@@ -86,7 +88,7 @@ function do_roadblock() {
     timeout=$2
     extra=$3
     if [ "$use_roadblock" == "1" ]; then
-        roadblock --role=follower --redis-server=$roadblock_server --timeout=$timeout --redis-password=$roadblock_passwd \
+        /usr/bin/roadblock.py --role=follower --redis-server=$roadblock_server --timeout=$timeout --redis-password=$roadblock_passwd \
                      --uuid=$roadblock_id:$label --follower-id=$cs_id $extra
         return $?
     fi
@@ -98,13 +100,26 @@ do_roadblock client-server-start-tools 300 || exit
 echo -e "\nStarting tools"
 
 testloop_abort_opt=" --abort 1"
+/bin/mkdir -p "$endpoint_run_dir/$cs_id"
+pushd "$endpoint_run_dir" >/dev/null
+scp -o StrictHostKeyChecking=no -r -i rickshaw_id.rsa $rickshaw_host:"$rickshaw_run_dir/client-server-commands" .
+echo endpoint run dir:
+/bin/pwd
+/bin/ls -l
+#find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "endpoint-std" | cpio -pdum "$endpoint_run_dir/$cs_id"
+/bin/cp * "$endpoint_run_dir/$cs_id"
+pushd "$endpoint_run_dir/$cs_id" >/dev/null
+echo cs_dir:
+/bin/pwd
+/bin/ls -l 
 while read line; do
     iter_samp=`echo $line | awk '{print $1}'`
     cmd=`echo $line | sed -e s/^$iter_samp//`
     iter=`echo $iter_samp | awk -F- '{print $1}'`
     samp=`echo $iter_samp | awk -F- '{print $2}'`
     mkdir -p iteration-$iter/sample-$samp
-    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | cpio -pdum iteration-$iter/sample-$samp/
+    #find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | cpio -pdum iteration-$iter/sample-$samp/
+    /bin/cp * iteration-$iter/sample-$samp/
     pushd iteration-$iter/sample-$samp
     do_roadblock client-server-start-test:$iter-$samp 300 || break
     echo -e "\nRunning iteration $iter, sample $samp"
@@ -118,7 +133,7 @@ while read line; do
         do_roadblock client-server-stop-test:$iter-$samp 300 || break
     fi
     popd
-done < "$cmd_dir/$cs_id"
+done < "$endpoint_run_dir/client-server-commands/$cs_id"
 
 do_roadblock client-server-stop-tools 300 || exit
 echo -e "\nStopping tools"
@@ -128,8 +143,9 @@ echo -e "\nClients/servers copying data back to endpoint"
 if [ -e $cs_id-data.tgz ]; then
     /bin/rm -f $cs_id-data.tgz
 fi
-tar czf - . | ssh $rickshaw_host "dd of=$run_dir/$cs_id-data.tgz"
-#scp $cs_id-data.tgz $rickshaw_host:$run_dir
+tar czf - . | ssh -o StrictHostKeyChecking=off -i "$endpoint_run_dir/rickshaw_id.rsa" $rickshaw_host "dd of=$rickshaw_run_dir/$cs_id-data.tgz"
+popd >/dev/null
 do_roadblock client-server-script-finish 300 || exit
 echo -e "\nAll client/server scripts are finished"
 # /bin/rm -rf iteration-*
+popd >/dev/null

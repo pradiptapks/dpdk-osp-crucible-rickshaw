@@ -24,6 +24,7 @@ my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => 
 
 my $debug = 0;
 my $use_roadblock = 0;
+my $use_workshop = 0;
 my %bench_config;
 my @params;
 my @endpoints;
@@ -32,7 +33,7 @@ my %run; # A multi-dimensional, nested hash, schema TBD
          # CDM utilities will convert this into many CDM documents.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
-my $rb_bin = "roadblock";
+my $rb_bin = "/usr/bin/roadblock.py";
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --timeout=300" .
                          " --redis-password=" . $redis_passwd;
@@ -41,6 +42,7 @@ my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost 
 
 my $rickshaw_dir;
 my $endpoint_roadblock_opt = "";
+my $workshop_roadblock_opt = "";
 {
     # Get the absolute path of the rickshaw project directory
     my $dir = pushd(dirname($0));
@@ -59,31 +61,33 @@ sub usage {
 }
 
 sub roadblock_leader_sync {
-    if (! defined $run{'roadblock-dir'} or ! -e $run{'roadblock-dir'} . "/roadblock.py") {
+    if ($use_roadblock) {
+        my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
+        my $message = shift;
+        my $follower_param = "";
+        while (scalar @_ > 0) {
+            $follower_param .= " --followers=" . shift;
+        }
+        printf "Running roadblock for: %s\n", $message;
+        my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
+        debug_log(sprintf "roadblock leader command:%s\n", $cmd);
+        my $output = `$cmd`;
+        my $rc = $? & 127;
+        debug_log($output);
+        debug_log(sprintf "roadblock exit code: %d\n", $rc);
+        # Becasue roadblock leader does not exit with right code
+        if ( my $g_output = grep(/Exiting\swith\sabort/, $output) ) {
+            printf "Found \"Exiting with abort:\"\n%s\n", $g_output;
+            printf "%s\n", $output;
+            $rc = 3;
+        } else {
+            $rc = 0;
+        }
+        printf "Completing roadblock for: %s\n", $message;
+        return $rc;
+    } else {
         return 0;
     }
-    my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
-    my $message = shift;
-    my $follower_param = "";
-    while (scalar @_ > 0) {
-        $follower_param .= " --followers=" . shift;
-    }
-    my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
-    debug_log(sprintf "roadblock leader command:%s\n", $cmd);
-    my $output = `$cmd`;
-    my $rc = $? & 127;
-    debug_log($output);
-    debug_log(sprintf "roadblock exit code: %d\n", $rc);
-    # Becasue roadblock leader does not exit with right code
-    if ( my $g_output = grep(/Exiting\swith\sabort/, $output) ) {
-        printf "Found \"Exiting with abort:\"\n%s\n", $g_output;
-        printf "%s\n", $output;
-        $rc = 3;
-    } else {
-        $rc = 0;
-    }
-    printf "%s", $message;
-    return $rc;
 }
 
 sub debug_log {
@@ -211,6 +215,12 @@ while (scalar @ARGV > 0) {
         exit 1;
     }
 }
+if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
+    $use_roadblock = 1;
+}
+if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
+    $use_workshop = 1;
+}
 
 # Load the bench config and user params
 exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
@@ -282,7 +292,7 @@ printf "Confirming the endpoints will satisfy the benchmark-client ";
 printf "and benchmark-server " if exists $bench_config{'server'};
 printf "requirements\n";
 foreach my $endpoint (@endpoints) {
-    if ($endpoint =~ /(^\w+):(.+$)/) {
+    if ($endpoint =~ /(^\w+),(.+$)/) {
         my $type = $1;
         my $opts = $2;
         my $dir = pushd("./endpoints/" . $type);
@@ -349,10 +359,16 @@ printf "There will be %d client(s)", $max_id;
 printf " and server(s)" if exists $bench_config{'server'};
 printf "\n";
 
-# If for some reason the user has opted to not use roadblock, then only allow
-# tests which use only one client and no server, which is the only possible
-# combination we can support without syncronization
-if (! defined $run{'roadblock-dir'} or ! -e $run{'roadblock-dir'} . "/roadblock.py") {
+if ($use_roadblock) {
+    $endpoint_roadblock_opt = " --roadblock-server=" . $hostname .
+                              " --roadblock-id=" . $run{'run-id'} .
+                              " --roadblock-passwd=" . $redis_passwd;
+    $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
+                              "/workshop.json";
+} else {
+    # If for some reason the user has opted to not use roadblock, then only allow
+    # tests which use only one client and no server, which is the only possible
+    # combination we can support without syncronization
     my $do_exit = 0;
     if (scalar @{ $clients_servers{'server'} } > 0) {
         printf "[ERROR}since --roadblock-dir was not used or the directory does not exist," .
@@ -369,10 +385,6 @@ if (! defined $run{'roadblock-dir'} or ! -e $run{'roadblock-dir'} . "/roadblock.
     if ($do_exit) {
         exit 1;
     }
-} else {
-    $endpoint_roadblock_opt = " --roadblock-server=" . $hostname .
-                              " --roadblock-id=" . $run{'run-id'} .
-                              " --roadblock-passwd=" . $redis_passwd;
 }
 
 
@@ -421,7 +433,16 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
     debug_log(sprintf "controller pre-script output:\n%s\n", $pre_cmd_output);
 }
 
-# Build the client and server benchmark-command files
+# All data needed for any endpoint to run is copied to the endpoint run directory.
+# If workshop is used, then this directory will be included in the image.
+# If workshop is not used, then the endpoint can copy data from here to its
+# own endpoint run directory, which has the same name as its options, like "local:clients:1".
+my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
+mkdir($base_endpoint_run_dir);
+copy($rickshaw_dir . "/client-server-script", $base_endpoint_run_dir . "/client-server-script")
+    || die "Could not copy client-server-script to " . $base_endpoint_run_dir . "/client-server-script";
+chmod 0755, $base_endpoint_run_dir . "/client-server-script";
+# Build the client and server benchmark-command files and put them in the base endpoint run dir
 my $cs_cmds_dir = $run{'run-dir'} . "/client-server-commands";
 -e $cs_cmds_dir || mkdir($cs_cmds_dir) ||
     die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_cmds_dir . "]\n";
@@ -464,63 +485,75 @@ foreach my $cs_type (keys %clients_servers) {
     }
 }
 
+
 my $endpoint_image_opt = "";
-if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
+if ($use_workshop) {
     # Build a container image for the clients/servers
     # Create a json which tells workshop to include these files:
     # - the client-server-script (which has logic to execute all tests)
     # - the roadblock client script (which the client-server-script uses)
-    # - the benchmark commands for every test (which client-server-script also uses)
+    #
+    # We want to avoid adding content to the image that changes
+    # with each invocation of rickshaw because we want to cache
+    # these images [eventually].  So, we shouold not include anything
+    # like "client-server-commands" because this changes every time
+    # rickshaw is run.
     my $cs_req_file = $run{'run-dir'} . "/cs-req.json";
     my %cs_req = (  'targets' => {
                         'default' => {
                             'packages' => [
-                                'rickshaw-script',
-                                'roadblock-script',
-                                'cs-cmds'
+                                'endpoint-run'
                             ]
                         }
                     },
                     'packages' => {
-                        'rickshaw-script' => {
+                        'endpoint-run' => {
                             'type' => 'files',
                             'files_info' => {
                                 'type' => 'local-copy',
-                                'src' => $rickshaw_dir . "/client-server-script",
-                                'dst' => '/'
-                            }
-                        },
-                        'roadblock-script' => {
-                            'type' => 'files',
-                            'files_info' => {
-                                'type' => 'local-copy',
-                                'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                'dst' => '/'
-                            }
-                        },
-                        'cs-cmds' => {
-                            'type' => 'files',
-                            'files_info' => {
-                                'type' => 'local-copy',
-                                'src' => $cs_cmds_dir,
+                                # At this point only the client-server-script
+                                # is in this $base_endpoint_run_dir, which is all
+                                # we need, but we want the $base_endpoint_run_dir
+                                # created [on the image as "/endpoint-run"].
+                                'src' => $base_endpoint_run_dir,
                                 'dst' => '/'
                             }
                         }
                     }
                 );
+    if ($use_roadblock) {
+        push(@{ $cs_req{'targets'}{'default'}{'packages'} }, 'roadblock-script');
+        $cs_req{'packages'}{'roadblock-script'} ={ 
+            'type' => 'files',
+            'files_info' => {
+                'type' => 'local-copy',
+                'src' => $run{'roadblock-dir'} . "/roadblock.py",
+                'dst' => '/usr/bin'
+            }
+        };
+    }
+    print Dumper \%cs_req;
 
     put_json_file($cs_req_file, \%cs_req);
-    my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl " .
-                    "--target " . $run{'workshop-dir'} . "/ubi8.json " .
-                    "--requirements " . $run{'roadblock-dir'} . "/workshop.json " .
-                    "--requirements " . $run{'bench-dir'} . "/workshop.json " .
-                    "--requirements " . $cs_req_file . " " .
-                    "--label " . $run{'benchmark'};
-    #printf "workshop cmd: %s\n", $workshop_cmd;
+    # Building an image must include requiremetns from rickshaw, one benchmark,
+    # and optionally one or more tools and roadblock.
+    # TODO: only build when existing image is not found in registry
+    my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
+                    " --label " . $run{'benchmark'} .
+                    " --target " . $run{'workshop-dir'} . "/targets/rhubi8.json" .
+                    " --requirements " . $run{'bench-dir'} . "/workshop.json" .
+                    " --requirements " . $cs_req_file .
+                    $workshop_roadblock_opt; 
+    printf "workshop cmd: %s\n", $workshop_cmd;
     my @workshop_output = `$workshop_cmd`;
+    print join("", @workshop_output);
+    # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
+    # actual JSON, find the JSON by starting at the end and scanning backwards
     my $workshop_json = "";
-    for (my $i = scalar @workshop_output; $i > 0; $i--) {
+    for (my $i = scalar @workshop_output - 1; $i > 0; $i--) {
         $workshop_json = $workshop_output[$i] . $workshop_json;
+        # Break out if we found all of the JSON
+        # In this case the JSON begins with an array '['
         last if ($workshop_output[$i] eq "[\n");
     }
     my $coder = JSON::XS->new;
@@ -528,35 +561,26 @@ if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
     print Dumper $workshop_ref;
     printf "workshop image id: %s\n", $$workshop_ref[0]{'id'};
     $endpoint_image_opt = " --image-id=" . $$workshop_ref[0]{'id'};
-} else {
-    printf "Not using workshop to build image for endpoints.  All endpoints' clients " .
-           "and servers must have all benchmark and tool software installed already!\n";
-    # If not using a workshop image, the endpoints must copy the client-server-script
-    # to wherever the endpoints run the clients and servers.  A copy of this script
-    # is provided in the run-directory for this invocation of rickshaw.  The endpoints
-    # should know where this run directory is and copy this script to the actual clients
-    # and servers if necessary.
-    copy($rickshaw_dir . "/client-server-script", $run{'run-dir'} . "/client-server-script")
-        || die "Could not copy client-server-script to " . $run{'run-dir'} . "/client-server-script";
-    chmod 0755, $run{'run-dir'} . "/client-server-script";
 }
+
+# Create temporary ssh keys so endpoint clients/servers can pull/push data
+system('ssh-keygen -f ' . $run{'run-dir'} . '/rickshaw_id.rsa -P ""');
+system('cat ' . $run{'run-dir'} . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 
 # Deploy ths endpoints so they are ready to run benchmark and tools
 print "Deploying endpoints\n";
-my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
-mkdir($base_endpoint_run_dir);
 debug_log(sprintf "\nendpoint output:\n");
 foreach my $endpoint (@endpoints) {
     my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $endpoint;
     mkdir($this_endpoint_run_dir);
     die if ! -e $this_endpoint_run_dir;
-    (my $type, my $endpoint_opts) = ($endpoint =~ /(\w+):(.*)/);
+    (my $type, my $endpoint_opts) = ($endpoint =~ /(\w+),(.*)/);
     if (-e $rickshaw_dir . "/endpoints/" . $type) {
         my $dir = pushd($rickshaw_dir . "/endpoints/" . $type);
         my $cmd = "./" . $type .
                   " --endpoint-opts=" . $endpoint_opts .
                   " --run-id=" . $run{'run-id'} .
-                  " --run-dir=" . $run{'run-dir'} .
+                  " --rickshaw-run-dir=" . $run{'run-dir'} .
                   $endpoint_image_opt .
                   $endpoint_roadblock_opt .
                   #. " " . $cs_cmds_dir
@@ -569,6 +593,7 @@ foreach my $endpoint (@endpoints) {
         # Endpoints should return for each client and server started:
         # - the ID of the client/server
         # - the roadblock client ID
+        printf "Going to run endpoint command:\n%s\n\n", $cmd;
         if ($endpoint_roadblock_opt eq "") {
             # There is only one client and no synchronization, so we wait for the endpoint to finish
             debug_log(sprintf "going to run and wait for: %s\n", $cmd);
@@ -585,7 +610,7 @@ foreach my $endpoint (@endpoints) {
         exit 1;
     }
 }
-roadblock_leader_sync("endpoint-deploy", "Deplying endpoints", @endpoints);
+roadblock_leader_sync("endpoint-deploy", "Deploying endpoints", @endpoints);
 
 # Cycle through the list of tests using roadblock to kick them off
 my @iterations;

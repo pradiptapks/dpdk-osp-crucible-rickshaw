@@ -2,7 +2,7 @@
 	{
 		"rw": "read",
 		"bs": "4k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -22,7 +22,7 @@
 	{
 		"rw": "read",
 		"bs": "8k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -42,7 +42,7 @@
 	{
 		"rw": "read",
 		"bs": "64k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 4,
 		"jobfile": "/home/atheurer/fio.job",
@@ -62,7 +62,7 @@
 	{
 		"rw": "read",
 		"bs": "4k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
@@ -82,7 +82,7 @@
 	{
 		"rw": "read",
 		"bs": "8k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
@@ -102,7 +102,7 @@
 	{
 		"rw": "read",
 		"bs": "64k",
-		"runtime": "180s",
+		"runtime": "15s",
 		"ioengine": "libaio",
 		"iodepth": 1,
 		"jobfile": "/home/atheurer/fio.job",
