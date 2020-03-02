@@ -21,7 +21,6 @@ my $ug = Data::UUID->new;
 my $debug = 1;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
-         # CDM utilities will convert this into many CDM documents.
 
 my $run_dir;
 my $run_file;    # 'rickshaw-run.json' containing all configuration data
@@ -144,10 +143,11 @@ while (scalar @ARGV > 0) {
 }
 
 # Load the existing rickshaw-run.json
-my $result_file = $run{'bench-dir'} . "/rickshaw-run.json";
-if (-e $result_file) {
-    my $result_ref = get_json_file($result_file);
-    %result = %{ $result_ref };
+$run_file = $run_dir . "/rickshaw-run.json";
+if (-e $run_file) {
+    printf "opening %s\n", $run_file;
+    my $run_ref = get_json_file($run_file);
+    %run = %{ $run_ref };
     # TODO checks for minimum fileds for valid run
 }
 
@@ -157,9 +157,8 @@ if (-e $result_file) {
 # the benchmark-specific post-processed data and aggregates it, as well as creating a
 # hierarchcal JSON to organize by iteration -> sample -> period -> metric.
 print "Waiting for consolidation of per-client/server data into sample data to complete\n";
-for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
+for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my $iter_array_idx = $i -1;
-    my $params = dump_params($params[$i - 1]);
     my @samples;
     for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
         my %sample; # sample data from all clients/servers
@@ -209,9 +208,8 @@ for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
         $sample{'periods'} = \@cons_periods;
         push(@samples, \%sample);
     }
-    $iterations[$iter_array_idx]{'samples'} = \@samples;
+    $run{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
 }
 print "Consolidation complete\n";
 
-$run{'iterations'} = \@iterations;
 put_json_file($run_dir . "/rickshaw-result.json", \%run);

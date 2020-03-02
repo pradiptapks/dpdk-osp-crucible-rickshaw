@@ -27,7 +27,6 @@ my $debug = 0;
 my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
-my @params;
 my @endpoints;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
@@ -103,12 +102,13 @@ sub dump_params {
     my $params_ref = shift;
     my $cs_id = shift;
     my $params_str = "";
-    foreach my $arg (keys %{ $params_ref }) {
-        my $val = $$params_ref{$arg};
+    foreach my $param (@{ $params_ref }) {
+        my $arg = $$param{'arg'}; 
+        my $val = $$param{'val'};
         if (defined $cs_id) {
             $val =~ s/\%client-id\%/$cs_id/;
         }
-        $params_str .= " --" . $arg . "=" . $val;
+            $params_str .= " --" . $arg . "=" . $val;
     }
     $params_str =~ s/^\s//;
     return $params_str;
@@ -146,13 +146,11 @@ sub file_newer_than {
         #my $dir = pushd $rickshaw_dir;
         chomp(my $file_time=`/bin/ls -l --time-style=+%s $file`);
         printf "/bin/ls: %s\n", $file_time;
-        #printf "client-server-time:[%s]\n", $cs_script_time;
         # -rwxrwxr-x. 1 atheurer atheurer 4656 1582742663 client-server-script
         if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
             printf "file time: %d\n", $1;
             if ($1 > $epoch_sec) {
                 return 1;
-                #printf "client-server-time: %d\n", $1;
             }
         }
     }
@@ -229,7 +227,15 @@ if (-e $bench_config_file) {
 }
 exists $run{'bench-params'} || die "[ERROR}You must use " .
                                    "--bench-params=/path/to/benchmark-params.json\n";
-@params = @{ my $params_ref = get_json_file($run{'bench-params'}) };
+my @param_sets = @{ my $param_sets_ref = get_json_file($run{'bench-params'}) };
+# TODO: verify user params schema
+$run{'iterations'} = ();
+my $iter_id = 0;
+for my $params (@param_sets) {
+    print Dumper $params;
+    $run{'iterations'}[$iter_id]{'params'} = $params;
+    $iter_id++;
+}
 
 # Apply defaults
 foreach my $p (keys %defaults) {
@@ -349,7 +355,6 @@ printf "\n";
 
 if ($use_roadblock) {
     $endpoint_roadblock_opt = " --roadblock-server=" . $hostname .
-    #$endpoint_roadblock_opt = " --roadblock-server=" . "10.16.31.123" .
                               " --roadblock-id=" . $run{'run-id'} .
                               " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
@@ -381,22 +386,19 @@ $run{'endpoints'} = \@endpoints;
 
 printf "Building test execution order\n";
 # Build test execution order (and the iteration/sample dirs)
-$run{'num-iterations'} = scalar @params;
 my @tests;
 if ($run{'test-order'} eq 's') {
-    for (my $iid = 1; $iid <= $run{'num-iterations'}; $iid++) {
+    for (my $iid = 1; $iid <= scalar @{ $run{'iterations'} }; $iid++) {
         for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
             my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
-            #make_path($run{'run-dir'} . "/iteration-" . $iid . "/sample-" . $sid);
         }
     }
 } elsif ($run{'test-order'} eq 'i') {
     for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
-        for (my $iid = 1; $iid <= $run{'num-iterations'}; $iid++) {
+        for (my $iid = 1; $iid <= scalar @{ $run{'iterations'} }; $iid++) {
             my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
-            #make_path($run{'run-dir'} . "/iteration-" . $iid . "/sample-" . $sid);
         }
     }
 } else {
@@ -414,7 +416,7 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
     # The file should work for all perams sets (all benchmark iterations).  If you need
     # different job files per iteration, then use the client or server-side "pre-script"
     # to either augment a file generated here or create a completely new file.
-    my $cmd = $bench_config{"controller"}{"pre-script"} . " " . dump_params($params[0]);
+    my $cmd = $bench_config{"controller"}{"pre-script"} . " " . dump_params($run{'iterations'}[0]{'params'});
     $cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
     $cmd =~ s/\%run-dir\%/$run{'run-dir'}/g;
     debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
@@ -446,12 +448,12 @@ foreach my $cs_type (keys %clients_servers) {
         foreach my $test_ref (@tests) {
             my $test_iter = $$test_ref{'iteration-id'};
             my $test_samp = $$test_ref{'sample-id'};
-            my $param_id = $test_iter - 1;
+            #my $param_id = $test_iter - 1;
+            my $iter_array_idx = $test_iter - 1;
             my $rb_session = "start-test:" . $test_iter . "-" . $test_samp;
             if (exists $bench_config{$cs_type}{"bin"} and
             $bench_config{$cs_type}{"bin"} ne "") {
-                die "[ERROR][BUG]param missing\n" if ! defined $params[$param_id];
-                my $cmd = $bench_config{$cs_type}{"bin"} . " " . dump_params($params[$param_id], $cs_id);
+                my $cmd = $bench_config{$cs_type}{"bin"} . " " . dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
                 debug_log(sprintf "cmd: [%s]\n", $cmd);
                 # Apply a regex from the benchmark config file to the command
                     # This is used to remove things like "--clients=" because the
@@ -512,10 +514,6 @@ if ($use_workshop) {
     }
     if ($must_rebuild) {
         printf "The container image must be rebuilt\n";
-        #printf "%s\n", $image_json;
-        #if ($cs_script_time =~ (/.*\s+\d+(\d+)\s+client-server-script/) {
-        #$cs_script_time = $1;
-    
         # Build a container image for the clients/servers
         # Create a json which tells workshop to include these files:
         # - the client-server-script (which has logic to execute all tests)
@@ -568,9 +566,7 @@ if ($use_workshop) {
         # TODO: only build when existing image is not found in registry
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
                         " --label " . $run{'benchmark'} .
-                        #" --target " . $run{'workshop-dir'} . "/targets/rhubi7.json" .
                         " --target " . $run{'workshop-dir'} . "/targets/rhubi8.json" .
-                        #" --target " . $run{'workshop-dir'} . "/targets/fedora31.json" .
                         " --requirements " . $run{'bench-dir'} . "/workshop.json" .
                         " --requirements " . $cs_req_file .
                         $workshop_roadblock_opt; 
@@ -634,9 +630,6 @@ foreach my $endpoint (@endpoints) {
             debug_log(sprintf "going to run %s\n", $cmd);
             system($cmd . " &");
         }
-        #my $rc = $?;
-        #debug_log(sprintf "exit code from endpoint: %d\n", $rc) if ($rc);
-        #debug_log(sprintf "output from endpoint:\n%s\n", $output);
     } else {
         printf "[ERROR]could not find endpoint ./endpoints/%s\n", $type;
         exit 1;
@@ -648,7 +641,6 @@ if (roadblock_leader_sync("endpoint-deploy", "Deploying endpoints", @endpoints) 
 }
 
 # Cycle through the list of tests using roadblock to kick them off
-my @iterations;
 for my $sync (qw(client-server-script-start client-server-start-tools)) {
     if (roadblock_leader_sync($sync, $sync, (@rb_cs_ids, @endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
@@ -673,8 +665,6 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     }
     printf "Clients/servers starting test number %d: iteration %d, sample %d\n",
            $tid + 1, $iter_id, $samp_id;
-    $iterations[$iter_array_idx]{'params'} = \%{ $params[$iter_array_idx] };
-
     $rc = roadblock_leader_sync("client-server-stop-test:" . $test_id,
                                 "Stopping test " . $test_id, (@rb_cs_ids, @endpoints));
     if ($rc > 0) {
@@ -719,8 +709,8 @@ close $dh;
         my $cs_id = $2;
         my $tar_cmd = "tar zxf ../" . $archive;
         my $tar_output = `$tar_cmd`;
-        for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
-            my $params = dump_params($params[$i - 1]);
+        for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
+            my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
             for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
                 my $cs_path = "/iteration-" . $i . "/sample-" . $s . "/clients/" . $cs_id;
                 make_path($run{'run-dir'} . $cs_path);
@@ -731,7 +721,7 @@ close $dh;
                     push(@pids, $pid);
                 } else {
                     my $dir = pushd($run{'run-dir'} . $cs_path);
-                    system($pp_cmd . " " . $params);
+                    system($pp_cmd . " " . $iter_params);
                     exit;
                 }
             }
@@ -745,11 +735,13 @@ close $dh;
     system("/bin/ls " . $run{'run-dir'} . "/tmp-data-dir");
 }
 printf "Waiting for %d per-client/server post-processing jobs to complete\n", scalar @pids;
-while (wait > -1) {
+while (wait() > -1) {
 }
 rmdir($run{'run-dir'} . "/tmp-data-dir/");
 
-# TODO: remove temparary sseh keys from local authorized_keys file
+# TODO: remove temporary ssh keys from local authorized_keys file
+
+put_json_file($run{'run-dir'} . "/rickshaw-run.json", \%run);
 
 if (defined $abort_test_id) {
     printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
