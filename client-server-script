@@ -2,12 +2,56 @@
 # -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
+function exit_error() {
+    local message=$1; shift
+    local code=$1; shift
+    echo -e "[ERROR]$message\n"
+    echo "Exiting"
+    if [ -z "$code" ]; then
+        exit 1
+    else
+        exit $code
+    fi
+}
 
-longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:,roadblock-passwd:,roadblock-id:"
+function do_roadblock() {
+    local label=$1; shift
+    local timeout=$1; shift
+    local extra=$1; shift
+    if [ -z "$label" ]; then
+        exit_error "[ERROR]do_roadblock() label not provided"
+    fi
+    if [ -z "$timeout" ]; then
+        exit_error "[ERROR]do_roadblock() timeout not provided"
+    fi
+    local cmd=""
+    cmd="$cmd /usr/bin/roadblock.py --role=follower --redis-server=$roadblock_server"
+    cmd="$cmd --timeout=$timeout --redis-password=$roadblock_passwd"
+    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_id $extra"
+    if [ "$use_roadblock" == "1" ]; then
+        echo "going to run this roadblock command: $cmd"
+        local output=`$cmd 2>&1`
+        local rc=$?
+        echo $output
+        if echo $output | grep -q -- "Received abort message from leader"; then
+            rc=3
+        fi
+        if echo $output | grep -q -- "The roadblock has timed out"; then 
+            rc=2
+        fi
+        if [ $rc -gt 0 ]; then
+            echo "Roadblock exit code is non-zero: $rc"
+        fi
+        return $rc
+    fi
+    return 0
+}
+
+longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:"
+longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
-    printf -- "\tUnrecognized option specified\n\n" $@
-    exit 1
+    exit_error "\nUnrecognized option specified: $@\n\n"
 fi
 eval set -- "$opts";
 while true; do
@@ -59,14 +103,20 @@ while true; do
     esac
 done
 
-#exec &> >(tee -a "$cs_id-log.txt")
-exec 2>&1 >$endpoint_run_dir/$cs_id-stderrout.txt
-
-/bin/mkdir -p $rickshaw_run_dir
+if [ -z "$endpoint_run_dir" ]; then
+    exit_error "The endpoint run directory (--endpoint-run-dir) was not defined"
+fi
+if [ -z "$cs_id" ]; then
+    exit_error "The clien/server ID (--cs-id) was not defined"
+fi
+cs_dir="$endpoint_run_dir/$cs_id"
+/bin/mkdir -p "$cs_dir" ||
+    exit_error "Could not mkdir $cs_dir"
+exec >$endpoint_run_dir/$cs_id/$cs_id-stderrout.txt
+exec 2>&1
 
 if [ -z "$rickshaw_host" ]; then
-	echo "Exiting due to rickshaw host not being set"
-	exit 1
+	exit_error "Exiting due to rickshaw host not being set"
 fi
 
 use_roadblock=1
@@ -83,69 +133,123 @@ if [ -z "$roadblock_passwd" ]; then
     use_roadblock=0
 fi
 
-function do_roadblock() {
-    label=$1
-    timeout=$2
-    extra=$3
-    if [ "$use_roadblock" == "1" ]; then
-        /usr/bin/roadblock.py --role=follower --redis-server=$roadblock_server --timeout=$timeout --redis-password=$roadblock_passwd \
-                     --uuid=$roadblock_id:$label --follower-id=$cs_id $extra
-        return $?
-    fi
-    return 0
-}
+do_roadblock client-server-script-start 300 ||
+    exit_error "roablock for client-server-script-start timed out"
+do_roadblock client-server-start-tools 300 ||
+    exit_error "roablock for client-server-start-tools timed out"
 
-do_roadblock client-server-script-start 300 || exit
-do_roadblock client-server-start-tools 300 || exit
-echo -e "\nStarting tools"
+# start tools here
+echo -e "\nClients/servers starting tools"
 
 testloop_abort_opt=" --abort 1"
-/bin/mkdir -p "$endpoint_run_dir/$cs_id"
-pushd "$endpoint_run_dir" >/dev/null
-scp -o StrictHostKeyChecking=no -r -i rickshaw_id.rsa $rickshaw_host:"$rickshaw_run_dir/client-server-commands" .
-echo endpoint run dir:
-/bin/pwd
-/bin/ls -l
-#find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "endpoint-std" | cpio -pdum "$endpoint_run_dir/$cs_id"
-/bin/cp * "$endpoint_run_dir/$cs_id"
-pushd "$endpoint_run_dir/$cs_id" >/dev/null
-echo cs_dir:
-/bin/pwd
-/bin/ls -l 
+pushd "$endpoint_run_dir" >/dev/null ||
+    exit_error "Could not chdir to $endpoint_run_dir"
+find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "endpoint-std" | \
+    cpio -pdum "$cs_dir" || 
+    exit_error "Could not copy files from $endpoint_run_dir to $cs_dir with find & cpio"
+pushd "$cs_dir" >/dev/null ||
+    exit_error "Could not chdir to $cs_dir"
+
+# Server may get overloaded with ssh requests so multuple attempts
+# are supported
+ssh_id_file="$endpoint_run_dir/rickshaw_id.rsa"
+if [ ! -e $ssh_id_file ]; then
+    exit_error "ssh key $ssh_id_file was not found"
+fi
+scp_attempts=1
+scp_rc=1
+while [ $scp_rc -gt 0 -a $scp_attempts -lt 5 ]; do
+    scp -o StrictHostKeyChecking=no -i $ssh_id_file \
+        $rickshaw_host:"$rickshaw_run_dir/client-server-commands/$cs_id" "$cs_id.cmds"
+    scp_rc=$?
+    echo "scp exit code: $scp_rc"
+    if [ $scp_rc -gt 0 ]; then
+        echo "Trying again to scp command file"
+        sleep $scp_attempts
+    fi
+    let scp_attempts=$scp_attempts+1
+done
+if [ ! -e "$cs_id.cmds" ]; then
+    exit_error "Could not copy $cs_id.cmds from $rickshaw_host"
+fi
 while read line; do
+    echo "Processing this cmd: $line"
     iter_samp=`echo $line | awk '{print $1}'`
     cmd=`echo $line | sed -e s/^$iter_samp//`
     iter=`echo $iter_samp | awk -F- '{print $1}'`
     samp=`echo $iter_samp | awk -F- '{print $2}'`
-    mkdir -p iteration-$iter/sample-$samp
-    #find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | cpio -pdum iteration-$iter/sample-$samp/
-    /bin/cp * iteration-$iter/sample-$samp/
-    pushd iteration-$iter/sample-$samp
-    do_roadblock client-server-start-test:$iter-$samp 300 || break
+    iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
+    mkdir -p $iter_samp_dir ||
+        exit_error "Could not mkdir iteration-$iter/sample-$samp"
+    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | \
+        cpio -pdum iteration-$iter/sample-$samp/ ||
+        exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
+    pushd $iter_samp_dir ||
+        exit_error "Could not chdir to $iter_samp_dir"
+    do_roadblock client-server-start-test:$iter-$samp 300
+    rb_rc=$?
+    echo roadblock start test exit code: $rb_rc
+    if [ $rb_rc -eq 3 ]; then
+        echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+        echo -e "\nWill not run remaining tests\n"
+        break
+    fi
+    if [ $rb_rc -eq 2 ]; then
+        exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
+    fi
     echo -e "\nRunning iteration $iter, sample $samp"
     echo -e "Benchmark command: $cmd"
     $cmd
     if [ $? -gt 0 ]; then
+        # An abort message must be sent so the other members know how to procede
         echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
-        do_roadblock client-server-stop-test:$iter-$samp 300 " --abort=1"
+        do_roadblock "client-server-stop-test:$iter-$samp" "300" " --abort=1"
+        echo -e "\nWill not run remaining tests\n"
         break
     else
         do_roadblock client-server-stop-test:$iter-$samp 300 || break
+        rb_rc=$?
+        echo roadblock start test exit code: $rb_rc
+        if [ $rb_rc -eq 3 ]; then
+            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nWill not run remaining tests\n"
+            break
+        fi
+        if [ $rb_rc -eq 2 ]; then
+            exit_error "roadblock for client-server-stop-test:$iter-$samp timed out"
+        fi
     fi
-    popd
-done < "$endpoint_run_dir/client-server-commands/$cs_id"
+    popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
+done < "$endpoint_run_dir/$cs_id/$cs_id.cmds"
 
-do_roadblock client-server-stop-tools 300 || exit
-echo -e "\nStopping tools"
+do_roadblock client-server-stop-tools 300 ||
+    exit_error "roadblock for client-server-stop-tools timed out"
+echo -e "\nClients/servers stopping tools"
 # stop-tools command here
-do_roadblock client-server-send-data 300 || exit
+do_roadblock client-server-send-data 300 ||
+    exit_error "roadblock for client-server-send-data timed out"
 echo -e "\nClients/servers copying data back to endpoint"
-if [ -e $cs_id-data.tgz ]; then
-    /bin/rm -f $cs_id-data.tgz
-fi
-tar czf - . | ssh -o StrictHostKeyChecking=off -i "$endpoint_run_dir/rickshaw_id.rsa" $rickshaw_host "dd of=$rickshaw_run_dir/$cs_id-data.tgz"
+ssh_attempts=1
+ssh_rc=1
+pushd $cs_dir >/dev/null ||
+    exit_error "Could not chdir to $cs_dir"
+while [ $ssh_rc -gt 0 -a $ssh_attempts -lt 5 ]; do
+    tar czf - . | ssh -o StrictHostKeyChecking=off -i "$endpoint_run_dir/rickshaw_id.rsa" \
+        $rickshaw_host "dd of=$rickshaw_run_dir/$cs_id-data.tgz"
+    ssh_rc=$?
+    if [ $ssh_rc -gt 0 ]; then
+        echo "Trying again to tar/ssh result data"
+        sleep $ssh_attempts
+    fi
+    let ssh_attempts=$ssh_attempts+1
+done
 popd >/dev/null
-do_roadblock client-server-script-finish 300 || exit
+if [ $ssh_rc -gt 0 ]; then
+    exit_error "tar/ssh of client/server data to $rickshaw_host failed"
+fi
+popd >/dev/null
+do_roadblock client-server-script-finish 300 || \
+    exit_error "roadblock for client-server-script-finish timed out"
 echo -e "\nAll client/server scripts are finished"
 # /bin/rm -rf iteration-*
 popd >/dev/null

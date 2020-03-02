@@ -22,6 +22,7 @@ my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "run-dir" => tempdir(), "run-id" => $ug->create_str());
 
+my $usrenv = "rhubi8";
 my $debug = 0;
 my $use_roadblock = 0;
 my $use_workshop = 0;
@@ -30,7 +31,6 @@ my @params;
 my @endpoints;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
-         # CDM utilities will convert this into many CDM documents.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/bin/roadblock.py";
@@ -68,7 +68,7 @@ sub roadblock_leader_sync {
         while (scalar @_ > 0) {
             $follower_param .= " --followers=" . shift;
         }
-        printf "Running roadblock for: %s\n", $message;
+        printf `date` . "Running roadblock for: %s\n", $message;
         my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
         debug_log(sprintf "roadblock leader command:%s\n", $cmd);
         my $output = `$cmd`;
@@ -80,10 +80,13 @@ sub roadblock_leader_sync {
             printf "Found \"Exiting with abort:\"\n%s\n", $g_output;
             printf "%s\n", $output;
             $rc = 3;
-        } else {
-            $rc = 0;
         }
-        printf "Completing roadblock for: %s\n", $message;
+        if ( my $g_output = grep(/The\sroadblock\shas\stimed\sout/, $output) ) {
+            printf "Found \"Exiting with timeout:\"\n%s\n", $g_output;
+            printf "%s\n", $output;
+            $rc = 2;
+        }
+        printf `date` . "Completed roadblock for: %s, return code %d\n", $message, $rc;
         return $rc;
     } else {
         return 0;
@@ -136,39 +139,24 @@ sub get_json_file {
     return $perl_scalar;
 }
 
-# This will consolidate chronologically sequential metric samples with same
-# value, and if samples have no 'begin' a timestamp, it will be derived.
-sub dedup_metric {
-    my $metric_ref = shift;
-    my $count = 0;
-    my $num_samples = scalar @{ $$metric_ref{'data'} };
-    return if ($num_samples == 0);
-    my $native_interval = $$metric_ref{'data'}[1]{'end'} - $$metric_ref{'data'}[0]{'end'};
-    for (my $i = scalar @{ $$metric_ref{'data'} } - 1; $i >= 0; $i--) {
-        my $this_value = $$metric_ref{'data'}[$i]{'value'};
-        # If 'begin' is missing or the previous sample has the same value as the current sample,
-        # search backwards until we find an earlier sample that has a different value from the
-        # current one.
-        if (! defined $$metric_ref{'data'}[$i]{'begin'} or
-            $$metric_ref{'data'}[$i - 1]{'vaule'} == $this_value) {
-            # Need to find a "begin" based on earlier samples
-            my $look_back = 0;
-            while ($i - $look_back >= 0 and 
-                   $$metric_ref{'data'}[$i - $look_back]{'value'} == $this_value) {
-                $look_back++;
-            }
-            if ($i - $look_back >= 0) {
-                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[$i - $look_back]{'end'} + 1;
-            } else {
-                #$i - $look_back + 1, $native_interval;
-                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[0]{'end'} - $native_interval + 1;
-            }
-            if ($look_back > 1) { # deduping 1 or more samples
-                splice @{ $$metric_ref{'data'} }, $i - $look_back + 1, $look_back - 1;
-                $i -= $look_back + 1; # Adjust the loop variable since the array is shortened
+sub file_newer_than {
+    my $file = shift;
+    my $epoch_sec = shift;
+    {
+        #my $dir = pushd $rickshaw_dir;
+        chomp(my $file_time=`/bin/ls -l --time-style=+%s $file`);
+        printf "/bin/ls: %s\n", $file_time;
+        #printf "client-server-time:[%s]\n", $cs_script_time;
+        # -rwxrwxr-x. 1 atheurer atheurer 4656 1582742663 client-server-script
+        if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
+            printf "file time: %d\n", $1;
+            if ($1 > $epoch_sec) {
+                return 1;
+                #printf "client-server-time: %d\n", $1;
             }
         }
     }
+    return 0;
 }
 
 # Apply envinronment variables
@@ -361,6 +349,7 @@ printf "\n";
 
 if ($use_roadblock) {
     $endpoint_roadblock_opt = " --roadblock-server=" . $hostname .
+    #$endpoint_roadblock_opt = " --roadblock-server=" . "10.16.31.123" .
                               " --roadblock-id=" . $run{'run-id'} .
                               " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
@@ -488,79 +477,122 @@ foreach my $cs_type (keys %clients_servers) {
 
 my $endpoint_image_opt = "";
 if ($use_workshop) {
-    # Build a container image for the clients/servers
-    # Create a json which tells workshop to include these files:
-    # - the client-server-script (which has logic to execute all tests)
-    # - the roadblock client script (which the client-server-script uses)
-    #
-    # We want to avoid adding content to the image that changes
-    # with each invocation of rickshaw because we want to cache
-    # these images [eventually].  So, we shouold not include anything
-    # like "client-server-commands" because this changes every time
-    # rickshaw is run.
-    my $cs_req_file = $run{'run-dir'} . "/cs-req.json";
-    my %cs_req = (  'targets' => {
-                        'default' => {
-                            'packages' => [
-                                'endpoint-run'
-                            ]
-                        }
-                    },
-                    'packages' => {
-                        'endpoint-run' => {
-                            'type' => 'files',
-                            'files_info' => {
-                                'type' => 'local-copy',
-                                # At this point only the client-server-script
-                                # is in this $base_endpoint_run_dir, which is all
-                                # we need, but we want the $base_endpoint_run_dir
-                                # created [on the image as "/endpoint-run"].
-                                'src' => $base_endpoint_run_dir,
-                                'dst' => '/'
+    my $image_id;
+    # First determine if we need to build a new image
+    my $must_rebuild = 0;
+    my $image_time;
+    my $image_name = "workshop_" . $usrenv . "_" . $run{'benchmark'};
+    my $image_json = `buildah  images --json $image_name`;
+    my $coder = JSON::XS->new;
+    my $image_json_ref = $coder->decode($image_json);
+    for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
+        print Dumper $$image_json_ref[$i];
+        my $name = $$image_json_ref[$i]{'names'}[0];
+        printf "name: %s\n", $name;
+        $name =~ s/.*\///;
+        $name =~ s/:.*//;
+        printf "name: %s\n", $name;
+        if ($name eq $image_name) {
+            $image_id = $$image_json_ref[$i]{'id'};
+            $image_time = $$image_json_ref[$i]{'createdatraw'};
+            $image_time = `date -d $image_time +%s`;
+            printf "time: %d\n", $image_time;
+            my @files = ($run{'bench-dir'} . "/workshop.json",
+                         $run{'workshop-dir'} . "/targets/" . $usrenv . ".json",
+                         $rickshaw_dir . "/client-server-script");
+            for my $file (@files) {
+                if ( file_newer_than($file, $image_time) > 0) {
+                    printf "%s is newer than the container image\n", $file;
+                    $must_rebuild = 1;
+                } else {
+                    printf "%s is NOT newer than the container image\n", $file;
+                }
+            }
+        }
+    }
+    if ($must_rebuild) {
+        printf "The container image must be rebuilt\n";
+        #printf "%s\n", $image_json;
+        #if ($cs_script_time =~ (/.*\s+\d+(\d+)\s+client-server-script/) {
+        #$cs_script_time = $1;
+    
+        # Build a container image for the clients/servers
+        # Create a json which tells workshop to include these files:
+        # - the client-server-script (which has logic to execute all tests)
+        # - the roadblock client script (which the client-server-script uses)
+        #
+        # We want to avoid adding content to the image that changes
+        # with each invocation of rickshaw because we want to cache
+        # these images [eventually].  So, we shouold not include anything
+        # like "client-server-commands" because this changes every time
+        # rickshaw is run.
+        my $cs_req_file = $run{'run-dir'} . "/cs-req.json";
+        my %cs_req = (  'targets' => {
+                            'default' => {
+                                'packages' => [
+                                    'endpoint-run'
+                                ]
+                            }
+                        },
+                        'packages' => {
+                            'endpoint-run' => {
+                                'type' => 'files',
+                                'files_info' => {
+                                    'type' => 'local-copy',
+                                    # At this point only the client-server-script
+                                    # is in this $base_endpoint_run_dir, which is all
+                                    # we need, but we want the $base_endpoint_run_dir
+                                    # created [on the image as "/endpoint-run"].
+                                    'src' => $base_endpoint_run_dir,
+                                    'dst' => '/'
+                                }
                             }
                         }
-                    }
-                );
-    if ($use_roadblock) {
-        push(@{ $cs_req{'targets'}{'default'}{'packages'} }, 'roadblock-script');
-        $cs_req{'packages'}{'roadblock-script'} ={ 
-            'type' => 'files',
-            'files_info' => {
-                'type' => 'local-copy',
-                'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                'dst' => '/usr/bin'
-            }
-        };
-    }
-    print Dumper \%cs_req;
+                    );
+        if ($use_roadblock) {
+            push(@{ $cs_req{'targets'}{'default'}{'packages'} }, 'roadblock-script');
+            $cs_req{'packages'}{'roadblock-script'} ={ 
+                'type' => 'files',
+                'files_info' => {
+                    'type' => 'local-copy',
+                    'src' => $run{'roadblock-dir'} . "/roadblock.py",
+                    'dst' => '/usr/bin'
+                }
+            };
+        }
+        print Dumper \%cs_req;
 
-    put_json_file($cs_req_file, \%cs_req);
-    # Building an image must include requiremetns from rickshaw, one benchmark,
-    # and optionally one or more tools and roadblock.
-    # TODO: only build when existing image is not found in registry
-    my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
-                    " --label " . $run{'benchmark'} .
-                    " --target " . $run{'workshop-dir'} . "/targets/rhubi8.json" .
-                    " --requirements " . $run{'bench-dir'} . "/workshop.json" .
-                    " --requirements " . $cs_req_file .
-                    $workshop_roadblock_opt; 
-    printf "workshop cmd: %s\n", $workshop_cmd;
-    my @workshop_output = `$workshop_cmd`;
-    print join("", @workshop_output);
-    # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
-    # actual JSON, find the JSON by starting at the end and scanning backwards
-    my $workshop_json = "";
-    for (my $i = scalar @workshop_output - 1; $i > 0; $i--) {
-        $workshop_json = $workshop_output[$i] . $workshop_json;
-        # Break out if we found all of the JSON
-        # In this case the JSON begins with an array '['
-        last if ($workshop_output[$i] eq "[\n");
+        put_json_file($cs_req_file, \%cs_req);
+        # Building an image must include requiremetns from rickshaw, one benchmark,
+        # and optionally one or more tools and roadblock.
+        # TODO: only build when existing image is not found in registry
+        my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
+                        " --label " . $run{'benchmark'} .
+                        #" --target " . $run{'workshop-dir'} . "/targets/rhubi7.json" .
+                        " --target " . $run{'workshop-dir'} . "/targets/rhubi8.json" .
+                        #" --target " . $run{'workshop-dir'} . "/targets/fedora31.json" .
+                        " --requirements " . $run{'bench-dir'} . "/workshop.json" .
+                        " --requirements " . $cs_req_file .
+                        $workshop_roadblock_opt; 
+        printf "workshop cmd: %s\n", $workshop_cmd;
+        my @workshop_output = `$workshop_cmd`;
+        print join("", @workshop_output);
+        # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
+        # actual JSON, find the JSON by starting at the end and scanning backwards
+        my $workshop_json = "";
+        for (my $i = scalar @workshop_output - 1; $i > 0; $i--) {
+            $workshop_json = $workshop_output[$i] . $workshop_json;
+            # Break out if we found all of the JSON
+            # In this case the JSON begins with an array '['
+            last if ($workshop_output[$i] eq "[\n");
+        }
+        my $coder = JSON::XS->new;
+        my $workshop_ref = $coder->decode($workshop_json);
+        print Dumper $workshop_ref;
+        $image_id = $$workshop_ref[0]{'id'};
     }
-    my $coder = JSON::XS->new;
-    my $workshop_ref = $coder->decode($workshop_json);
-    print Dumper $workshop_ref;
-    printf "workshop image id: %s\n", $$workshop_ref[0]{'id'};
-    $endpoint_image_opt = " --image-id=" . $$workshop_ref[0]{'id'};
+    $endpoint_image_opt = " --image-id=" . $image_id;
+    printf "workshop image id: %s\n", $image_id;
 }
 
 # Create temporary ssh keys so endpoint clients/servers can pull/push data
@@ -610,14 +642,18 @@ foreach my $endpoint (@endpoints) {
         exit 1;
     }
 }
-roadblock_leader_sync("endpoint-deploy", "Deploying endpoints", @endpoints);
+if (roadblock_leader_sync("endpoint-deploy", "Deploying endpoints", @endpoints) > 0) {
+    printf "[ERROR]roadblock failed\n";
+    exit 1;
+}
 
 # Cycle through the list of tests using roadblock to kick them off
 my @iterations;
-roadblock_leader_sync("client-server-script-start", "Starting client-server-script", @rb_cs_ids);
-my $rc = roadblock_leader_sync("client-server-start-tools", "Starting tools", @rb_cs_ids);
-if ($rc > 0) {
-    die "Roadblock said to abort";
+for my $sync (qw(client-server-script-start client-server-start-tools)) {
+    if (roadblock_leader_sync($sync, $sync, (@rb_cs_ids, @endpoints)) > 0) {
+        printf "[ERROR]roadblock failed, exiting\n";
+        exit 1;
+    }
 }
 my $abort_test_id;
 for (my $tid = 0; $tid < scalar @tests; $tid++) {
@@ -626,33 +662,47 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $iter_array_idx = $iter_id - 1;
     my $test_id = $iter_id . "-" . $samp_id;
     my $rc = roadblock_leader_sync("client-server-start-test:" . $test_id,
-                                   "Starting test ". $test_id, @rb_cs_ids);
+                                   "Starting test ". $test_id, (@rb_cs_ids, @endpoints));
     if ($rc > 0) {
-        printf "[ERROR]Abort from last start-test so breaking out of test-loop\n";
-        last;
+        if ($rc == 2) {
+            printf "[ERROR]Abort from last start-test so breaking out of test-loop\n";
+            last;
+        } else {
+            printf "[ERROR]roadblock failed, exiting\n";
+        }
     }
     printf "Clients/servers starting test number %d: iteration %d, sample %d\n",
            $tid + 1, $iter_id, $samp_id;
     $iterations[$iter_array_idx]{'params'} = \%{ $params[$iter_array_idx] };
-    #print "iterations array now has:\n" . Dumper \@iterations;
+
     $rc = roadblock_leader_sync("client-server-stop-test:" . $test_id,
-                                "Stopping test " . $test_id, @rb_cs_ids);
+                                "Stopping test " . $test_id, (@rb_cs_ids, @endpoints));
     if ($rc > 0) {
-        printf "[ERROR]Received abort from last test so discontinuing tests\n";
-        $abort_test_id = $tid;
-        last;
+        if ($rc == 2) {
+            printf "[ERROR]Abort from last stop-test so breaking out of test-loop\n";
+            last;
+        } else {
+            printf "[ERROR]roadblock failed, exiting\n";
+        }
     }
 }
-roadblock_leader_sync("client-server-stop-tools", "Clients/servers stopping tools", @rb_cs_ids);
-roadblock_leader_sync("client-server-send-data", "Clients/servers sending to endpoints", @rb_cs_ids);
-roadblock_leader_sync("client-server-script-finish", "Client/server scripts finished", @rb_cs_ids);
-roadblock_leader_sync("endpoint-move-data", "Endpoints moving data to controller", @endpoints);
-roadblock_leader_sync("endpoint-finish", "Endpoints finished", @endpoints);
+for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
+    if (roadblock_leader_sync($sync, $sync, (@rb_cs_ids, @endpoints)) > 0) {
+        printf "[ERROR]roadblock failed, exiting\n";
+        exit 1;
+    }
+}
+for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
+    if (roadblock_leader_sync($sync, $sync, @endpoints) > 0) {
+        printf "[ERROR]roadblock failed, exiting\n";
+        exit 1;
+    }
+}
 print "Post-processing data\n";
 # Organize the data from the clients into a common directory structure, organized by
 # iteration, then by sample, then finally by client/server.  This is needed to have
 # the benchmark's postprocessing script work.  Also background the post-process script
-# for each test.
+# for each test and wait for them to complete.
 opendir(my $dh, $run{'run-dir'});
 my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
 my $pp_cmd = $bench_config{'controller'}{'post-script'};
@@ -686,9 +736,9 @@ close $dh;
                 }
             }
         }
-        if (!$debug) {
-            system("/bin/rm ../" . $archive);
-        }
+        #if (!$debug) {
+        #system("/bin/rm ../" . $archive);
+        #}
     }
     rmdir($run{'run-dir'} . "/tmp-data-dir/*");
     system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");
@@ -699,67 +749,8 @@ while (wait > -1) {
 }
 rmdir($run{'run-dir'} . "/tmp-data-dir/");
 
-print "Waiting for consolidation of per-client/server data into sample data to complete\n";
-# For each iteration and sample, generate a combined metrics.json, joining the metrics from each
-# client/server.  The benchmark metrics need to be grouped by the benchmark period they ran in.
-for (my $i = 1; $i <= $run{'num-iterations'}; $i++) {
-    my $iter_array_idx = $i -1;
-    my $params = dump_params($params[$i - 1]);
-    my @samples;
-    for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-        my %sample; # sample data from all clients/servers
-        my @cons_periods; # consolidated periods across clients/servers get merged here
-        my $samp_dir = $run{'run-dir'} . "/iteration-" . $i . "/sample-" . $s;
-        opendir(my $samp_dh, $samp_dir);
-        my @cs_names = grep(/^(clients|servers)$/, readdir($samp_dh));
-        for my $cs_name (@cs_names) { 
-            my $cs_name_dir = $samp_dir . "/" . $cs_name;
-            opendir(my $cs_name_dh, $cs_name_dir);
-            my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
-            for my $cs_id (@cs_ids) {
-                my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
-                my $data_file = $cs_id_dir . "/" . "post-process-data.json";
-                if (-e $data_file) {
-                    my $data_ref = get_json_file($data_file);
-                    my %data = %$data_ref;
-                    if (defined $data{'periods'}) {
-                        for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
-                            my $period_name = $data{'periods'}[$k]{'name'};
-                            my $cons_period_id;
-                            for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
-                                if ($cons_periods[$cons_id]{'name'} eq $period_name) {
-                                    $cons_period_id = $cons_id;
-                                    last;
-                                }
-                            }
-                            for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
-                                # Add the client info to the metric desc
-                                $$metric{'names'}{'client-id'} = $cs_id;
-                                $$metric{'desc'}{'name-format'} = '%client-id%' . "-" .
-                                                                 $$metric{'desc'}{'name-format'};
-                                if (! defined $cons_period_id) {
-                                    my @metrics;
-                                    my %period = ('name' => $period_name, 'metrics' => \@metrics);
-                                    push(@cons_periods, \%period);
-                                    $cons_period_id = scalar @cons_periods - 1;
-                                }
-                                dedup_metric($metric);
-                                push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        $sample{'periods'} = \@cons_periods;
-        push(@samples, \%sample);
-    }
-    $iterations[$iter_array_idx]{'samples'} = \@samples;
-}
-print "Consolidation complete\n";
+# TODO: remove temparary sseh keys from local authorized_keys file
 
-$run{'iterations'} = \@iterations;
-put_json_file($run{'run-dir'} . "/rickshaw.json", \%run);
 if (defined $abort_test_id) {
     printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
 }
