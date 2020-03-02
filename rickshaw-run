@@ -67,7 +67,7 @@ sub roadblock_leader_sync {
         while (scalar @_ > 0) {
             $follower_param .= " --followers=" . shift;
         }
-        printf `date` . "Running roadblock for: %s\n", $message;
+        printf "Running roadblock for: %s\n", $message;
         my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
         debug_log(sprintf "roadblock leader command:%s\n", $cmd);
         my $output = `$cmd`;
@@ -85,7 +85,7 @@ sub roadblock_leader_sync {
             printf "%s\n", $output;
             $rc = 2;
         }
-        printf `date` . "Completed roadblock for: %s, return code %d\n", $message, $rc;
+        printf "Completed roadblock for: %s, return code %d\n", $message, $rc;
         return $rc;
     } else {
         return 0;
@@ -143,12 +143,9 @@ sub file_newer_than {
     my $file = shift;
     my $epoch_sec = shift;
     {
-        #my $dir = pushd $rickshaw_dir;
         chomp(my $file_time=`/bin/ls -l --time-style=+%s $file`);
-        printf "/bin/ls: %s\n", $file_time;
         # -rwxrwxr-x. 1 atheurer atheurer 4656 1582742663 client-server-script
         if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
-            printf "file time: %d\n", $1;
             if ($1 > $epoch_sec) {
                 return 1;
             }
@@ -232,7 +229,6 @@ my @param_sets = @{ my $param_sets_ref = get_json_file($run{'bench-params'}) };
 $run{'iterations'} = ();
 my $iter_id = 0;
 for my $params (@param_sets) {
-    print Dumper $params;
     $run{'iterations'}[$iter_id]{'params'} = $params;
     $iter_id++;
 }
@@ -488,17 +484,13 @@ if ($use_workshop) {
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
-        print Dumper $$image_json_ref[$i];
         my $name = $$image_json_ref[$i]{'names'}[0];
-        printf "name: %s\n", $name;
         $name =~ s/.*\///;
         $name =~ s/:.*//;
-        printf "name: %s\n", $name;
         if ($name eq $image_name) {
             $image_id = $$image_json_ref[$i]{'id'};
             $image_time = $$image_json_ref[$i]{'createdatraw'};
             $image_time = `date -d $image_time +%s`;
-            printf "time: %d\n", $image_time;
             my @files = ($run{'bench-dir'} . "/workshop.json",
                          $run{'workshop-dir'} . "/targets/" . $usrenv . ".json",
                          $rickshaw_dir . "/client-server-script");
@@ -506,8 +498,6 @@ if ($use_workshop) {
                 if ( file_newer_than($file, $image_time) > 0) {
                     printf "%s is newer than the container image\n", $file;
                     $must_rebuild = 1;
-                } else {
-                    printf "%s is NOT newer than the container image\n", $file;
                 }
             }
         }
@@ -558,7 +548,6 @@ if ($use_workshop) {
                 }
             };
         }
-        print Dumper \%cs_req;
 
         put_json_file($cs_req_file, \%cs_req);
         # Building an image must include requiremetns from rickshaw, one benchmark,
@@ -584,7 +573,6 @@ if ($use_workshop) {
         }
         my $coder = JSON::XS->new;
         my $workshop_ref = $coder->decode($workshop_json);
-        print Dumper $workshop_ref;
         $image_id = $$workshop_ref[0]{'id'};
     }
     $endpoint_image_opt = " --image-id=" . $image_id;
@@ -592,7 +580,8 @@ if ($use_workshop) {
 }
 
 # Create temporary ssh keys so endpoint clients/servers can pull/push data
-system('ssh-keygen -f ' . $run{'run-dir'} . '/rickshaw_id.rsa -P ""');
+my $keygen_cmd = 'ssh-keygen -f ' . $run{'run-dir'} . '/rickshaw_id.rsa -P "" 2>&1';
+my $keygen_output = `$keygen_cmd`;
 system('cat ' . $run{'run-dir'} . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 
 # Deploy ths endpoints so they are ready to run benchmark and tools
