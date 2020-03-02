@@ -1,5 +1,6 @@
 [
     [
+        { "arg": "filename", "val": "/tmp/fio-%client-id%" },
         { "arg": "rw", "val": "randrw" },
         { "arg": "bs", "val": "64k" },
         { "arg": "runtime", "val": "10s" },
@@ -20,6 +21,7 @@
         { "arg": "output-format", "val": "json" }
     ],
     [
+        { "arg": "filename", "val": "/tmp/fio-%client-id%" },
         { "arg": "rw", "val": "randrw" },
         { "arg": "bs", "val": "16k" },
         { "arg": "runtime", "val": "10s" },

@@ -645,8 +645,11 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $rc = roadblock_leader_sync("client-server-start-test:" . $test_id,
                                    "Starting test ". $test_id, (@rb_cs_ids, @endpoints));
     if ($rc > 0) {
-        if ($rc == 2) {
+        # Probably don't need this check *before* a test starts, but maybe we do
+        # once we add the client/server pre-script execution for each test
+        if ($rc == 3) {
             printf "[ERROR]Abort from last start-test so breaking out of test-loop\n";
+            $abort_test_id = $tid;
             last;
         } else {
             printf "[ERROR]roadblock failed, exiting\n";
@@ -657,8 +660,9 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     $rc = roadblock_leader_sync("client-server-stop-test:" . $test_id,
                                 "Stopping test " . $test_id, (@rb_cs_ids, @endpoints));
     if ($rc > 0) {
-        if ($rc == 2) {
+        if ($rc == 3) {
             printf "[ERROR]Abort from last stop-test so breaking out of test-loop\n";
+            $abort_test_id = $tid;
             last;
         } else {
             printf "[ERROR]roadblock failed, exiting\n";
@@ -677,61 +681,63 @@ for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
         exit 1;
     }
 }
-print "Post-processing data\n";
-# Organize the data from the clients into a common directory structure, organized by
-# iteration, then by sample, then finally by client/server.  This is needed to have
-# the benchmark's postprocessing script work.  Also background the post-process script
-# for each test and wait for them to complete.
-opendir(my $dh, $run{'run-dir'});
-my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
-my $pp_cmd = $bench_config{'controller'}{'post-script'};
-$pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
-$pp_cmd =~ s/\%run-dir\%/$run{'run-dir'}\//g;
-my @pids;
-close $dh;
-{
-    mkdir($run{'run-dir'} . "/tmp-data-dir");
-    my $dir = pushd($run{'run-dir'} . "/tmp-data-dir");
-    foreach my $archive (@data_archives) {
-        $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or continue;
-        my $cs_type = $1;
-        my $cs_id = $2;
-        my $tar_cmd = "tar zxf ../" . $archive;
-        my $tar_output = `$tar_cmd`;
-        for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
-            my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
-            for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                my $cs_path = "/iteration-" . $i . "/sample-" . $s . "/clients/" . $cs_id;
-                make_path($run{'run-dir'} . $cs_path);
-                my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
-                my $mv_cmd = "/bin/mv * " . $run{'run-dir'} . $cs_path;
-                my $mv_output = `$mv_cmd`;
-                if (my $pid = fork) {
-                    push(@pids, $pid);
-                } else {
-                    my $dir = pushd($run{'run-dir'} . $cs_path);
-                    system($pp_cmd . " " . $iter_params);
-                    exit;
+if (defined $abort_test_id) {
+    printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
+    printf "Will not post-process benchmark data\n";
+} else {
+    print "Post-processing data\n";
+    # Organize the data from the clients into a common directory structure, organized by
+    # iteration, then by sample, then finally by client/server.  This is needed to have
+    # the benchmark's postprocessing script work.  Also background the post-process script
+    # for each test and wait for them to complete.
+    opendir(my $dh, $run{'run-dir'});
+    my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
+    my $pp_cmd = $bench_config{'controller'}{'post-script'};
+    $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
+    $pp_cmd =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+    my @pids;
+    close $dh;
+    {
+        mkdir($run{'run-dir'} . "/tmp-data-dir");
+        my $dir = pushd($run{'run-dir'} . "/tmp-data-dir");
+        foreach my $archive (@data_archives) {
+            $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or continue;
+            my $cs_type = $1;
+            my $cs_id = $2;
+            my $tar_cmd = "tar zxf ../" . $archive;
+            my $tar_output = `$tar_cmd`;
+            for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
+                my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
+                for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+                    my $cs_path = "/iteration-" . $i . "/sample-" . $s . "/clients/" . $cs_id;
+                    make_path($run{'run-dir'} . $cs_path);
+                    my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
+                    my $mv_cmd = "/bin/mv * " . $run{'run-dir'} . $cs_path;
+                    my $mv_output = `$mv_cmd`;
+                    if (my $pid = fork) {
+                        push(@pids, $pid);
+                    } else {
+                        my $dir = pushd($run{'run-dir'} . $cs_path);
+                        system($pp_cmd . " " . $iter_params);
+                        exit;
+                    }
                 }
             }
+            #if (!$debug) {
+            #system("/bin/rm ../" . $archive);
+            #}
         }
-        #if (!$debug) {
-        #system("/bin/rm ../" . $archive);
-        #}
+        rmdir($run{'run-dir'} . "/tmp-data-dir/*");
+        system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");
+        system("/bin/ls " . $run{'run-dir'} . "/tmp-data-dir");
     }
-    rmdir($run{'run-dir'} . "/tmp-data-dir/*");
-    system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");
-    system("/bin/ls " . $run{'run-dir'} . "/tmp-data-dir");
+    printf "Waiting for %d per-client/server post-processing jobs to complete\n", scalar @pids;
+    while (wait() > -1) {
+    }
+    rmdir($run{'run-dir'} . "/tmp-data-dir/");
 }
-printf "Waiting for %d per-client/server post-processing jobs to complete\n", scalar @pids;
-while (wait() > -1) {
-}
-rmdir($run{'run-dir'} . "/tmp-data-dir/");
 
 # TODO: remove temporary ssh keys from local authorized_keys file
 
 put_json_file($run{'run-dir'} . "/rickshaw-run.json", \%run);
 
-if (defined $abort_test_id) {
-    printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
-}
