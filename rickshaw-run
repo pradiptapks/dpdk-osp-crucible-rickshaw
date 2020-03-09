@@ -59,15 +59,15 @@ sub usage {
     print "                'i' = run all iterations of a sample first\n\n";
 }
 
-sub roadblock_leader_sync {
+sub roadblock_leader {
     if ($use_roadblock) {
-        my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . shift;
-        my $message = shift;
+        my $uuid = shift;
+        my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . $uuid;
         my $follower_param = "";
         while (scalar @_ > 0) {
             $follower_param .= " --followers=" . shift;
         }
-        printf "Running roadblock for: %s\n", $message;
+        printf "Running roadblock for: %s\n", $uuid;
         my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
         debug_log(sprintf "roadblock leader command:%s\n", $cmd);
         my $output = `$cmd`;
@@ -85,7 +85,7 @@ sub roadblock_leader_sync {
             printf "%s\n", $output;
             $rc = 2;
         }
-        printf "Completed roadblock for: %s, return code %d\n", $message, $rc;
+        printf "Completed roadblock for: %s, return code %d\n", $uuid, $rc;
         return $rc;
     } else {
         return 0;
@@ -421,13 +421,11 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
 }
 
 # All data needed for any endpoint to run is copied to the endpoint run directory.
-# If workshop is used, then this directory will be included in the image.
-# If workshop is not used, then the endpoint can copy data from here to its
-# own endpoint run directory, which has the same name as its options, like "local:clients:1".
 my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
 mkdir($base_endpoint_run_dir);
 copy($rickshaw_dir . "/client-server-script", $base_endpoint_run_dir . "/client-server-script")
-    || die "Could not copy client-server-script to " . $base_endpoint_run_dir . "/client-server-script";
+    || die "Could not copy client-server-script to " . $base_endpoint_run_dir .
+           "/client-server-script";
 chmod 0755, $base_endpoint_run_dir . "/client-server-script";
 # Build the client and server benchmark-command files and put them in the base endpoint run dir
 my $cs_cmds_dir = $run{'run-dir'} . "/client-server-commands";
@@ -472,7 +470,28 @@ foreach my $cs_type (keys %clients_servers) {
     }
 }
 
+# Build the client/server "from-controller" files list and put them in the base endpoint run dir.
+# These are files the client/server must copy from the controller before running any tests.
+# The "client-server-script" will first scp the list (client-files-list or server-files-list).
+# then it will read this list to know what other files to vopy over)
+foreach my $cs_type (keys %clients_servers) {
+    my $cs_file_list = $run{'run-dir'} . "/" . $cs_type . "-files-list";
+    open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
+    if (exists $bench_config{$cs_type}{"files-from-controller"}) {
+        for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
+            print Dumper $file_spec;
+            my $src_file = $$file_spec{'src'};
+            # TODO: substitute env vars in source
+            $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
+            $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+            my $dest_file = $$file_spec{'dest'};
+            printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+        }
+    }
+    close FH;
+}
 
+# Build a new container image if one does not exist or is stale
 my $endpoint_image_opt = "";
 if ($use_workshop) {
     my $image_id;
@@ -480,14 +499,18 @@ if ($use_workshop) {
     my $must_rebuild = 0;
     my $image_time;
     my $image_name = "workshop_" . $usrenv . "_" . $run{'benchmark'};
-    my $image_json = `buildah  images --json $image_name`;
+    #my $image_json = `buildah  images --json $image_name`;
+    my $image_json = `buildah  images --json`;
+    printf "image_json:\n%s\n", $image_json;
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
+    my $image_found = 0;
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
         my $name = $$image_json_ref[$i]{'names'}[0];
         $name =~ s/.*\///;
         $name =~ s/:.*//;
         if ($name eq $image_name) {
+            $image_found = 1;
             $image_id = $$image_json_ref[$i]{'id'};
             $image_time = $$image_json_ref[$i]{'createdatraw'};
             $image_time = `date -d $image_time +%s`;
@@ -502,7 +525,7 @@ if ($use_workshop) {
             }
         }
     }
-    if ($must_rebuild) {
+    if ($must_rebuild or $image_found == 0) {
         printf "The container image must be rebuilt\n";
         # Build a container image for the clients/servers
         # Create a json which tells workshop to include these files:
@@ -584,7 +607,8 @@ my $keygen_cmd = 'ssh-keygen -f ' . $run{'run-dir'} . '/rickshaw_id.rsa -P "" 2>
 my $keygen_output = `$keygen_cmd`;
 system('cat ' . $run{'run-dir'} . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 
-# Deploy ths endpoints so they are ready to run benchmark and tools
+# Deploy ths endpoints so they are ready to run benchmark and tools.
+# Each endpoint is responible for launching a osruntime for each client and server.
 print "Deploying endpoints\n";
 debug_log(sprintf "\nendpoint output:\n");
 foreach my $endpoint (@endpoints) {
@@ -600,7 +624,6 @@ foreach my $endpoint (@endpoints) {
                   " --rickshaw-run-dir=" . $run{'run-dir'} .
                   $endpoint_image_opt .
                   $endpoint_roadblock_opt .
-                  #. " " . $cs_cmds_dir
                   " >" . $this_endpoint_run_dir . "/endpoint-stdout.txt" .
                   " 2>" . $this_endpoint_run_dir . "/endpoint-stderr.txt";
         # The below 'system' needs to be forked, then wait for all to finish.
@@ -624,14 +647,14 @@ foreach my $endpoint (@endpoints) {
         exit 1;
     }
 }
-if (roadblock_leader_sync("endpoint-deploy", "Deploying endpoints", @endpoints) > 0) {
+if (roadblock_leader("endpoint-deploy", @endpoints) > 0) {
     printf "[ERROR]roadblock failed\n";
     exit 1;
 }
 
 # Cycle through the list of tests using roadblock to kick them off
 for my $sync (qw(client-server-script-start client-server-start-tools)) {
-    if (roadblock_leader_sync($sync, $sync, (@rb_cs_ids, @endpoints)) > 0) {
+    if (roadblock_leader($sync, (@rb_cs_ids, @endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
@@ -642,45 +665,36 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $samp_id = $tests[$tid]{'sample-id'};
     my $iter_array_idx = $iter_id - 1;
     my $test_id = $iter_id . "-" . $samp_id;
-    my $rc = roadblock_leader_sync("client-server-start-test:" . $test_id,
-                                   "Starting test ". $test_id, (@rb_cs_ids, @endpoints));
-    if ($rc > 0) {
-        # Probably don't need this check *before* a test starts, but maybe we do
-        # once we add the client/server pre-script execution for each test
-        if ($rc == 3) {
-            printf "[ERROR]Abort from last start-test so breaking out of test-loop\n";
-            $abort_test_id = $tid;
-            last;
-        } else {
-            printf "[ERROR]roadblock failed, exiting\n";
-        }
-    }
-    printf "Clients/servers starting test number %d: iteration %d, sample %d\n",
-           $tid + 1, $iter_id, $samp_id;
-    $rc = roadblock_leader_sync("client-server-stop-test:" . $test_id,
-                                "Stopping test " . $test_id, (@rb_cs_ids, @endpoints));
-    if ($rc > 0) {
-        if ($rc == 3) {
-            printf "[ERROR]Abort from last stop-test so breaking out of test-loop\n";
-            $abort_test_id = $tid;
-            last;
-        } else {
-            printf "[ERROR]roadblock failed, exiting\n";
+    for my $sync_point (qw(server-start client-start client-stop server-stop)) {
+        my $rc = roadblock_leader("test-" . $test_id . ":" . $sync_point, (@rb_cs_ids, @endpoints));
+        if ($rc > 0) {
+            if ($rc == 3) {
+                printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
+                $abort_test_id = $tid;
+                last;
+            } else {
+                printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
+                exit 1;
+            }
         }
     }
 }
 for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
-    if (roadblock_leader_sync($sync, $sync, (@rb_cs_ids, @endpoints)) > 0) {
+    if (roadblock_leader($sync, (@rb_cs_ids, @endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
 }
 for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
-    if (roadblock_leader_sync($sync, $sync, @endpoints) > 0) {
+    if (roadblock_leader($sync, @endpoints) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
 }
+
+
+# With all tests completed, launch the benchmark-specific post-processing script
+# for each client and server and each test they ran.
 if (defined $abort_test_id) {
     printf "Run finished with only %d of %d tests\n", $abort_test_id, scalar @tests;
     printf "Will not post-process benchmark data\n";
@@ -709,7 +723,8 @@ if (defined $abort_test_id) {
             for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                 my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
                 for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                    my $cs_path = "/iteration-" . $i . "/sample-" . $s . "/clients/" . $cs_id;
+                    my $cs_path = "/iteration-" . $i . "/sample-" . $s .
+                                  "/" . $cs_type . "s/" . $cs_id;
                     make_path($run{'run-dir'} . $cs_path);
                     my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
                     my $mv_cmd = "/bin/mv * " . $run{'run-dir'} . $cs_path;

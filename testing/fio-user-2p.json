@@ -1,13 +1,12 @@
 [
     [
-        { "arg": "filename", "val": "/tmp/fio-%client-id%" },
+        { "arg": "filename", "val": "/fio-%client-id%" },
         { "arg": "rw", "val": "randrw" },
         { "arg": "bs", "val": "64k" },
         { "arg": "runtime", "val": "10s" },
         { "arg": "ioengine", "val": "libaio" },
         { "arg": "direct", "val": "1" },
         { "arg": "iodepth", "val": "4" },
-        { "arg": "jobfile", "val": "/home/atheurer/fio.job" },
         { "arg": "time_based", "val": "1" },
         { "arg": "filesize", "val": "5M" },
         { "arg": "output", "val": "fio-result.json" },
@@ -21,14 +20,13 @@
         { "arg": "output-format", "val": "json" }
     ],
     [
-        { "arg": "filename", "val": "/tmp/fio-%client-id%" },
+        { "arg": "filename", "val": "/fio-%client-id%" },
         { "arg": "rw", "val": "randrw" },
         { "arg": "bs", "val": "16k" },
         { "arg": "runtime", "val": "10s" },
         { "arg": "ioengine", "val": "libaio" },
         { "arg": "direct", "val": "1" },
         { "arg": "iodepth", "val": "4" },
-        { "arg": "jobfile", "val": "/home/atheurer/fio.job" },
         { "arg": "time_based", "val": "1" },
         { "arg": "filesize", "val": "5M" },
         { "arg": "output", "val": "fio-result.json" },

@@ -18,7 +18,7 @@ use File::Path qw(make_path);
 use JSON::XS;
 use Data::Dumper;
 my $ug = Data::UUID->new;
-my $debug = 1;
+my $debug = 0;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 
@@ -188,8 +188,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                             }
                             for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
                                 # Add the client info to the metric desc
-                                $$metric{'names'}{'client-id'} = $cs_id;
-                                $$metric{'desc'}{'name-format'} = '%client-id%' . "-" .
+                                $$metric{'names'}{'cs-id'} = $cs_id;
+                                $$metric{'desc'}{'name-format'} = '%cs-id%' . "-" .
                                                                  $$metric{'desc'}{'name-format'};
                                 if (! defined $cons_period_id) {
                                     my @metrics;

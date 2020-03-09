@@ -47,6 +47,70 @@ function do_roadblock() {
     return 0
 }
 
+function scp_from_controller() {
+    local ssh_id_file=$1; shift
+    local src=$1; shift
+    local dest=$1; shift
+    local scp_attempts=1
+    local scp_rc=1
+    local max_attempts=10
+    while [ $scp_rc -gt 0 -a $scp_attempts -lt $max_attempts ]; do
+        echo "Trying to scp $rickshaw_host:$src $dest"
+        scp -o StrictHostKeyChecking=no \
+            -o ConnectionAttempts=10 \
+            -i $ssh_id_file \
+            -r $rickshaw_host:"$src" "$dest"
+        scp_rc=$?
+        echo "scp exit code: $scp_rc"
+        if [ $scp_rc -gt 0 ]; then
+            echo "scp failed, trying again"
+            sleep $scp_attempts
+        fi
+        let scp_attempts=$scp_attempts+1
+    done
+    if [ $scp_attempts -ge $max_attempts ]; then
+        exit_error "Could not copy $src from $rickshaw_host"
+    fi
+}
+
+function archive_to_controller() {
+    local ssh_id_file=$1; shift
+    local src=$1; shift # a directory to archive from
+    local dest=$1; shift # a destination directory to write archive
+    local ssh_attempts=1
+    local ssh_rc=1
+    local max_attempts=10
+    if [ -z "$ssh_id_file" ]; then
+        exit_error "archive_to_controller(): ssh_id_file not defined"
+    fi
+    if [ -z "$src" ]; then
+        exit_error "archive_to_controller(): src_file not defined"
+    fi
+    if [ -z "$dest" ]; then
+        exit_error "archive_to_controller(): destination is not defined"
+    fi
+    pushd $src || exit_error "Could not chdir to $src"
+    while [ $ssh_rc -gt 0 -a $ssh_attempts -lt $max_attempts ]; do
+        echo "Trying to tar/ssh fron $src to $rickshaw_host:$dest"
+        tar czf - . | ssh \
+                       -o StrictHostKeyChecking=off \
+                       -o ConnectionAttempts=10 \
+                       -i "$endpoint_run_dir/rickshaw_id.rsa" \
+                       $rickshaw_host "dd of=$dest"
+        ssh_rc=$?
+        echo "ssh exit code: $ssh_rc"
+        if [ $ssh_rc -gt 0 ]; then
+            echo "tar/ssh failed, trying again"
+            sleep $ssh_attempts
+        fi
+        let ssh_attempts=$ssh_attempts+1
+    done
+    popd >/dev/null
+    if [ $ssh_attempts -ge $max_attempts ]; then
+        exit_error "Could not archive $src to $rickshaw_host:$dest"
+    fi
+}
+
 longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
@@ -69,6 +133,7 @@ while true; do
         --cs-id)
             shift;
             cs_id="$1"
+            export RS_CS_ID=$cs_id
             shift;
             ;;
         --endpoint-run-dir)
@@ -115,6 +180,7 @@ cs_dir="$endpoint_run_dir/$cs_id"
 exec >$endpoint_run_dir/$cs_id/$cs_id-stderrout.txt
 exec 2>&1
 
+cs_type=`echo $cs_id | awk -F- '{print $1}'`
 if [ -z "$rickshaw_host" ]; then
 	exit_error "Exiting due to rickshaw host not being set"
 fi
@@ -141,12 +207,6 @@ do_roadblock client-server-start-tools 300 ||
 # start tools here
 echo -e "\nClients/servers starting tools"
 
-testloop_abort_opt=" --abort 1"
-pushd "$endpoint_run_dir" >/dev/null ||
-    exit_error "Could not chdir to $endpoint_run_dir"
-find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "endpoint-std" | \
-    cpio -pdum "$cs_dir" || 
-    exit_error "Could not copy files from $endpoint_run_dir to $cs_dir with find & cpio"
 pushd "$cs_dir" >/dev/null ||
     exit_error "Could not chdir to $cs_dir"
 
@@ -156,22 +216,40 @@ ssh_id_file="$endpoint_run_dir/rickshaw_id.rsa"
 if [ ! -e $ssh_id_file ]; then
     exit_error "ssh key $ssh_id_file was not found"
 fi
-scp_attempts=1
-scp_rc=1
-while [ $scp_rc -gt 0 -a $scp_attempts -lt 5 ]; do
-    scp -o StrictHostKeyChecking=no -i $ssh_id_file \
-        $rickshaw_host:"$rickshaw_run_dir/client-server-commands/$cs_id" "$cs_id.cmds"
-    scp_rc=$?
-    echo "scp exit code: $scp_rc"
-    if [ $scp_rc -gt 0 ]; then
-        echo "Trying again to scp command file"
-        sleep $scp_attempts
-    fi
-    let scp_attempts=$scp_attempts+1
-done
-if [ ! -e "$cs_id.cmds" ]; then
-    exit_error "Could not copy $cs_id.cmds from $rickshaw_host"
+
+cs_files_list="$cs_type-files-list"
+# First get the file that tells us what other files to get
+scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/$cs_files_list" "$cs_files_list"
+if [ ! -e "$cs_files_list" ]; then
+    exit_error "Could not find $cs_files_list"
 fi
+dest_file=""
+src_file=""
+# Now we know what files to get
+while read line; do
+    if [ -z "$src_file" ]; then
+        src_file=`echo $line | grep "^src=" | awk -F= '{print $2}'`
+        if [ -z "$src_file" ]; then
+            exit_error "source file not found in $cs_type-file-list"
+        fi
+    else 
+        dest_file=`echo $line | grep "^dest=" | awk -F= '{print $2}'`
+        if [ -z "$dest_file" ]; then
+            exit_error "dest file not found in $cs_type-file-list"
+        fi
+        scp_from_controller "$ssh_id_file" "$src_file" "$dest_file"
+        dest_file=""
+        src_file=""
+    fi
+done < "$cs_files_list"
+
+# Finally, get the commands file
+scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/client-server-commands/$cs_id" "$cs_id.cmds"
+if [ ! -e ""$cs_id.cmds ]; then
+    exit_error "Could not find $cs_id.cmds"
+fi
+
+# Run the actual tests by reading the commands file
 while read line; do
     echo "Processing this cmd: $line"
     iter_samp=`echo $line | awk '{print $1}'`
@@ -181,45 +259,55 @@ while read line; do
     iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
     mkdir -p $iter_samp_dir ||
         exit_error "Could not mkdir iteration-$iter/sample-$samp"
-    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-log.txt" | \
+    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-stderrout.txt" | \
+        grep -v -- "$cs_id.cmds" | grep -v -- "$cs_files_list" | \
         cpio -pdum iteration-$iter/sample-$samp/ ||
         exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
-    pushd $iter_samp_dir ||
-        exit_error "Could not chdir to $iter_samp_dir"
-    do_roadblock client-server-start-test:$iter-$samp 300
-    rb_rc=$?
-    echo roadblock start test exit code: $rb_rc
-    if [ $rb_rc -eq 3 ]; then
-        echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
-        echo -e "\nWill not run remaining tests\n"
-        break
-    fi
-    if [ $rb_rc -eq 2 ]; then
-        exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
-    fi
-    echo -e "\nRunning iteration $iter, sample $samp"
-    echo -e "Benchmark command: $cmd"
-    $cmd
-    if [ $? -gt 0 ]; then
-        # An abort message must be sent so the other members know how to procede
-        echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
-        do_roadblock "client-server-stop-test:$iter-$samp" "300" " --abort=1"
-        echo -e "\nWill not run remaining tests\n"
-        break
-    else
-        do_roadblock client-server-stop-test:$iter-$samp 300 || break
+    pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
+    echo PWD: `/bin/pwd`
+    for sync in server-start client-start client-stop server-stop; do
+        sync_label="test-${iter}-${samp}:$sync"
+        do_roadblock "$sync_label" 300 "$abort_opt"
         rb_rc=$?
-        echo roadblock start test exit code: $rb_rc
+        cmd_rc=0
+        echo roadblock $sync_label exit code: $rb_rc
         if [ $rb_rc -eq 3 ]; then
-            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nAbort exit code from iteration $iter, sample $samp roadblock"
             echo -e "\nWill not run remaining tests\n"
             break
         fi
         if [ $rb_rc -eq 2 ]; then
-            exit_error "roadblock for client-server-stop-test:$iter-$samp timed out"
+            exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
         fi
-    fi
+        if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
+            echo "Running server command: $cmd"
+            #CS_ID=$cs_id $cmd
+            $cmd
+            cmd_rc=$?
+        elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
+            echo "Running client command: $cmd"
+            #CS_ID=$cs_id $cmd
+            $cmd
+            cmd_rc=$?
+        elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
+            echo "killing server"
+            if [ -e server.pid ]; then
+                pid=`cat server.pid`
+                echo "killing PID $pid"
+                kill $pid
+            else
+                echo "Did not find server.pid file in `/bin/pwd`"
+            fi
+        fi
+        if [ $cmd_rc -gt 0 ]; then
+            # An abort message must be sent so the other members know how to procede
+            abort_opt=" --abort 1"
+            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nWill not run remaining tests\n"
+        fi
+    done
     popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
+    echo PWD: `/bin/pwd`
 done < "$endpoint_run_dir/$cs_id/$cs_id.cmds"
 
 do_roadblock client-server-stop-tools 300 ||
@@ -229,27 +317,12 @@ echo -e "\nClients/servers stopping tools"
 do_roadblock client-server-send-data 300 ||
     exit_error "roadblock for client-server-send-data timed out"
 echo -e "\nClients/servers copying data back to endpoint"
-ssh_attempts=1
-ssh_rc=1
-pushd $cs_dir >/dev/null ||
-    exit_error "Could not chdir to $cs_dir"
-while [ $ssh_rc -gt 0 -a $ssh_attempts -lt 5 ]; do
-    tar czf - . | ssh -o StrictHostKeyChecking=off -i "$endpoint_run_dir/rickshaw_id.rsa" \
-        $rickshaw_host "dd of=$rickshaw_run_dir/$cs_id-data.tgz"
-    ssh_rc=$?
-    if [ $ssh_rc -gt 0 ]; then
-        echo "Trying again to tar/ssh result data"
-        sleep $ssh_attempts
-    fi
-    let ssh_attempts=$ssh_attempts+1
-done
-popd >/dev/null
-if [ $ssh_rc -gt 0 ]; then
-    exit_error "tar/ssh of client/server data to $rickshaw_host failed"
-fi
+
+# Send all of the test data to the controller
+archive_to_controller "$ssh_id_file" "$cs_dir" "$rickshaw_run_dir/$cs_id-data.tgz"
+
 popd >/dev/null
 do_roadblock client-server-script-finish 300 || \
     exit_error "roadblock for client-server-script-finish timed out"
 echo -e "\nAll client/server scripts are finished"
 # /bin/rm -rf iteration-*
-popd >/dev/null
