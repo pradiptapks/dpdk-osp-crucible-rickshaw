@@ -1,9 +1,0 @@
-{
-  "benchmark": "fio",
-  "client": { 
-    "packages": [ "pbench-fio-3.12-1" ],
-    "files": [ "fio.job" ],
-    "bin": "fio",
-    "param_regex": [ "s/\\s--jobfile=(\\S+)//", "s/(.*)/$1fio.job/" ]
-  }
-}

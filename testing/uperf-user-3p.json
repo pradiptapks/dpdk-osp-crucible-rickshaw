@@ -1,0 +1,26 @@
+[
+    [
+        { "arg": "remotehost", "val": "localhost" },
+        { "arg": "test-type", "val": "stream" },
+        { "arg": "wsize", "val": "64" },
+        { "arg": "duration", "val": "10" },
+        { "arg": "protocol", "val": "tcp" },
+        { "arg": "nthreads", "val": "1" }
+    ],
+    [
+        { "arg": "remotehost", "val": "localhost" },
+        { "arg": "test-type", "val": "stream" },
+        { "arg": "wsize", "val": "1024" },
+        { "arg": "duration", "val": "10" },
+        { "arg": "protocol", "val": "tcp" },
+        { "arg": "nthreads", "val": "1" }
+    ],
+    [
+        { "arg": "remotehost", "val": "localhost" },
+        { "arg": "test-type", "val": "stream" },
+        { "arg": "wsize", "val": "16384" },
+        { "arg": "duration", "val": "10" },
+        { "arg": "protocol", "val": "tcp" },
+        { "arg": "nthreads", "val": "1" }
+    ]
+]

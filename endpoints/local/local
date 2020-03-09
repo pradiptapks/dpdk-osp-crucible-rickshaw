@@ -16,7 +16,7 @@
 #   -mount the filesystem image (plus /proc & /sys) then chroot to it
 #
 # Usage:
-# local [--validate] client[n-m,o-p],server[n-m,o-p] run-dir script-dir
+# local [--validate] --endpoint-opts=client:n-m,o-p,server:n-m,o-p --run-dir --script-dir
 #
 # If --validate is used all options after client/server will be ignored
 # If not using --validate script-dir and --run-dir are required
@@ -37,113 +37,335 @@ function start_tmux() {
         echo "killing existing tmux session $session_id"
         tmux kill-session -t "$session_id" >/dev/null 2>&1
     fi
-    tmux new -d -s "$session_id" "$script" >start-tmux.txt 2>&1
+    echo "running: tmux new -d -s \"$session_id\" \"$script\""
+    tmux new -d -s "$session_id" "$script" 2>&1 "$endpoint_run_dir/>start-tmux.txt"
 }
 
-if [ "$1" == "--validate" ]; then
-    shift
-    do_validate=1
-fi
+function run_roadblock_follower() {
+    local host=$1; shift
+    local passwd=$1; shift
+    local uuid=$1; shift
+    local follower=$1; shift
+    if [ -z "$cs_roadblock_opts" ]; then
+        return 0
+    fi
+    echo `date` "Starting roadblock for $uuid"
+    local cmd="/usr/bin/roadblock.py --role=follower --redis-server=$host --timeout=300"
+    cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower"
+    local output=`$cmd 2>&1`
+    local rc=$?
+    if echo $output | grep -q -- "Received abort message from leader"; then
+        rc=3
+    fi
+    if echo $output | grep -q -- "The roadblock has timed out"; then
+        rc=2
+    fi
+    if [ $rc -gt 0 ]; then
+        echo "Roadblock exit code is non-zero: $rc"
+    fi
+    echo `date` "Completed roadblock for $uuid"
+    return $rc
+}
 
-# Next argument must be the endpoint options which determine the 
-# clients and servers
 endpoint_name="local"
-endpoint_opts="$1"
-shift
-for i in `echo $endpoint_opts | sed -e 's/],/] /g'`; do
-    type=`echo $i | awk -F[ '{print $1}'`
-    range_ids=`echo $i | awk -F[ '{print $2}' | awk -F] '{print $1}'`
+osruntime="builtin" # to be changed to "chroot" when implemented
+longopts="validate,endpoint-opts:,run-id:,rickshaw-run-dir:,image-id:"
+longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:"
+opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
+if [ $? -ne 0 ]; then
+    printf -- "\tUnrecognized option specified\n\n"
+    exit 1
+fi
+eval set -- "$opts";
+while true; do
+    case "$1" in
+        --validate)
+            do_validate=1
+            shift;
+            ;;
+        --endpoint-opts)
+            shift;
+            endpoint_opts="$1"
+            endpoint_label="$endpoint_name,$endpoint_opts"
+            shift;
+            ;;
+        --run-id)
+            shift;
+            run_id="$1"
+            shift;
+            ;;
+        --rickshaw-run-dir)
+            shift;
+            rickshaw_run_dir="$1"
+            shift;
+            ;;
+        --image-id)
+            shift;
+            image_id="$1"
+            shift;
+            ;;
+        --roadblock-server)
+            shift;
+            roadblock_server="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-server=$roadblock_server"
+            shift;
+            ;;
+        --roadblock-passwd)
+            shift;
+            roadblock_passwd="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-passwd=$roadblock_passwd"
+            shift;
+            ;;
+        --roadblock-id)
+            shift;
+            roadblock_id="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-id=$roadblock_id"
+            shift;
+            ;;
+        --)
+            shift;
+            break;
+           ;;
+        *)
+           exit_error "Unexpected argument [$1]"
+           shift;
+           break;
+           ;;
+    esac
+done
 
-    for ids in `echo $range_ids | sed -e 's/,/ /'`; do
-        if echo $ids | grep -q -- "-"; then
-            range=`echo $ids | sed 's/-/ /'`
-            for j in `seq $range`; do
-                if [ "$type" == "client" ]; then
-                    clients[$j]="client-$j"
-                elif [ "$type" == "server" ]; then
-                    servers[$j]="server-$j"
+for i in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+    arg=`echo $i | awk -F: '{print $1}'`
+    val=`echo $i | awk -F: '{print $2}'`
+    case "$arg" in
+        client|server|clients|servers)
+            for ids in `echo $val | sed -e 's/,/ /'`; do
+                if echo $ids | grep -q -- "-"; then
+                    range=`echo $ids | sed 's/-/ /'`
+                    for j in `seq $range`; do
+                        if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                            clients[$j]="client-$j"
+                        elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                            servers[$j]="server-$j"
+                        fi
+                    done
+                else
+                    if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                        clients[$ids]="client-$ids"
+                    elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                        servers[$ids]="server-$ids"
+                    fi
                 fi
-            done           
-        else
-            if [ "$type" == "client" ]; then
-                clients[$ids]="client-$ids"
-            elif [ "$type" == "server" ]; then
-                servers[$ids]="server-$ids"
-            fi
-        fi
-    done
+            done
+            ;;
+        osruntime)
+            case "$val" in
+                builtin|chroot|podman)
+                    osruntime=$val
+                    ;;
+                *)
+                    exit_error "osruntime $val not supported"
+                    ;;
+            esac
+            ;;
+        *)
+            exit_error "endpoint options $arg not supported"
+            ;;
+    esac
 done
 
 # Validation just returns what clients and servers would be used
 if [ "$do_validate" == 1 ]; then
-    echo "client ${!clients[@]}"
+    if [ ${#clients[@]} -gt 0 ]; then
+        echo "client ${!clients[@]}"
+    fi
     if [ ${#servers[@]} -gt 0 ]; then
         echo "server ${!servers[@]}"
     fi
     exit
 fi
 
-run_id="$1"
-shift
-if [ -z "$1" ]; then
-    exit_error "The run-directory ws not provided"
+if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; then
+    echo "Not using roadblock to synchronize since some or all options were missing"
+    cs_roadblock_opts=""
+    rb_do_exit=0
+    if [ ${#clients[@]} -gt 1 ]; then
+        echo "Refusing to run because roadblock is not being used and number of clients is > 1"
+        rb_do_exit=1
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo "Refusing to run because roadblock is not being used and servers are used"
+        rb_do_exit=1
+    fi
+    if [ "$rb_do_exit" == "1" ]; then
+        exit_error "Exiting do to roadblock/client/server conflict"
+    fi
 fi
-rickshaw_run_dir=$1
-shift
+
+
+if [ -z "$run_id" ]; then
+    exit_error "The run ID was not provided"
+fi
+if [ -z "$rickshaw_run_dir" ]; then
+    exit_error "--rickshaw-run-dir was not provided"
+fi
 if [ ! -d "$rickshaw_run_dir" ]; then
     exit_error "The run directory [$rickshaw_run_dir] does not exist"
 fi
-if [ -z "$1" ]; then
-    exit_error "The script-direcotry ws not provided"
-fi
-cmd_dir=$1
-shift
-if [ ! -d "$cmd_dir" ]; then
-    exit_error "The script directory [$cmd_dir] does not exist"
+
+endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_label"
+mkdir -p $endpoint_run_dir;
+echo osruntime: $osruntime
+if [ "$osruntime" == "builtin" ]; then
+    # Only the container images already have the client-server-script
+    /bin/cp $rickshaw_run_dir/endpoint-run/client-server-script \
+            $endpoint_run_dir/client-server-script
+    # All osruntimes need an ssh-key, but for local-endpoint "builtin" it can simply be copied here
+    /bin/cp "$rickshaw_run_dir/rickshaw_id.rsa" $endpoint_run_dir
+elif [ "$osruntime" == "chroot" ]; then
+    # Delete old container if there is one
+    existing_container=`buildah containers --format "{{.ContainerName}}" | grep $endpoint_label`
+    if [ ! -z "$existing_container" ]; then
+        buildah rm $endpoint_label
+    fi
+    echo "Adding mount for chroot osruntime"
+    container_name=`buildah from --name $endpoint_label $image_id`
+    if [ "$container_name" == "$endpoint_label" ]; then
+        container_mount=`buildah mount "$container_name"`
+        echo "container mount: $container_mount"
+        endpoint_run_dir=$container_mount/endpoint-run
+        # for chroot osruntime we can also simply copy the ssh key
+        /bin/cp -f "$rickshaw_run_dir/rickshaw_id.rsa" $endpoint_run_dir
+        /bin/cp -f /etc/hosts "$container_mount/etc/"
+        /bin/cp -f /etc/resolv.conf "$container_mount/etc/"
+    fi
+elif [ "$osruntime" == "podman" ]; then
+    echo "Creating container for podman osruntime"
+    # Delete old container if there is one
+    #existing_container=`buildah containers --format "{{.ContainerName}}" | grep $endpoint_label`
+    #if [ ! -z "$existing_container" ]; then
+        #buildah rm $endpoint_label
+    #fi
+    # Need to add ssh key with volume mapping
 fi
 
 # For each client and server launch the actual script which will run it.
-endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_name:$endpoint_opts"
-mkdir -p $endpoint_run_dir;
+
+#TODO: get rid of below and copy any necessary files (like a fio.job) based on the benchamrk json
+pushd $rickshaw_run_dir >/dev/null || exit_error "Could not chdir to $rickshaw_run_dir"
+find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$endpoint_run_dir" 2>&1 || \
+    exit_error "Could not copy files from run dir to $endpoint_run_dir"
+popd >/dev/null
+
 for i in ${clients[@]} ${servers[@]}; do
-    cs_run_dir="$endpoint_run_dir/$i"
-    mkdir -p "$cs_run_dir" || exit_error "Could not create client/server run dir: [$cs_run_dir]"
-    echo running $i in $cs_run_dir
-    # Below is a HACK.  We should not copy everything from the
-    # rickshaw run_dir to the clients/servers
-    # We should be using from the bench config JSON, controller.files-to-[client|server]
-    pushd $rickshaw_run_dir >/dev/null || exit_error "Could not chdir to $rickshaw_run_dir"
-    find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$cs_run_dir" >/dev/null 2>&1 || \
-        exit_error "Could not copy files from run dir to $i"
-    popd >/dev/null
-    cmd="$rickshaw_run_dir/client-server-script localhost $rickshaw_run_dir flubber $run_id $i $cmd_dir/$i"
-    if [ -e "$rickshaw_run_dir/client-server-script" ]; then
-        if [ -e "$cmd_dir/$i" ]; then
-            echo "about to start $i"
-            pushd "$cs_run_dir" >/dev/null ||
-                exit_error "Could not pushd to client/server run dir: [$cs_run_dir]"
-            start_tmux "$i" "$cmd" || exit_error "Failed to start tmux"
-            popd >/dev/null
+    if [ "$osruntime" == "builtin" ]; then
+        cmd="$endpoint_run_dir/client-server-script --rickshaw-host=localhost"
+        cmd="$cmd --endpoint-run-dir=$endpoint_run_dir --cs-id=$i $cs_roadblock_opts"
+        cmd="$cmd --rickshaw-run-dir=$rickshaw_run_dir"
+        if [ -e "$endpoint_run_dir/client-server-script" ]; then
+            if [ -z "$cs_roadblock_opts" ]; then
+                # Only when not using roadblock run the client in the foreground
+                echo -e "About to run in foreground:\n$cmd\n"
+                $cmd
+            else
+                echo -e "About to run using nohup:\n$cmd\n"
+                nohup $cmd &
+            fi
         else
-            echo "[ERROR]could not find command file $cmd_dir/$i"
-            exit 1
+            exit_error "[ERROR]could not find script $rickshaw_run_dir/client-server-script"
         fi
-    else
-        echo "[ERROR]could not find script $rickshaw_run_dir/client-server-script"
-        exit 1
+    elif [ "$osruntime" == "chroot" ]; then
+        echo "using chroot"
+        # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
+        # Same will be true for running podman
+        cmd="chroot $container_mount /endpoint-run/client-server-script --rickshaw-host=localhost"
+        cmd="$cmd --rickshaw-run-dir=$rickshaw_run_dir --endpoint-run-dir=/endpoint-run"
+        cmd="$cmd --cs-id=$i $cs_roadblock_opts"
+        if [ -z "$cs_roadblock_opts" ]; then
+            # Only when not using roadblock run the client in the foreground
+            $cmd
+        else
+            echo -e "About to run using nohup:\n$cmd\n"
+            nohup $cmd &
+        fi
+    elif [ "$osruntime" == "podman"]; then
+        echo doing podman runtime
     fi
 done
+
+
 echo "This endpiont deployed"
-roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
-          --uuid=$run_id:endpoint-deploy --follower-id="$endpoint_name:$endpoint_opts"
-echo "Waiting for all client/server scripts to finish"
-# The next roadblock does not sync until the controller (rickshaw/leader) finishes a "client/server-finish" sync
-roadblock --role=follower --redis-server=localhost --timeout=7200 --redis-password=flubber\
-          --uuid=$run_id:endpoint-move-data --follower-id="$endpoint_name:$endpoint_opts"
-echo "Moving endpoint data"
-roadblock --role=follower --redis-server=localhost --timeout=300 --redis-password=flubber\
-          --uuid=$run_id:endpoint-finish --follower-id="$endpoint_name:$endpoint_opts"
-echo "All endpionts finished"
-/bin/rm -rf "$endpoint_run_dir"
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:endpoint-deploy" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:endpoint-deploy"
+fi
+# The next roadblock does not sync until the controller (rickshaw/leader) finishes a
+# "client/server-finish" sync
+
+# The following is for participating in the roadblock syncs for each benchmark execution.
+# The endpoint does not really need to participate in this, but if it does not, it will
+# wait on the next roadblock sync (endpoint-move-data) and likely time out when there are
+# lots of iterations/samples to run.  Rather than trying to predict a good time period
+# to execute all of these tests, it is easier to just participate in the roadblock syncs
+# for all of the tests, then run the endpoint-move-data roadblock sync.
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:client-server-script-start" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-script-start"
+fi
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:client-server-start-tools" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
+fi
+while read line; do
+    iter_samp=`echo $line | awk '{print $1}'`
+    iter=`echo $iter_samp | awk -F- '{print $1}'`
+    samp=`echo $iter_samp | awk -F- '{print $2}'`
+    for sync in server-start client-start client-stop server-stop; do
+        sync_label="test-${iter}-${samp}:$sync"
+        run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                               "$roadblock_id:$sync_label" "$endpoint_label"
+        rb_rc=$?
+        echo roadblock $sync_label exit code: $rb_rc
+        if [ $rb_rc -eq 3 ]; then
+            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nWill not run remaining tests\n"
+            break
+        fi
+        if [ $rb_rc -eq 2 ]; then
+            exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
+        fi
+    done
+done < "$rickshaw_run_dir/client-server-commands/client-1"
+echo "Out of test loop"
+for i in client-server-stop-tools client-server-send-data client-server-script-finish \
+         endpoint-move-data endpoint-finish endpoint-really-finish; do
+    run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                           "$roadblock_id:$i" "$endpoint_label"
+    rb_rc=$?
+    echo roadblock $i exit code: $rb_rc
+    if [ $rb_rc -gt 0 ]; then
+        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$i"
+    fi
+done
+
+if [ "$osruntime" == "chrooty" ]; then
+    echo "Removing mount $container_name for chroot osruntime"
+    buildah unmount "$container_name"
+    echo "Removing container $container_name for chroot runtime"
+    buildah rm "$container_name"
+fi
+#/bin/rm -rf "$endpoint_run_dir"
 # At this point the endpoint is "deployed" and can exit
+echo "Exiting local endpoint script"
 exit 0
+
+

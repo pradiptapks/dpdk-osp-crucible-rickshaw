@@ -18,5 +18,25 @@
         { "arg": "log_avg_msec", "val": "1000" },
         { "arg": "log_unix_epoch", "val": "1" },
         { "arg": "output-format", "val": "json" }
+    ],
+    [
+        { "arg": "filename", "val": "/fio-%client-id%" },
+        { "arg": "rw", "val": "randrw" },
+        { "arg": "bs", "val": "16k" },
+        { "arg": "runtime", "val": "10s" },
+        { "arg": "ioengine", "val": "libaio" },
+        { "arg": "direct", "val": "1" },
+        { "arg": "iodepth", "val": "4" },
+        { "arg": "time_based", "val": "1" },
+        { "arg": "filesize", "val": "5M" },
+        { "arg": "output", "val": "fio-result.json" },
+        { "arg": "write_hist_log", "val": "fio" },
+        { "arg": "log_hist_msec", "val": "10000" },
+        { "arg": "write_bw_log", "val": "fio" },
+        { "arg": "write_iops_log", "val": "fio" },
+        { "arg": "write_lat_log", "val": "fio" },
+        { "arg": "log_avg_msec", "val": "1000" },
+        { "arg": "log_unix_epoch", "val": "1" },
+        { "arg": "output-format", "val": "json" }
     ]
 ]
