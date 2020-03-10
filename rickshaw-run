@@ -22,7 +22,7 @@ my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "run-dir" => tempdir(), "run-id" => $ug->create_str());
 
-my $usrenv = "rhubi8";
+my $userenv = "rhubi8";
 my $debug = 0;
 my $use_roadblock = 0;
 my $use_workshop = 0;
@@ -50,13 +50,14 @@ my $workshop_roadblock_opt = "";
 
 sub usage {
     print "\nusage:\n\n";
-    print "--workshop-dir  Directory where workshop project exists\n";
-    print "--roadblock-dir Directory where workshop project exists\n";
-    print "--bench-dir     Directory where benchmark helper project exists\n";
-    print "--bench-params  File whith benchmark parameters to use\n";
-    print "--num-samples   The number of sample exeuctions to run for each benchmark iteration\n";
-    print "--test-order    's' = run all samples of an iteration first\n";
-    print "                'i' = run all iterations of a sample first\n\n";
+    print "--json-validator Path to json schema validation utility\n";
+    print "--workshop-dir   Directory where workshop project exists\n";
+    print "--roadblock-dir  Directory where workshop project exists\n";
+    print "--bench-dir      Directory where benchmark helper project exists\n";
+    print "--bench-params   File whith benchmark parameters to use\n";
+    print "--num-samples    The number of sample exeuctions to run for each benchmark iteration\n";
+    print "--test-order     's' = run all samples of an iteration first\n";
+    print "                 'i' = run all iterations of a sample first\n\n";
 }
 
 sub roadblock_leader {
@@ -188,8 +189,9 @@ while (scalar @ARGV > 0) {
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
-    } elsif ($arg =~ /^run-id$|^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^bench-params$/ or
-             $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$|^email$|^tags$|^desc$/) {
+    } elsif ($arg =~ /^run-id$|^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$/ or
+             $arg =~ /^bench-params$|^test-order$|^tool-group$|^num-samples$|^name$/ or
+             $arg =~ /^email$|^tags$|^desc$|^json-validator/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $run{$arg} = $val;
     } else {
@@ -197,6 +199,15 @@ while (scalar @ARGV > 0) {
         usage;
         exit 1;
     }
+}
+
+if (! defined $run{'json-validator'}) {
+    $run{'json-validator'} = 'json-validator';
+}
+system($run{'json-validator'} . " --help >/dev/null");
+if ($? != 0) {
+    printf "json-validator: %s does not work, exiting\n", $run{'json-validator'};
+    exit 1;
 }
 if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
     $use_roadblock = 1;
@@ -479,9 +490,7 @@ foreach my $cs_type (keys %clients_servers) {
     open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
     if (exists $bench_config{$cs_type}{"files-from-controller"}) {
         for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
-            print Dumper $file_spec;
             my $src_file = $$file_spec{'src'};
-            # TODO: substitute env vars in source
             $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
             $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
             my $dest_file = $$file_spec{'dest'};
@@ -498,7 +507,7 @@ if ($use_workshop) {
     # First determine if we need to build a new image
     my $must_rebuild = 0;
     my $image_time;
-    my $image_name = "workshop_" . $usrenv . "_" . $run{'benchmark'};
+    my $image_name = "workshop_" . $userenv . "_" . $run{'benchmark'};
     #my $image_json = `buildah  images --json $image_name`;
     my $image_json = `buildah  images --json`;
     printf "image_json:\n%s\n", $image_json;
@@ -515,7 +524,7 @@ if ($use_workshop) {
             $image_time = $$image_json_ref[$i]{'createdatraw'};
             $image_time = `date -d $image_time +%s`;
             my @files = ($run{'bench-dir'} . "/workshop.json",
-                         $run{'workshop-dir'} . "/targets/" . $usrenv . ".json",
+                         $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
                          $rickshaw_dir . "/client-server-script");
             for my $file (@files) {
                 if ( file_newer_than($file, $image_time) > 0) {
@@ -538,49 +547,57 @@ if ($use_workshop) {
         # like "client-server-commands" because this changes every time
         # rickshaw is run.
         my $cs_req_file = $run{'run-dir'} . "/cs-req.json";
-        my %cs_req = (  'targets' => {
-                            'default' => {
-                                'packages' => [
-                                    'endpoint-run'
-                                ]
+        my %cs_req = (  'workshop' => {
+                            'schema' => {
+                                'version' => '2020.03.02'
                             }
                         },
-                        'packages' => {
-                            'endpoint-run' => {
+                        'userenvs' => [
+                            {
+                                'name' => 'default',
+                                'requirements' => [ 'endpoint-run' ]
+                            }
+                        ],
+                        'requirements' => [
+                            {
+                                'name' => 'endpoint-run',
                                 'type' => 'files',
                                 'files_info' => {
-                                    'type' => 'local-copy',
-                                    # At this point only the client-server-script
-                                    # is in this $base_endpoint_run_dir, which is all
-                                    # we need, but we want the $base_endpoint_run_dir
-                                    # created [on the image as "/endpoint-run"].
-                                    'src' => $base_endpoint_run_dir,
-                                    'dst' => '/'
+                                    'files' => [
+                                        {
+                                            'src' => $base_endpoint_run_dir,
+                                            'dst' => '/endpoint-run/'
+                                        }
+                                    ]
                                 }
                             }
-                        }
+                        ] 
                     );
         if ($use_roadblock) {
-            push(@{ $cs_req{'targets'}{'default'}{'packages'} }, 'roadblock-script');
-            $cs_req{'packages'}{'roadblock-script'} ={ 
-                'type' => 'files',
-                'files_info' => {
-                    'type' => 'local-copy',
-                    'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                    'dst' => '/usr/bin'
-                }
-            };
+            my %rb_req = (  'name' => 'roadblock-client',
+                            'type' => 'files',
+                            'files_info' => {
+                                'files' => [
+                                    {
+                                        'src' => $run{'roadblock-dir'} . "/roadblock.py",
+                                        'dst' => '/usr/bin/'
+                                    }
+                                ] 
+                            }
+                        );
+            push(@{ $cs_req{'requirements'} }, \%rb_req);
+            push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
         }
-
         put_json_file($cs_req_file, \%cs_req);
         # Building an image must include requiremetns from rickshaw, one benchmark,
         # and optionally one or more tools and roadblock.
         # TODO: only build when existing image is not found in registry
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
                         " --label " . $run{'benchmark'} .
-                        " --target " . $run{'workshop-dir'} . "/targets/rhubi8.json" .
+                        " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
                         " --requirements " . $run{'bench-dir'} . "/workshop.json" .
                         " --requirements " . $cs_req_file .
+                        " --json-validator " . $run{'json-validator'} .
                         $workshop_roadblock_opt; 
         printf "workshop cmd: %s\n", $workshop_cmd;
         my @workshop_output = `$workshop_cmd`;
