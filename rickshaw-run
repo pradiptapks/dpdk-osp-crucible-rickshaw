@@ -54,7 +54,9 @@ sub usage {
     print "--workshop-dir   Directory where workshop project exists\n";
     print "--roadblock-dir  Directory where workshop project exists\n";
     print "--bench-dir      Directory where benchmark helper project exists\n";
-    print "--bench-params   File whith benchmark parameters to use\n";
+    print "--bench-params  File with benchmark parameters to use\n";
+    print "--tools-dir     Directory where *all* tool subprojects exist (like \$CRUCIBLE_HOME/subprojects/tools)\n";
+    print "--tool-params   File with tool parameters to use\n";
     print "--num-samples    The number of sample exeuctions to run for each benchmark iteration\n";
     print "--test-order     's' = run all samples of an iteration first\n";
     print "                 'i' = run all iterations of a sample first\n\n";
@@ -189,8 +191,9 @@ while (scalar @ARGV > 0) {
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
-    } elsif ($arg =~ /^run-id$|^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$/ or
-             $arg =~ /^bench-params$|^test-order$|^tool-group$|^num-samples$|^name$/ or
+    } elsif ($arg =~ /^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
+             $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
+             $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
              $arg =~ /^email$|^tags$|^desc$|^json-validator/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $run{$arg} = $val;
@@ -244,6 +247,21 @@ for my $params (@param_sets) {
     $iter_id++;
 }
 
+exists $run{'tools-dir'} || die "[ERROR]You must use " . 
+                                "--tools-dir=/path/to/tools/base/subproject-dir " .
+                                "(\$CRUCIBLE_HOME/subprojects/tools)\n";
+# Load the tool config
+if (not exists $run{'tool-params'} ) {
+    $run{'tool-params'} = $rickshaw_dir . "/config/tools.json";
+}
+my @tools_params = @{ my $tools_params_ref = get_json_file($run{'tool-params'}) };
+my %tools_configs;
+# Load a tool configuration for every tool the user is asking for
+foreach my $tool_entry (@tools_params) {
+    my $json_ref = get_json_file($run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/rickshaw.json");
+    $tools_configs{$$json_ref{'tool'}} = $json_ref;
+}
+
 # Apply defaults
 foreach my $p (keys %defaults) {
     if (! exists $run{$p}) {
@@ -252,8 +270,9 @@ foreach my $p (keys %defaults) {
     }
 }
 
-# Ensure the bench-dir and run-dir have absolute paths
-for my $dirtype (qw(run-dir bench-dir)) {
+# Ensure the bench-dir, run-dir, and tools-dir have absolute paths
+# because they may be referenced by clients and servers later
+for my $dirtype (qw(run-dir bench-dir tools-dir)) {
     {
         my $dir = pushd($run{$dirtype});
         debug_log(sprintf "pushd to [%s]\n", $run{$dirtype});
@@ -365,7 +384,7 @@ if ($use_roadblock) {
                               " --roadblock-id=" . $run{'run-id'} .
                               " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
-                              "/workshop.json";
+                              "/workshop.json ";
 } else {
     # If for some reason the user has opted to not use roadblock, then only allow
     # tests which use only one client and no server, which is the only possible
@@ -438,30 +457,46 @@ copy($rickshaw_dir . "/client-server-script", $base_endpoint_run_dir . "/client-
     || die "Could not copy client-server-script to " . $base_endpoint_run_dir .
            "/client-server-script";
 chmod 0755, $base_endpoint_run_dir . "/client-server-script";
-# Build the client and server benchmark-command files and put them in the base endpoint run dir
-my $cs_cmds_dir = $run{'run-dir'} . "/client-server-commands";
+
+# Build the client and server benchmark-command and tool-command files
+# and put them in the base endpoint run dir
+my $cs_cmds_dir = $run{'run-dir'} . "/client-server-bench-commands";
+my $cs_tool_start_cmds_dir = $run{'run-dir'} . "/client-server-tool-start-commands";
+my $cs_tool_stop_cmds_dir = $run{'run-dir'} . "/client-server-tool-stop-commands";
 -e $cs_cmds_dir || mkdir($cs_cmds_dir) ||
     die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_cmds_dir . "]\n";
+-e $cs_tool_start_cmds_dir || mkdir($cs_tool_start_cmds_dir) ||
+    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_tool_start_cmds_dir . "]\n";
+-e $cs_tool_stop_cmds_dir || mkdir($cs_tool_stop_cmds_dir) ||
+    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_tool_stop_cmds_dir . "]\n";
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
         my $cs_id = $$cs_ref{'id'};
         my $cs_type_id = $cs_type . "-" . $cs_id;
         my $cmd_file = $cs_cmds_dir . "/" . $cs_type_id;
+        my $tool_start_cmd_file = $cs_tool_start_cmds_dir . "/" . $cs_type_id;
+        my $tool_stop_cmd_file = $cs_tool_stop_cmds_dir . "/" . $cs_type_id;
         open(FH, ">" . $cmd_file) || die "[ERROR]could not open cmd file for writing: ["
                                             . $cmd_file . "]\n";
         debug_log(sprintf "writing script file [%s]\n", $cmd_file);
+        open(TOOL_START_FH, ">" . $tool_start_cmd_file) || die "[ERROR]could not open cmd file for writing: ["
+                                            . $tool_start_cmd_file . "]\n";
+        debug_log(sprintf "writing script file [%s]\n", $tool_start_cmd_file);
+        open(TOOL_STOP_FH, ">" . $tool_stop_cmd_file) || die "[ERROR]could not open cmd file for writing: ["
+                                            . $tool_stop_cmd_file . "]\n";
+        debug_log(sprintf "writing script file [%s]\n", $tool_stop_cmd_file);
         foreach my $test_ref (@tests) {
             my $test_iter = $$test_ref{'iteration-id'};
             my $test_samp = $$test_ref{'sample-id'};
-            #my $param_id = $test_iter - 1;
             my $iter_array_idx = $test_iter - 1;
             my $rb_session = "start-test:" . $test_iter . "-" . $test_samp;
             if (exists $bench_config{$cs_type}{"bin"} and
             $bench_config{$cs_type}{"bin"} ne "") {
-                my $cmd = $bench_config{$cs_type}{"bin"} . " " . dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
+                my $cmd = $bench_config{$cs_type}{"bin"} . " " .
+                          dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
                 debug_log(sprintf "cmd: [%s]\n", $cmd);
                 # Apply a regex from the benchmark config file to the command
-                    # This is used to remove things like "--clients=" because the
+                # This is used to remove things like "--clients=" because the
                 # native benchmark does not understand this parameter
                 if ($bench_config{$cs_type} and $bench_config{$cs_type}{"param_regex"}) {
                     for my $r (@{ $bench_config{$cs_type}{"param_regex"} }) {
@@ -478,13 +513,30 @@ foreach my $cs_type (keys %clients_servers) {
         }
         close FH;
         chmod 0755, $cmd_file;
+        foreach my $tool_entry (@tools_params) {
+            my $tool_name = $$tool_entry{'tool'};
+            my $tool_start_cmd = $tools_configs{$tool_name}{'collector'}{'start'};
+            my $tool_stop_cmd = $tools_configs{$tool_name}{'collector'}{'stop'};
+            printf "tool_start: %s\n", $tool_start_cmd;
+            printf "tool_stop: %s\n", $tool_stop_cmd;
+            foreach my $tool_param (@{ $$tool_entry{'params'} }) {
+                $tool_start_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
+                $tool_stop_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
+            }
+            printf TOOL_START_FH "%s\n", $tool_start_cmd;
+            printf TOOL_STOP_FH "%s\n", $tool_stop_cmd;
+        }
+        close TOOL_START_FH;
+        close TOOL_STOP_FH;
+        chmod 0755, $tool_start_cmd_file;
+        chmod 0755, $tool_stop_cmd_file;
     }
 }
 
 # Build the client/server "from-controller" files list and put them in the base endpoint run dir.
 # These are files the client/server must copy from the controller before running any tests.
 # The "client-server-script" will first scp the list (client-files-list or server-files-list).
-# then it will read this list to know what other files to vopy over)
+# then it will read this list to know what other files to copy over)
 foreach my $cs_type (keys %clients_servers) {
     my $cs_file_list = $run{'run-dir'} . "/" . $cs_type . "-files-list";
     open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
@@ -495,6 +547,18 @@ foreach my $cs_type (keys %clients_servers) {
             $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
             my $dest_file = $$file_spec{'dest'};
             printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+        }
+    }
+    foreach my $tool_entry (@tools_params) {
+        my $tool_name = $$tool_entry{'tool'};
+        if (exists $tools_configs{$tool_name}{'collector'}{'files-from-controller'}) {
+            for my $file_spec (@{ $tools_configs{$tool_name}{'collector'}{"files-from-controller"} } ) {
+                my $src_file = $$file_spec{'src'};
+                $src_file =~ s/\%tool-dir\%/$run{'tools-dir'}\/$$tool_entry{'tool'}\//g;
+                $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+                my $dest_file = $$file_spec{'dest'};
+                printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+            }
         }
     }
     close FH;
@@ -508,33 +572,37 @@ if ($use_workshop) {
     my $must_rebuild = 0;
     my $image_time;
     my $image_name = "workshop_" . $userenv . "_" . $run{'benchmark'};
-    #my $image_json = `buildah  images --json $image_name`;
     my $image_json = `buildah  images --json`;
-    printf "image_json:\n%s\n", $image_json;
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
+    print Dumper $image_json_ref;
     my $image_found = 0;
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
-        my $name = $$image_json_ref[$i]{'names'}[0];
-        $name =~ s/.*\///;
-        $name =~ s/:.*//;
-        if ($name eq $image_name) {
-            $image_found = 1;
-            $image_id = $$image_json_ref[$i]{'id'};
-            $image_time = $$image_json_ref[$i]{'createdatraw'};
-            $image_time = `date -d $image_time +%s`;
-            my @files = ($run{'bench-dir'} . "/workshop.json",
-                         $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
-                         $rickshaw_dir . "/client-server-script");
-            for my $file (@files) {
-                if ( file_newer_than($file, $image_time) > 0) {
-                    printf "%s is newer than the container image\n", $file;
-                    $must_rebuild = 1;
+        if (exists $$image_json_ref[$i]{'names'}[0]) {
+            my $name = $$image_json_ref[$i]{'names'}[0];
+            $name =~ s/.*\///;
+            $name =~ s/:.*//;
+            if ($name eq $image_name) {
+                $image_found = 1;
+                $image_id = $$image_json_ref[$i]{'id'};
+                $image_time = $$image_json_ref[$i]{'createdatraw'};
+                $image_time = `date -d $image_time +%s`;
+                my @files = ($run{'bench-dir'} . "/workshop.json",
+                            $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
+                            $rickshaw_dir . "/client-server-script");
+                foreach my $tool_entry (@tools_params) {
+                    push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
+                }
+                for my $file (@files) {
+                    if ( file_newer_than($file, $image_time) > 0) {
+                        printf "%s is newer than the container image\n", $file;
+                        $must_rebuild = 1;
+                    }
                 }
             }
         }
     }
-    if ($must_rebuild or $image_found == 0) {
+    if ($must_rebuild or ! $image_found) {
         printf "The container image must be rebuilt\n";
         # Build a container image for the clients/servers
         # Create a json which tells workshop to include these files:
@@ -599,6 +667,10 @@ if ($use_workshop) {
                         " --requirements " . $cs_req_file .
                         " --json-validator " . $run{'json-validator'} .
                         $workshop_roadblock_opt; 
+        foreach my $tool_entry (@tools_params) {
+            $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
+                             $$tool_entry{'tool'} . "/workshop.json ";
+        }
         printf "workshop cmd: %s\n", $workshop_cmd;
         my @workshop_output = `$workshop_cmd`;
         print join("", @workshop_output);
