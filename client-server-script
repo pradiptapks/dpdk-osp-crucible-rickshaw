@@ -201,10 +201,7 @@ fi
 
 do_roadblock client-server-script-start 300 ||
     exit_error "roablock for client-server-script-start timed out"
-do_roadblock client-server-start-tools 300 ||
-    exit_error "roablock for client-server-start-tools timed out"
 
-# start tools here
 echo -e "\nClients/servers starting tools"
 
 pushd "$cs_dir" >/dev/null ||
@@ -244,10 +241,21 @@ while read line; do
 done < "$cs_files_list"
 
 # Finally, get the commands file
-scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/client-server-commands/$cs_id" "$cs_id.cmds"
-if [ ! -e ""$cs_id.cmds ]; then
-    exit_error "Could not find $cs_id.cmds"
-fi
+for file_type in bench tool-start tool-stop; do
+    scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/client-server-$file_type-commands/$cs_id" "$cs_id-$file_type.cmds"
+    if [ ! -e ""$cs_id-$file_type.cmds ]; then
+        exit_error "Could not find $cs_id-$file_type.cmds"
+    fi
+done
+
+mkdir -p tool-data
+pushd tool-data >/dev/null
+do_roadblock client-server-start-tools 300 ||
+    exit_error "roablock for client-server-start-tools timed out"
+while read tool_start_cmd; do
+    $tool_start_cmd
+done < "$endpoint_run_dir/$cs_id/$cs_id-tool-start.cmds"
+popd >/dev/null
 
 # Run the actual tests by reading the commands file
 while read line; do
@@ -260,7 +268,8 @@ while read line; do
     mkdir -p $iter_samp_dir ||
         exit_error "Could not mkdir iteration-$iter/sample-$samp"
     find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-stderrout.txt" | \
-        grep -v -- "$cs_id.cmds" | grep -v -- "$cs_files_list" | \
+        grep -v -- "$cs_id-bench.cmds" | grep -v -- "$cs_id-tool.cmds" | \
+        grep -v -- "$cs_files_list" | \
         cpio -pdum iteration-$iter/sample-$samp/ ||
         exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
     pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
@@ -308,12 +317,17 @@ while read line; do
     done
     popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
     echo PWD: `/bin/pwd`
-done < "$endpoint_run_dir/$cs_id/$cs_id.cmds"
+done < "$endpoint_run_dir/$cs_id/$cs_id-bench.cmds"
 
 do_roadblock client-server-stop-tools 300 ||
     exit_error "roadblock for client-server-stop-tools timed out"
 echo -e "\nClients/servers stopping tools"
-# stop-tools command here
+pushd tool-data >/dev/null
+while read tool_stop_cmd; do
+    $tool_stop_cmd
+done < "$endpoint_run_dir/$cs_id/$cs_id-tool-stop.cmds"
+popd >/dev/null
+
 do_roadblock client-server-send-data 300 ||
     exit_error "roadblock for client-server-send-data timed out"
 echo -e "\nClients/servers copying data back to endpoint"

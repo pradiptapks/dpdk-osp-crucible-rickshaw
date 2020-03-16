@@ -233,6 +233,9 @@ elif [ "$osruntime" == "chroot" ]; then
     if [ "$container_name" == "$endpoint_label" ]; then
         container_mount=`buildah mount "$container_name"`
         echo "container mount: $container_mount"
+        for fs in dev proc sys; do
+            mount --verbose --options bind /$fs $container_mount/$fs
+        done
         endpoint_run_dir=$container_mount/endpoint-run
         # for chroot osruntime we can also simply copy the ssh key
         /bin/cp -f "$rickshaw_run_dir/rickshaw_id.rsa" $endpoint_run_dir
@@ -325,6 +328,7 @@ echo roadblock $i exit code: $rb_rc
 if [ $rb_rc -gt 0 ]; then
     exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
 fi
+# Process the first client's bench-commands to participate in the roadblocks
 while read line; do
     iter_samp=`echo $line | awk '{print $1}'`
     iter=`echo $iter_samp | awk -F- '{print $1}'`
@@ -344,7 +348,7 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$rickshaw_run_dir/client-server-commands/client-1"
+done < "$rickshaw_run_dir/client-server-bench-commands/client-1"
 echo "Out of test loop"
 for i in client-server-stop-tools client-server-send-data client-server-script-finish \
          endpoint-move-data endpoint-finish endpoint-really-finish; do
@@ -357,7 +361,10 @@ for i in client-server-stop-tools client-server-send-data client-server-script-f
     fi
 done
 
-if [ "$osruntime" == "chrooty" ]; then
+if [ "$osruntime" == "chroot" ]; then
+    for fs in dev proc sys; do
+         umount $container_mount/$fs
+    done
     echo "Removing mount $container_name for chroot osruntime"
     buildah unmount "$container_name"
     echo "Removing container $container_name for chroot runtime"
