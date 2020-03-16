@@ -1,0 +1,82 @@
+{
+    "rickshaw-benchmark": {
+        "type": "dict",
+        "required": true,
+        "schema": {
+            "schema": {
+                "type": "dict",
+                "required": true,
+                "schema": {
+                    "version": {
+                        "allowed": [
+                            "2020.03.18"
+                        ],
+                        "required": true
+                    }
+                }
+            }
+        }
+    },
+    "benchmark": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "controller": {
+        "type": "dict",
+        "schema": {
+            "pre-script": {
+                "type": "string",
+                "empty": false,
+                "required": false
+            },
+            "post-script": {
+                "type": "string",
+                "empty": false,
+                "required": false
+            }
+        }
+    },
+    "client": {
+        "type": "dict",
+        "empty": false,
+        "required": true,
+        "schema": {
+            "files-from-controller": {
+                "type": "list",
+                "empty": false,
+                "required": false,
+                "schema": {
+                    "type": "dict",
+                    "schema": {
+                        "src": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        },
+                        "dest": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        }
+                    }
+                }
+            },
+            "bin": {
+                "type": "string",
+                "empty": false,
+                "required": true
+            },
+            "param_regex": {
+                "type": "list",
+                "required": false,
+                "empty": false,
+                "schema": {
+                    "type": "string",
+                    "empty": false,
+                    "required": true
+                }
+            }
+        }
+    }
+}
