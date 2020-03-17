@@ -130,7 +130,20 @@ sub put_json_file {
 
 sub get_json_file {
     my $filename = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new;
+    if (defined $schema_filename) {
+        my $cmd = $run{'json-validator'} . " --json " . $filename . " --schema " . $schema_filename;
+        debug_log(sprintf "validating schema: %s\n", $cmd);
+        my $output = `$cmd 2>&1`;
+        my $rc = $? >> 8;
+        debug_log($output);
+        if ($rc != 0) {
+            printf "[ERROR]validating %s with schema %s failed\n%s\n",
+                  $filename, $schema_filename, $output;
+            exit 1;
+        }
+    }
     debug_log(sprintf "trying to open [%s]\n", $filename);
     open(JSON_FH, $filename) || die("Could not open file $filename\n");
     my $json_text = "";
@@ -223,7 +236,7 @@ if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
 exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
 my $bench_config_file = $run{'bench-dir'} . "/rickshaw.json";
 if (-e $bench_config_file) {
-    my $bench_config_ref = get_json_file($bench_config_file);
+    my $bench_config_ref = get_json_file($bench_config_file, $rickshaw_dir . "/schema/benchmark.json");
     %bench_config = %{ $bench_config_ref };
     if (exists $bench_config{'benchmark'}) {
         printf "Preparing to run %s\n", $bench_config{'benchmark'};
