@@ -1,0 +1,172 @@
+{
+    "rickshaw-result": {
+        "type": "dict",
+        "required": true,
+        "schema": {
+            "schema": {
+                "type": "dict",
+                "required": true,
+                "schema": {
+                    "version": {
+                        "allowed": [
+                            "2020.03.18"
+                        ],
+                        "required": true
+                    }
+                }
+            }
+        }
+    },
+    "iterations": {
+        "type": "list",
+        "required": true,
+        "empty": false,
+        "schema": {
+            "type": "dict",
+            "required": true,
+            "empty": false,
+            "schema": {
+                "params": {
+                    "type": "list",
+                    "required": true,
+                    "empty": false,
+                    "schema": {
+                        "type": "dict",
+                        "required": true,
+                        "empty": false,
+                        "schema": {
+                            "arg": {
+                                "type": "string",
+                                "required": true,
+                                "empty": false
+                            },
+                            "val": {
+                                "type": "string",
+                                "required": true,
+                                "empty": false
+                            }
+                        }
+                    }
+                },
+                "samples": {
+                    "type": "list",
+                    "schema": {
+                        "type": "dict",
+                        "schema": {
+                            "periods": {
+                                "type": "list",
+                                "required": true,
+                                "empty": false,
+                                "schema": {
+                                    "type": "dict",
+                                    "schema": {
+                                        "name": {
+                                        },
+                                        "metrics": {
+                                            "type": "list",
+                                            "schema": {
+                                                "type": "dict",
+                                                "schema": {
+                                                    "data": {
+                                                        "type": "list",
+                                                        "required": true,
+                                                        "empty": false,
+                                                        "schema": {
+                                                            "type": "dict",
+                                                            "schema": {
+                                                                "value": {
+                                                                    "type": "string",
+                                                                    "required": true,
+                                                                    "empty": false
+                                                                },
+                                                                "end": {
+                                                                    "type": "integer",
+                                                                    "required": true,
+                                                                    "empty": false
+                                                                },
+                                                                "begin": {
+                                                                    "type": "integer",
+                                                                    "required": false,
+                                                                    "empty": false
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    "desc": {
+                                                        "type": "dict",
+                                                        "schema": {
+                                                            "class": {
+                                                                "type": "string",
+                                                                "required": true,
+                                                                "empty": false
+                                                            },
+                                                            "type": {
+                                                                "type": "string",
+                                                                "required": true,
+                                                                "empty": false
+                                                            },
+                                                            "name-format": {
+                                                                "type": "string",
+                                                                "required": true,
+                                                                "empty": false
+                                                            },
+                                                            "source": {
+                                                                "type": "string",
+                                                                "required": true,
+                                                                "empty": false
+                                                            }
+                                                        }
+                                                    },
+                                                    "names": {
+                                                        "type": "dict"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "benchmark": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "name": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "email": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "run-id": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "tags": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "test-order": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "endpoints": {
+        "type": "list",
+        "schema": {
+            "type": "string"
+        }
+    }
+}
+
