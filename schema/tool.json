@@ -1,0 +1,122 @@
+{
+    "rickshaw-tool": {
+        "type": "dict",
+        "required": true,
+        "schema": {
+            "schema": {
+                "type": "dict",
+                "required": true,
+                "schema": {
+                    "version": {
+                        "allowed": [
+                            "2020.03.18"
+                        ],
+                        "required": true
+                    }
+                }
+            }
+        }
+    },
+    "tool": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "controller": {
+        "type": "dict",
+        "schema": {
+            "post-script": {
+                "type": "string",
+                "empty": false,
+                "required": false
+            }
+        }
+    },
+    "collector": {
+        "type": "dict",
+        "empty": false,
+        "required": true,
+        "schema": {
+            "files-from-controller": {
+                "type": "list",
+                "empty": false,
+                "required": false,
+                "schema": {
+                    "type": "dict",
+                    "schema": {
+                        "src": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        },
+                        "dest": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        }
+                    }
+                }
+            },
+            "blacklist": {
+                "type": "list",
+                "empty": false,
+                "required": false,
+                "schema": {
+                    "type": "dict",
+                    "schema": {
+                        "endpoint": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        },
+                        "collector-types": {
+                            "type": "list",
+                            "empty": false,
+                            "required": true,
+                            "schema": {
+                                "type": "string",
+                                "empty": false,
+                                "required": true
+                            }
+                        }
+                    }
+                }
+            },
+            "whitelist": {
+                "type": "list",
+                "empty": false,
+                "required": false,
+                "schema": {
+                    "type": "dict",
+                    "schema": {
+                        "endpoint": {
+                            "type": "string",
+                            "empty": false,
+                            "required": true
+                        },
+                        "collector-types": {
+                            "type": "list",
+                            "empty": false,
+                            "required": true,
+                            "schema": {
+                                "type": "string",
+                                "empty": false,
+                                "required": true
+                            }
+                        }
+                    }
+                }
+            },
+            "start": {
+                "type": "string",
+                "empty": false,
+                "required": true
+            },
+            "stop": {
+                "type": "string",
+                "empty": false,
+                "required": true
+            }
+        }
+    }
+}
