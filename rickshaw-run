@@ -48,6 +48,8 @@ my $workshop_roadblock_opt = "";
 }
 my $bench_schema_file = $rickshaw_dir . "/schema/benchmark.json";
 my $tool_schema_file = $rickshaw_dir . "/schema/tool.json";
+my $run_schema_file = $rickshaw_dir . "/schema/run.json";
+my $json_validator = 'json-validator';
 
 sub usage {
     print "\nusage:\n\n";
@@ -121,12 +123,25 @@ sub dump_params {
 sub put_json_file {
     my $filename = shift;
     my $json_ref = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
     open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
     printf JSON_FH "%s", $json_text;
     close JSON_FH;
+    if (defined $schema_filename) {
+        my $cmd = $json_validator . " --json " . $filename . " --schema " . $schema_filename;
+        debug_log(sprintf "validating schema: %s\n", $cmd);
+        my $output = `$cmd 2>&1`;
+        my $rc = $? >> 8;
+        debug_log($output);
+        if ($rc != 0) {
+            printf "[ERROR]validating %s with schema %s failed\n%s\n",
+                  $filename, $schema_filename, $output;
+            exit 1;
+        }
+    }
 }
 
 sub get_json_file {
@@ -134,7 +149,7 @@ sub get_json_file {
     my $schema_filename = shift;
     my $coder = JSON::XS->new;
     if (defined $schema_filename) {
-        my $cmd = $run{'json-validator'} . " --json " . $filename . " --schema " . $schema_filename;
+        my $cmd = $json_validator . " --json " . $filename . " --schema " . $schema_filename;
         debug_log(sprintf "validating schema: %s\n", $cmd);
         my $output = `$cmd 2>&1`;
         my $rc = $? >> 8;
@@ -205,10 +220,12 @@ while (scalar @ARGV > 0) {
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
+    } elsif ($arg =~ /^json-validator$/) {
+        $json_validator = $val;
     } elsif ($arg =~ /^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
              $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
              $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
-             $arg =~ /^email$|^tags$|^desc$|^json-validator/) {
+             $arg =~ /^email$|^tags$|^desc$/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $run{$arg} = $val;
     } else {
@@ -218,12 +235,9 @@ while (scalar @ARGV > 0) {
     }
 }
 
-if (! defined $run{'json-validator'}) {
-    $run{'json-validator'} = 'json-validator';
-}
-system($run{'json-validator'} . " --help >/dev/null");
+system($json_validator . " --help >/dev/null");
 if ($? != 0) {
-    printf "json-validator: %s does not work, exiting\n", $run{'json-validator'};
+    printf "json-validator: %s does not work, exiting\n", $json_validator;
     exit 1;
 }
 if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
@@ -680,7 +694,7 @@ if ($use_workshop) {
                         " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
                         " --requirements " . $run{'bench-dir'} . "/workshop.json" .
                         " --requirements " . $cs_req_file .
-                        " --json-validator " . $run{'json-validator'} .
+                        " --json-validator " . $json_validator .
                         $workshop_roadblock_opt; 
         foreach my $tool_entry (@tools_params) {
             $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
@@ -858,5 +872,12 @@ if (defined $abort_test_id) {
 
 # TODO: remove temporary ssh keys from local authorized_keys file
 
-put_json_file($run{'run-dir'} . "/rickshaw-run.json", \%run);
+# These run details don't belong in the json we generate for the run
+my $run_file = $run{'run-dir'} . "/rickshaw-run.json";
+for my $this_key (qw(bench-dir bench-params num-samples roadblock-dir
+                     run-dir tool-params tools-dir workshop-dir tool-group)) {
+    delete $run{$this_key};
+}
+$run{'rickshaw-run'}{'schema'}{'version'} = "2020.03.18";
+put_json_file($run_file, \%run, $run_schema_file);
 

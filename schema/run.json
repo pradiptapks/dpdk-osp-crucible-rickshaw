@@ -1,0 +1,90 @@
+{
+    "rickshaw-run": {
+        "type": "dict",
+        "required": true,
+        "schema": {
+            "schema": {
+                "type": "dict",
+                "required": true,
+                "schema": {
+                    "version": {
+                        "allowed": [
+                            "2020.03.18"
+                        ],
+                        "required": true
+                    }
+                }
+            }
+        }
+    },
+    "iterations": {
+        "type": "list",
+        "required": true,
+        "empty": false,
+        "schema": {
+            "type": "dict",
+            "required": true,
+            "empty": false,
+            "schema": {
+                "params": {
+                    "type": "list",
+                    "required": true,
+                    "empty": false,
+                    "schema": {
+                        "type": "dict",
+                        "required": true,
+                        "empty": false,
+                        "schema": {
+                            "arg": {
+                                "type": "string",
+                                "required": true,
+                                "empty": false
+                            },
+                            "val": {
+                                "type": "string",
+                                "required": true,
+                                "empty": false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "benchmark": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "name": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "email": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "run-id": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "tags": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "test-order": {
+        "type": "string",
+        "empty": false,
+        "required": true
+    },
+    "endpoints": {
+        "type": "list",
+        "schema": {
+            "type": "string"
+        }
+    }
+}
