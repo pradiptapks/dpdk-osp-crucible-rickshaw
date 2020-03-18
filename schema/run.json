@@ -1,90 +1,53 @@
 {
-    "rickshaw-run": {
-        "type": "dict",
-        "required": true,
-        "schema": {
-            "schema": {
-                "type": "dict",
-                "required": true,
+    "type": "object",
+    "properties": {
+        "rickshaw-run": {
+            "type": "object",
+            "properties": {
                 "schema": {
-                    "version": {
-                        "allowed": [
-                            "2020.03.18"
-                        ],
-                        "required": true
-                    }
+                    "type": "object",
+                    "properties": {
+                        "version": {
+                            "type": "string",
+                            "pattern": "^2020\\.03\\.18$"
+                        }
+                    },
+                    "required": [ "version" ]
                 }
             }
-        }
-    },
-    "iterations": {
-        "type": "list",
-        "required": true,
-        "empty": false,
-        "schema": {
-            "type": "dict",
-            "required": true,
-            "empty": false,
-            "schema": {
-                "params": {
-                    "type": "list",
-                    "required": true,
-                    "empty": false,
-                    "schema": {
-                        "type": "dict",
-                        "required": true,
-                        "empty": false,
-                        "schema": {
-                            "arg": {
-                                "type": "string",
-                                "required": true,
-                                "empty": false
+        },
+        "bechmark": { "type": "string" },
+        "iterations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "params": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "arg": { "type": "string" },
+                                "val": { "type": "string" }
                             },
-                            "val": {
-                                "type": "string",
-                                "required": true,
-                                "empty": false
-                            }
+                            "addtionalProperties": false
                         }
                     }
-                }
+                },
+                "addtionalProperties": false
             }
-        }
+        },
+        "endpoints": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "run-id": { "type": "string" },
+        "tags": { "type": "string" },
+        "test-order": { "type": "string" }
     },
-    "benchmark": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "name": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "email": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "run-id": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "tags": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "test-order": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "endpoints": {
-        "type": "list",
-        "schema": {
-            "type": "string"
-        }
-    }
+    "addtionalProperties": false
 }
