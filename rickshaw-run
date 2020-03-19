@@ -16,6 +16,7 @@ use File::Temp qw(tempdir);
 use File::Copy;
 use File::Path qw(make_path);
 use JSON::XS;
+use JSON::Validator;
 use Data::Dumper;
 
 my $ug = Data::UUID->new;
@@ -125,50 +126,54 @@ sub put_json_file {
     my $json_ref = shift;
     my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            print "errors:\n" . Dumper \@errors;
+            exit 1;
+        }
+    }
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
     open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
     printf JSON_FH "%s", $json_text;
     close JSON_FH;
-    if (defined $schema_filename) {
-        my $cmd = $json_validator . " --json " . $filename . " --schema " . $schema_filename;
-        debug_log(sprintf "validating schema: %s\n", $cmd);
-        my $output = `$cmd 2>&1`;
-        my $rc = $? >> 8;
-        debug_log($output);
-        if ($rc != 0) {
-            printf "[ERROR]validating %s with schema %s failed\n%s\n",
-                  $filename, $schema_filename, $output;
-            exit 1;
-        }
-    }
 }
 
 sub get_json_file {
     my $filename = shift;
     my $schema_filename = shift;
     my $coder = JSON::XS->new;
-    if (defined $schema_filename) {
-        my $cmd = $json_validator . " --json " . $filename . " --schema " . $schema_filename;
-        debug_log(sprintf "validating schema: %s\n", $cmd);
-        my $output = `$cmd 2>&1`;
-        my $rc = $? >> 8;
-        debug_log($output);
-        if ($rc != 0) {
-            printf "[ERROR]validating %s with schema %s failed\n%s\n",
-                  $filename, $schema_filename, $output;
-            exit 1;
-        }
-    }
+    my $jv = JSON::Validator->new;
     debug_log(sprintf "trying to open [%s]\n", $filename);
-    open(JSON_FH, $filename) || die("Could not open file $filename\n");
+    open(FH, $filename) || die("Could not open file $filename\n");
     my $json_text = "";
-    while ( <JSON_FH> ) {
+    while ( <FH> ) {
         $json_text .= $_;
     }
-    close JSON_FH;
-    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";
-    return $perl_scalar;
+    close FH;
+    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
+    if (defined $schema_filename and -e $schema_filename) {
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        my @errors = $jv->validate($json_ref);
+        print "errors:\n" . Dumper \@errors;
+    }
+    return $json_ref;
 }
 
 sub file_newer_than {
@@ -880,4 +885,3 @@ for my $this_key (qw(bench-dir bench-params num-samples roadblock-dir
 }
 $run{'rickshaw-run'}{'schema'}{'version'} = "2020.03.18";
 put_json_file($run_file, \%run, $run_schema_file);
-

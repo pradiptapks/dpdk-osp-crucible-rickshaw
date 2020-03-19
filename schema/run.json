@@ -12,11 +12,15 @@
                             "pattern": "^2020\\.03\\.18$"
                         }
                     },
-                    "required": [ "version" ]
+                    "required": [ "version" ],
+                    "addtionalProperties": false
                 }
             }
         },
-        "bechmark": { "type": "string" },
+        "bechmark": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
         "iterations": {
             "type": "array",
             "items": {
@@ -27,27 +31,55 @@
                         "items": {
                             "type": "object",
                             "properties": {
-                                "arg": { "type": "string" },
-                                "val": { "type": "string" }
+                                "arg": {
+                                    "type": "string",
+                                    "pattern": "^.+$"
+                                },
+                                "val": {
+                                    "type": "string",
+                                    "pattern": "^.+$"
+                                }
                             },
+                            "required": [ "arg", "val" ],
                             "addtionalProperties": false
-                        }
+                        },
+                        "additionalItems": false
                     }
                 },
+                "required": [ "params" ],
                 "addtionalProperties": false
-            }
+            },
+            "additionalItems": false
         },
         "endpoints": {
             "type": "array",
             "items": {
-                "type": "string"
-            }
+                "type": "string",
+                "pattern": "^.+$"
+            },
+            "additionalItems": false
         },
-        "email": { "type": "string" },
-        "name": { "type": "string" },
-        "run-id": { "type": "string" },
-        "tags": { "type": "string" },
-        "test-order": { "type": "string" }
+        "email": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "name": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "run-id": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "tags": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "test-order": {
+            "type": "string",
+            "pattern": "^.+$"
+        }
     },
+    "required": [ "email", "name", "tags", "run-id", "test-order", "endpoints", "iterations", "benchmark", "rickshaw-run" ],
     "addtionalProperties": false
 }

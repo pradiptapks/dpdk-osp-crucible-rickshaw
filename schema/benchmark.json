@@ -1,82 +1,115 @@
 {
-    "rickshaw-benchmark": {
-        "type": "dict",
-        "required": true,
-        "schema": {
-            "schema": {
-                "type": "dict",
-                "required": true,
+    "type": "object",
+    "properties": {
+        "rickshaw-benchmark": {
+            "type": "object",
+            "properties": {
                 "schema": {
-                    "version": {
-                        "allowed": [
-                            "2020.03.18"
-                        ],
-                        "required": true
-                    }
-                }
-            }
-        }
-    },
-    "benchmark": {
-        "type": "string",
-        "empty": false,
-        "required": true
-    },
-    "controller": {
-        "type": "dict",
-        "schema": {
-            "pre-script": {
-                "type": "string",
-                "empty": false,
-                "required": false
-            },
-            "post-script": {
-                "type": "string",
-                "empty": false,
-                "required": false
-            }
-        }
-    },
-    "client": {
-        "type": "dict",
-        "empty": false,
-        "required": true,
-        "schema": {
-            "files-from-controller": {
-                "type": "list",
-                "empty": false,
-                "required": false,
-                "schema": {
-                    "type": "dict",
-                    "schema": {
-                        "src": {
+                    "type": "object",
+                    "properties": {
+                        "version": {
                             "type": "string",
-                            "empty": false,
-                            "required": true
-                        },
-                        "dest": {
-                            "type": "string",
-                            "empty": false,
-                            "required": true
+                            "pattern": "^2020\\.03\\.18$"
                         }
-                    }
+                    },
+                    "required": [ "version" ],
+                    "additionalProperties": false
                 }
             },
-            "bin": {
-                "type": "string",
-                "empty": false,
-                "required": true
-            },
-            "param_regex": {
-                "type": "list",
-                "required": false,
-                "empty": false,
-                "schema": {
+            "required": [ "schema" ],
+            "additionalProperties": false
+        },
+        "benchmark": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "controller": {
+            "type": "object",
+            "properties": {
+                "pre-script": {
                     "type": "string",
-                    "empty": false,
-                    "required": true
+                    "pattern": "^.+$"
+                },
+                "post-script": {
+                    "type": "string",
+                    "pattern": "^.+$"
                 }
-            }
+            },
+            "required": [ "post-script" ],
+            "additionalProperties": false
+        },
+        "client": {
+            "type": "object",
+            "properties": {
+                "files-from-controller": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "src": {
+                                "type": "string",
+                                "pattern": "^.+$"
+                            },
+                            "dest": {
+                                "type": "string",
+                                "pattern": "^.+$"
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "additionalItems": false
+                },
+                "bin": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                },
+                "param_regex": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                    },
+                    "additionalItems": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "server": {
+            "type": "object",
+            "properties": {
+                "files-from-controller": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "src": {
+                                "type": "string",
+                                "pattern": "^.+$"
+                            },
+                            "dest": {
+                                "type": "string",
+                                "pattern": "^.+$"
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    "additionalItems": false
+                },
+                "bin": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                },
+                "param_regex": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                    },
+                    "additionalItems": false
+                }
+            },
+            "additionalProperties": false
         }
-    }
+    },
+    "required": [ "rickshaw-benchmark", "client", "controller", "benchmark" ]
 }

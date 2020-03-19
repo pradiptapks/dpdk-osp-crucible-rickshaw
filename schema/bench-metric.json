@@ -1,93 +1,101 @@
 {
-    "rickshaw-bench-metric": {
-        "type": "dict",
-        "required": true,
-        "schema": {
-            "schema": {
-                "type": "dict",
-                "required": true,
+    "type": "object",
+    "properties": {
+        "rickshaw-bench-metric": {
+            "type": "object",
+            "properties": {
                 "schema": {
-                    "version": {
-                        "allowed": [
-                            "2020.03.18"
-                        ],
-                        "required": true
-                    }
+                    "type": "object",
+                    "properties": {
+                        "version": {
+                            "type": "string",
+                            "pattern": "^2020\\.03\\.18$"
+                        }
+                    },
+                    "required": [ "version" ],
+                    "additionalProperties": false
                 }
-            }
+            },
+            "required": [ "schema" ],
+            "additionalProperties": false
+        },
+        "periods": {
+            "type": "array",
+            "items": { 
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                    },
+                    "metrics": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "desc": {
+                                    "type": "object",
+                                    "properties": {
+                                        "source": {
+                                            "type": "string",
+                                            "pattern": "^.+$"
+                                        },
+                                        "type": {
+                                            "type": "string",
+                                            "pattern": "^.+$"
+                                        },
+                                        "name-format": {
+                                            "type": "string",
+                                            "pattern": "^.+$"
+                                        },
+                                        "class": {
+                                            "type": "string",
+                                            "enum": [ "throughput", "count" ]
+                                        }
+                                    },
+                                    "required": [ "source", "class", "name-format", "type" ],
+                                    "additionalProperties": false
+                                },
+                                "names": {
+                                    "type": "object",
+                                    "propertyNames": {
+                                        "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
+                                    }
+                                },
+                                "data": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "value": {
+                                                "type": "number"
+                                            },
+                                            "end": {
+                                                "type": "number"
+                                            },
+                                            "begin": {
+                                                "type": "number"
+                                            }
+                                        },
+                                        "required": [ "value", "end" ],
+                                        "additionalProperties": false
+                                    },
+                                    "additionalItem": false
+                                }
+                            },
+                            "required": [ "desc", "names", "data" ],
+                            "additionalProperties": false
+                        },
+                        "additionalItems": false
+                    }
+                },
+                "required": [ "name", "metrics" ],
+                "additionalProperties": false
+            },
+            "additionalItems": false
         }
     },
-    "periods": {
-        "type": "list",
-        "required": true,
-        "empty": false,
-        "schema": {
-            "type": "dict",
-            "schema": {
-                "name": {
-                },
-                "metrics": {
-                    "type": "list",
-                    "schema": {
-                        "type": "dict",
-                        "schema": {
-                            "data": {
-                                "type": "list",
-                                "required": true,
-                                "empty": false,
-                                "schema": {
-                                    "type": "dict",
-                                    "schema": {
-                                        "value": {
-                                            "type": "string",
-                                            "required": true,
-                                            "empty": false
-                                        },
-                                        "end": {
-                                            "type": "integer",
-                                            "required": true,
-                                            "empty": false
-                                        },
-                                        "begin": {
-                                            "type": "integer",
-                                            "required": false,
-                                            "empty": false
-                                        }
-                                    }
-                                }
-                            },
-                            "desc": {
-                                "type": "dict",
-                                "schema": {
-                                    "class": {
-                                        "type": "string",
-                                        "required": true,
-                                        "empty": false
-                                    },
-                                    "type": {
-                                        "type": "string",
-                                        "required": true,
-                                        "empty": false
-                                    },
-                                    "name-format": {
-                                        "type": "string",
-                                        "required": true,
-                                        "empty": false
-                                    },
-                                    "source": {
-                                        "type": "string",
-                                        "required": true,
-                                        "empty": false
-                                    }
-                                }
-                            },
-                            "names": {
-                                "type": "dict"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    "required": [ "rickshaw-bench-metric", "periods" ],
+    "additionalProperties": false
 }
+
