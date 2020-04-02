@@ -16,7 +16,9 @@ use File::Temp qw(tempdir);
 use File::Copy;
 use File::Path qw(make_path);
 use JSON::XS;
+use JSON::Validator;
 use Data::Dumper;
+
 my $ug = Data::UUID->new;
 my $debug = 0;
 my %run; # A multi-dimensional, nested hash, schema TBD
@@ -42,7 +44,24 @@ sub debug_log {
 sub put_json_file {
     my $filename = shift;
     my $json_ref = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            print "errors:\n" . Dumper \@errors;
+            exit 1;
+        }
+    }
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
     open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
@@ -52,16 +71,32 @@ sub put_json_file {
 
 sub get_json_file {
     my $filename = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new;
     debug_log(sprintf "trying to open [%s]\n", $filename);
-    open(JSON_FH, $filename) || die("Could not open file $filename\n");
+    open(FH, $filename) || die("Could not open file $filename\n");
     my $json_text = "";
-    while ( <JSON_FH> ) {
+    while ( <FH> ) {
         $json_text .= $_;
     }
-    close JSON_FH;
-    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";
-    return $perl_scalar;
+    close FH;
+    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            print "errors:\n" . Dumper \@errors;
+            exit 1;
+        }
+    }
+    return $json_ref;
 }
 
 # This will consolidate chronologically sequential metric samples with same
@@ -86,10 +121,10 @@ sub dedup_metric {
                 $look_back++;
             }
             if ($i - $look_back >= 0) {
-                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[$i - $look_back]{'end'} + 1;
+                $$metric_ref{'data'}[$i]{'begin'} = int $$metric_ref{'data'}[$i - $look_back]{'end'} + 1;
             } else {
                 #$i - $look_back + 1, $native_interval;
-                $$metric_ref{'data'}[$i]{'begin'} = $$metric_ref{'data'}[0]{'end'} - $native_interval + 1;
+                $$metric_ref{'data'}[$i]{'begin'} = int $$metric_ref{'data'}[0]{'end'} - $native_interval + 1;
             }
             if ($look_back > 1) { # deduping 1 or more samples
                 splice @{ $$metric_ref{'data'} }, $i - $look_back + 1, $look_back - 1;
@@ -98,6 +133,17 @@ sub dedup_metric {
         }
     }
 }
+
+
+my $rickshaw_dir;
+{
+    # Get the absolute path of the rickshaw project directory
+    my $dir = pushd(dirname($0));
+    $rickshaw_dir = getcwd();
+}
+my $bench_metric_schema_file = $rickshaw_dir . "/schema/bench-metric.json";
+my $run_schema_file = $rickshaw_dir . "/schema/run.json";
+my $result_schema_file = $rickshaw_dir . "/schema/result.json";
 
 # Process the cmdline params
 while (scalar @ARGV > 0) {
@@ -146,7 +192,7 @@ while (scalar @ARGV > 0) {
 $run_file = $run_dir . "/rickshaw-run.json";
 if (-e $run_file) {
     printf "opening %s\n", $run_file;
-    my $run_ref = get_json_file($run_file);
+    my $run_ref = get_json_file($run_file, $run_schema_file);
     %run = %{ $run_ref };
     # TODO checks for minimum fileds for valid run
 }
@@ -158,23 +204,26 @@ if (-e $run_file) {
 # hierarchcal JSON to organize by iteration -> sample -> period -> metric.
 print "Waiting for consolidation of per-client/server data into sample data to complete\n";
 for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
+    my $iter_dh;
+    opendir($iter_dh, $run_dir . "/iteration-" . $i);
+    my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
     my $iter_array_idx = $i -1;
     my @samples;
-    for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+    for my $samp_dir (@samp_dirs) {
         my %sample; # sample data from all clients/servers
         my @cons_periods; # consolidated periods across clients/servers get merged here
-        my $samp_dir = $run_dir . "/iteration-" . $i . "/sample-" . $s;
-        opendir(my $samp_dh, $samp_dir);
+        debug_log("Working on " . $run_dir . "/iteration-" . $i . "/" .  $samp_dir . "\n");
+        opendir(my $samp_dh, $run_dir . "/iteration-" . $i . "/" .  $samp_dir);
         my @cs_names = grep(/^(clients|servers)$/, readdir($samp_dh));
         for my $cs_name (@cs_names) { 
-            my $cs_name_dir = $samp_dir . "/" . $cs_name;
+            my $cs_name_dir = $run_dir . "/iteration-" . $i . "/" . $samp_dir . "/" . $cs_name;
             opendir(my $cs_name_dh, $cs_name_dir);
             my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
             for my $cs_id (@cs_ids) {
                 my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
                 my $data_file = $cs_id_dir . "/" . "post-process-data.json";
                 if (-e $data_file) {
-                    my $data_ref = get_json_file($data_file);
+                    my $data_ref = get_json_file($data_file, $bench_metric_schema_file);
                     my %data = %$data_ref;
                     if (defined $data{'periods'}) {
                         for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
@@ -211,5 +260,6 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     $run{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
 }
 print "Consolidation complete\n";
-
-put_json_file($run_dir . "/rickshaw-result.json", \%run);
+delete $run{'rickshaw-run'};
+$run{'rickshaw-result'}{'schema'}{'version'} = "2020.03.18";
+put_json_file($run_dir . "/rickshaw-result.json", \%run, $result_schema_file);

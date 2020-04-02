@@ -1,0 +1,81 @@
+{
+    "type": "object",
+    "properties": {
+        "rickshaw-tool": {
+            "type": "object",
+            "properties": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "version": {
+                            "type": "string",
+                            "pattern": "^2020\\.03\\.18$"
+                        }
+                    },
+                    "required": [ "version" ]
+                }
+            }
+        },
+        "tool": {
+            "type": "string",
+            "pattern": "^.+$"
+        },
+        "controller": {
+            "type": "object",
+            "properties": {
+                "post-script": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                }
+            },
+            "required": [ "post-script" ]
+        },
+        "collector": {
+            "type": "object",
+            "properties": {
+                "files-from-controller": {
+                    "type": "array"
+                },
+                "blacklist": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "enum": [ "local", "rhocp" ]
+                            }
+                        }
+                    },
+                    "additionalItems": false
+                },
+                "whitelist": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "endpoint": {
+                                "type": "string",
+                                "enum": [ "local", "rhocp" ]
+                            }
+                        }
+                    },
+                    "additionalItems": false
+                },
+                "start": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                },
+                "stop": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                }
+            },
+            "required": [ "start", "stop" ],
+            "additionalProperties": false
+
+        }
+    },
+    "required": [ "rickshaw-tool", "tool", "controller", "collector" ],
+    "additionalProperties": false
+}

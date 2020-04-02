@@ -16,6 +16,7 @@ use File::Temp qw(tempdir);
 use File::Copy;
 use File::Path qw(make_path);
 use JSON::XS;
+use JSON::Validator;
 use Data::Dumper;
 
 my $ug = Data::UUID->new;
@@ -38,7 +39,6 @@ my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --ti
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
-
 my $rickshaw_dir;
 my $endpoint_roadblock_opt = "";
 my $workshop_roadblock_opt = "";
@@ -47,6 +47,10 @@ my $workshop_roadblock_opt = "";
     my $dir = pushd(dirname($0));
     $rickshaw_dir = getcwd();
 }
+my $bench_schema_file = $rickshaw_dir . "/schema/benchmark.json";
+my $tool_schema_file = $rickshaw_dir . "/schema/tool.json";
+my $run_schema_file = $rickshaw_dir . "/schema/run.json";
+my $json_validator = 'json-validator';
 
 sub usage {
     print "\nusage:\n\n";
@@ -120,7 +124,24 @@ sub dump_params {
 sub put_json_file {
     my $filename = shift;
     my $json_ref = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            print "errors:\n" . Dumper \@errors;
+            exit 1;
+        }
+    }
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
     open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
@@ -130,16 +151,29 @@ sub put_json_file {
 
 sub get_json_file {
     my $filename = shift;
+    my $schema_filename = shift;
     my $coder = JSON::XS->new;
+    my $jv = JSON::Validator->new;
     debug_log(sprintf "trying to open [%s]\n", $filename);
-    open(JSON_FH, $filename) || die("Could not open file $filename\n");
+    open(FH, $filename) || die("Could not open file $filename\n");
     my $json_text = "";
-    while ( <JSON_FH> ) {
+    while ( <FH> ) {
         $json_text .= $_;
     }
-    close JSON_FH;
-    my $perl_scalar = $coder->decode($json_text) || die "Could not read JSON";
-    return $perl_scalar;
+    close FH;
+    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
+    if (defined $schema_filename and -e $schema_filename) {
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        my @errors = $jv->validate($json_ref);
+        print "errors:\n" . Dumper \@errors;
+    }
+    return $json_ref;
 }
 
 sub file_newer_than {
@@ -191,10 +225,12 @@ while (scalar @ARGV > 0) {
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
+    } elsif ($arg =~ /^json-validator$/) {
+        $json_validator = $val;
     } elsif ($arg =~ /^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
              $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
              $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
-             $arg =~ /^email$|^tags$|^desc$|^json-validator/) {
+             $arg =~ /^email$|^tags$|^desc$/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $run{$arg} = $val;
     } else {
@@ -204,12 +240,9 @@ while (scalar @ARGV > 0) {
     }
 }
 
-if (! defined $run{'json-validator'}) {
-    $run{'json-validator'} = 'json-validator';
-}
-system($run{'json-validator'} . " --help >/dev/null");
+system($json_validator . " --help >/dev/null");
 if ($? != 0) {
-    printf "json-validator: %s does not work, exiting\n", $run{'json-validator'};
+    printf "json-validator: %s does not work, exiting\n", $json_validator;
     exit 1;
 }
 if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
@@ -223,7 +256,7 @@ if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
 exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
 my $bench_config_file = $run{'bench-dir'} . "/rickshaw.json";
 if (-e $bench_config_file) {
-    my $bench_config_ref = get_json_file($bench_config_file);
+    my $bench_config_ref = get_json_file($bench_config_file, $bench_schema_file);
     %bench_config = %{ $bench_config_ref };
     if (exists $bench_config{'benchmark'}) {
         printf "Preparing to run %s\n", $bench_config{'benchmark'};
@@ -254,11 +287,12 @@ exists $run{'tools-dir'} || die "[ERROR]You must use " .
 if (not exists $run{'tool-params'} ) {
     $run{'tool-params'} = $rickshaw_dir . "/config/tools.json";
 }
-my @tools_params = @{ my $tools_params_ref = get_json_file($run{'tool-params'}) };
+my @tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
 my %tools_configs;
 # Load a tool configuration for every tool the user is asking for
 foreach my $tool_entry (@tools_params) {
-    my $json_ref = get_json_file($run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/rickshaw.json");
+    my $this_tool_config = $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/rickshaw.json";
+    my $json_ref = get_json_file($this_tool_config, $tool_schema_file);
     $tools_configs{$$json_ref{'tool'}} = $json_ref;
 }
 
@@ -665,7 +699,7 @@ if ($use_workshop) {
                         " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
                         " --requirements " . $run{'bench-dir'} . "/workshop.json" .
                         " --requirements " . $cs_req_file .
-                        " --json-validator " . $run{'json-validator'} .
+                        " --json-validator " . $json_validator .
                         $workshop_roadblock_opt; 
         foreach my $tool_entry (@tools_params) {
             $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
@@ -843,5 +877,11 @@ if (defined $abort_test_id) {
 
 # TODO: remove temporary ssh keys from local authorized_keys file
 
-put_json_file($run{'run-dir'} . "/rickshaw-run.json", \%run);
-
+# These run details don't belong in the json we generate for the run
+my $run_file = $run{'run-dir'} . "/rickshaw-run.json";
+for my $this_key (qw(bench-dir bench-params num-samples roadblock-dir
+                     run-dir tool-params tools-dir workshop-dir tool-group)) {
+    delete $run{$this_key};
+}
+$run{'rickshaw-run'}{'schema'}{'version'} = "2020.03.18";
+put_json_file($run_file, \%run, $run_schema_file);
