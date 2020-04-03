@@ -57,6 +57,7 @@ function scp_from_controller() {
     while [ $scp_rc -gt 0 -a $scp_attempts -lt $max_attempts ]; do
         echo "Trying to scp $rickshaw_host:$src $dest"
         scp -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
             -o ConnectionAttempts=10 \
             -i $ssh_id_file \
             -r $rickshaw_host:"$src" "$dest"
@@ -110,6 +111,9 @@ function archive_to_controller() {
         exit_error "Could not archive $src to $rickshaw_host:$dest"
     fi
 }
+
+echo "client-server-script env:"
+env
 
 longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
@@ -204,9 +208,11 @@ echo -e "\nClients/servers starting tools"
 pushd "$cs_dir" >/dev/null ||
     exit_error "Could not chdir to $cs_dir"
 
-# Server may get overloaded with ssh requests so multuple attempts
-# are supported
 ssh_id_file="$endpoint_run_dir/rickshaw_id.rsa"
+if [ ! -z "$ssh_id" ]; then
+   echo -e "$ssh_id" > $ssh_id_file
+   chmod 600 $ssh_id_file
+fi
 if [ ! -e $ssh_id_file ]; then
     exit_error "ssh key $ssh_id_file was not found"
 fi

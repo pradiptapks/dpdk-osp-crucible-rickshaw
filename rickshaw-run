@@ -355,6 +355,9 @@ foreach my $endpoint (@endpoints) {
                   " --validate";
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
         my @output = `$cmd`;
+        if ($? > 0) {
+            die "[ERROR]Endpoint " . $type . " with options " . $opts . " validation returned non-zero exit code:\n" . join("\n", @output);
+        }
         # Output from endpoint's validation should be 1 or more lines with "client" or "server"
         # followed by 1 or more positive integers representing the client/server IDs this
         # endpoint handles::
@@ -551,8 +554,6 @@ foreach my $cs_type (keys %clients_servers) {
             my $tool_name = $$tool_entry{'tool'};
             my $tool_start_cmd = $tools_configs{$tool_name}{'collector'}{'start'};
             my $tool_stop_cmd = $tools_configs{$tool_name}{'collector'}{'stop'};
-            printf "tool_start: %s\n", $tool_start_cmd;
-            printf "tool_stop: %s\n", $tool_stop_cmd;
             foreach my $tool_param (@{ $$tool_entry{'params'} }) {
                 $tool_start_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
                 $tool_stop_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
@@ -609,7 +610,7 @@ if ($use_workshop) {
     my $image_json = `buildah  images --json`;
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
-    print Dumper $image_json_ref;
+    #print Dumper $image_json_ref;
     my $image_found = 0;
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
         if (exists $$image_json_ref[$i]{'names'}[0]) {

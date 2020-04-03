@@ -1,0 +1,402 @@
+#!/usr/bin/env bash
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+
+# This script implements the 'k8s' endpoint for rickshaw.  It runs 1 or more
+# clients (and no servers, yet) for as many benchmark interations/samples as required
+# for a single invocation of rickshaw.  Like all enpoints, this is meant to be used
+# with other endpoints for creating multi-cloud tests.
+#
+# Usage:
+# local [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,o-p,server:n-m,o-p 
+#                    --run-id <id> --rickshaw-run-dir --image-id <id>
+#                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
+#
+# If --validate is used all options after client/server will be ignored
+#
+# TODO: This endpoint script was copied from 'local' endpoint and has some common function.
+#       Some of that code could probably be consolidated into a library or utilities.
+#       Utilities may work better since other endpoint may be written in a different language.
+# TODO: There are a significant number of features we need to implement for pod preferences:
+#       - node placement for pods/containers
+#       - multus support
+#       - pod requests and limits
+#       - running benchmark servers and setting up the service and router
+#       - containers/pod options
+#       - implement tool execution outside the client/server pods (on workers and masters with
+#         privileged pods)
+#       - collecting information of pod creation and execution
+#       - implementing a system info collection of a k8s cluster
+#       - using a user-definable container registry for container image sourcing
+#         - this is hard-coded right now
+#         - rickshaw needs changes to publish locally built images (from workshop) to the user's
+#           registry
+#         - all endpoint scripts will need to make this change when rickshaw supports this
+#
+# All of the functions that a client-server-script performs works in this endpoint, such as:
+# - benchmark iteration/sample execution
+# - using a container image which has the required software
+# - tool execution
+# - synchronization of execution
+# - sending tool and benchmark data back to the controller (where this endpoint script runs)
+
+function exit_error() {
+    echo "$1"
+    exit 1
+}
+
+function run_roadblock_follower() {
+    local host=$1; shift
+    local passwd=$1; shift
+    local uuid=$1; shift
+    local follower=$1; shift
+    if [ -z "$cs_roadblock_opts" ]; then
+        return 0
+    fi
+    echo `date` "Starting roadblock for $uuid"
+    local cmd="/usr/bin/roadblock.py --role=follower --redis-server=$host --timeout=300"
+    cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower"
+    local output=`$cmd 2>&1`
+    local rc=$?
+    if echo $output | grep -q -- "Received abort message from leader"; then
+        rc=3
+    fi
+    if echo $output | grep -q -- "The roadblock has timed out"; then
+        rc=2
+    fi
+    if [ $rc -gt 0 ]; then
+        echo "Roadblock exit code is non-zero: $rc"
+    fi
+    echo `date` "Completed roadblock for $uuid"
+    return $rc
+}
+
+endpoint_name="k8s"
+hostname=`hostname`
+longopts="validate,endpoint-opts:,run-id:,rickshaw-run-dir:,image-id:"
+longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:"
+opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
+if [ $? -ne 0 ]; then
+    printf -- "\tUnrecognized option specified\n\n"
+    exit 1
+fi
+eval set -- "$opts";
+while true; do
+    case "$1" in
+        --validate)
+            do_validate=1
+            shift;
+            ;;
+        --endpoint-opts)
+            shift;
+            endpoint_opts="$1"
+            endpoint_label="$endpoint_name,$endpoint_opts"
+            shift;
+            ;;
+        --run-id)
+            shift;
+            run_id="$1"
+            shift;
+            ;;
+        --rickshaw-run-dir)
+            shift;
+            rickshaw_run_dir="$1"
+            shift;
+            ;;
+        --image-id)
+            shift;
+            image_id="$1"
+            shift;
+            ;;
+        --roadblock-server)
+            shift;
+            roadblock_server="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-server=$roadblock_server"
+            shift;
+            ;;
+        --roadblock-passwd)
+            shift;
+            roadblock_passwd="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-passwd=$roadblock_passwd"
+            shift;
+            ;;
+        --roadblock-id)
+            shift;
+            roadblock_id="$1"
+            cs_roadblock_opts="$cs_roadblock_opts --roadblock-id=$roadblock_id"
+            shift;
+            ;;
+        --)
+            shift;
+            break;
+           ;;
+        *)
+           exit_error "Unexpected argument [$1]"
+           shift;
+           break;
+           ;;
+    esac
+done
+
+for i in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+    arg=`echo $i | awk -F: '{print $1}'`
+    val=`echo $i | awk -F: '{print $2}'`
+    case "$arg" in
+        client|server|clients|servers)
+            for ids in `echo $val | sed -e 's/,/ /'`; do
+                if echo $ids | grep -q -- "-"; then
+                    range=`echo $ids | sed 's/-/ /'`
+                    for j in `seq $range`; do
+                        if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                            clients[$j]="client-$j"
+                        elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                            servers[$j]="server-$j"
+                        fi
+                    done
+                else
+                    if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                        clients[$ids]="client-$ids"
+                    elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                        servers[$ids]="server-$ids"
+                    fi
+                fi
+            done
+            ;;
+        host)
+            k8s_host=$val
+            ;;
+        user)
+            k8s_user=$val
+            ;;
+        *)
+            exit_error "endpoint options $arg not supported"
+            ;;
+    esac
+done
+
+# Validation just returns what clients and servers would be used
+if [ "$do_validate" == 1 ]; then
+    if [ ${#clients[@]} -gt 0 ]; then
+        echo "client ${!clients[@]}"
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo "[ERROR]This endpoint does not support servers yet"
+        exit 1
+    fi
+    exit
+fi
+
+# Also exit if asking for servers even in not in --validate
+if [ ${#servers[@]} -gt 0 ]; then
+    echo "[ERROR]This endpoint does not support servers yet"
+    exit 1
+fi
+
+k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
+if [ -z "$k8s_kubeconfig" ]; then
+    echo "[ERROR]KUBECONFIG on k8s host $k8s_host not defined"
+    exit 1
+fi
+k8s_nodes=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host kubectl get nodes`
+echo -e "k8s nodes:\n$k8s_nodes"
+
+if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; then
+    echo "Not using roadblock to synchronize since some or all options were missing"
+    cs_roadblock_opts=""
+    rb_do_exit=0
+    if [ ${#clients[@]} -gt 1 ]; then
+        echo "Refusing to run because roadblock is not being used and number of clients is > 1"
+        rb_do_exit=1
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo "Refusing to run because roadblock is not being used and servers are used"
+        rb_do_exit=1
+    fi
+    if [ "$rb_do_exit" == "1" ]; then
+        exit_error "Exiting do to roadblock/client/server conflict"
+    fi
+fi
+
+
+if [ -z "$run_id" ]; then
+    exit_error "The run ID was not provided"
+fi
+if [ -z "$rickshaw_run_dir" ]; then
+    exit_error "--rickshaw-run-dir was not provided"
+fi
+if [ ! -d "$rickshaw_run_dir" ]; then
+    exit_error "The run directory [$rickshaw_run_dir] does not exist"
+fi
+
+if [ ! -e "$rickshaw_run_dir/rickshaw_id.rsa" ]; then
+    exit_error "The ssh id was not found"
+fi
+
+endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_label"
+mkdir -p $endpoint_run_dir;
+pod_json=$endpoint_run_dir/pod.json
+# Build a pod spec
+
+echo "{" >$pod_json
+echo "  \"apiVersion\": \"v1\"," >>$pod_json
+echo "  \"kind\": \"Pod\"," >>$pod_json
+echo "  \"metadata\": {" >>$pod_json
+echo "    \"name\": \"crucible\"" >>$pod_json
+echo "  }," >>$pod_json
+echo "  \"spec\": {" >>$pod_json
+echo "    \"restartPolicy\": \"Never\"," >>$pod_json
+echo "    \"containers\": [" >>$pod_json
+
+count=0
+echo clients: ${clients[@]}
+for i in ${clients[@]}; do
+    if [ $count -gt 0 ]; then
+        echo "      ,{" >>$pod_json
+    else
+        echo "      {" >>$pod_json
+    fi
+    echo "        \"name\": \"$i\"," >>$pod_json
+    echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_fio:latest\"," >>$pod_json
+    echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
+    echo "        \"env\": [" >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"rickshaw_host\"," >>$pod_json
+    echo "            \"value\": \"$hostname\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"rickshaw_run_dir\"," >>$pod_json
+    echo "            \"value\": \"$rickshaw_run_dir\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"cs_id\"," >>$pod_json
+    echo "            \"value\": \"$i\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"endpoint_run_dir\"," >>$pod_json
+    echo "            \"value\": \"/endpoint-run\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"roadblock_server\"," >>$pod_json
+    echo "            \"value\": \"$roadblock_server\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"roadblock_passwd\"," >>$pod_json
+    echo "            \"value\": \"flubber\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"roadblock_id\"," >>$pod_json
+    echo "            \"value\": \"$roadblock_id\"" >>$pod_json
+    echo "          }," >>$pod_json
+    echo "          {" >>$pod_json
+    echo "            \"name\": \"ssh_id\"," >>$pod_json
+    printf "            \"value\": \"" >>$pod_json
+    sed -z 's/\n/\\n/g' $rickshaw_run_dir/rickshaw_id.rsa >>$pod_json
+    echo "\"" >>$pod_json
+    echo "          }" >>$pod_json
+    echo "        ]," >>$pod_json
+    echo "        \"securityContext\": {" >>$pod_json
+    echo "          \"privileged\": true" >>$pod_json
+    echo "        }," >>$pod_json
+    echo "        \"resources\": {" >>$pod_json
+    #echo "          \"limits\": {" >>$pod_json
+    #echo "            \"cpu\": 1," >>$pod_json
+    #echo "            \"memory\": \"2000Mi\"" >>$pod_json
+    #echo "          }," >>$pod_json
+    echo "          \"requests\": {" >>$pod_json
+    echo "            \"cpu\": 1," >>$pod_json
+    echo "            \"memory\": \"2000Mi\"" >>$pod_json
+    echo "          }" >>$pod_json
+    echo "        }" >>$pod_json
+    echo "      }" >>$pod_json
+    let count=$count+1
+done
+echo "    ]" >>$pod_json
+echo "  }" >>$pod_json
+echo "}" >>$pod_json
+
+# Create the pod
+echo "Copying pod spec to k8s cluster"
+scp $pod_json $k8s_host:/tmp/pod_crucible.json
+echo "Deleting existing pod (if exists)"
+ssh $k8s_host kubectl delete pod crucible
+echo "Creating pod"
+ssh $k8s_host kubectl create -f /tmp/pod_crucible.json
+
+#TODO: Ensure the pods are in a "Running" state before syncing on endpoint-deploy roadblock.
+#      This is not functioanlly necessary but useful for debugging.
+#TODO: Detect useful error states from k8s and send abort on endpoint-deploy roadblock.
+
+#status=""
+#do
+    #status=`oc get pods -o wide | grep crucible | awk '{print $3}'`
+    #sleep 5
+#until [ "$status" == "Completed" -o "$status" == "Error" ]
+
+echo "This endpiont deployed"
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:endpoint-deploy" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:endpoint-deploy"
+fi
+
+# The next roadblock does not sync until the controller (rickshaw/leader) finishes a
+# "client/server-finish" sync
+
+# The following is for participating in the roadblock syncs for each benchmark execution.
+# The endpoint does not really need to participate in this, but if it does not, it will
+# wait on the next roadblock sync (endpoint-move-data) and likely time out when there are
+# lots of iterations/samples to run.  Rather than trying to predict a good time period
+# to execute all of these tests, it is easier to just participate in the roadblock syncs
+# for all of the tests, then run the endpoint-move-data roadblock sync.
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:client-server-script-start" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-script-start"
+fi
+run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                       "$roadblock_id:client-server-start-tools" "$endpoint_label"
+rb_rc=$?
+echo roadblock $i exit code: $rb_rc
+if [ $rb_rc -gt 0 ]; then
+    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
+fi
+# Process the first client's bench-commands to participate in the roadblocks
+while read line; do
+    iter_samp=`echo $line | awk '{print $1}'`
+    iter=`echo $iter_samp | awk -F- '{print $1}'`
+    samp=`echo $iter_samp | awk -F- '{print $2}'`
+    for sync in server-start client-start client-stop server-stop; do
+        sync_label="test-${iter}-${samp}:$sync"
+        run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                               "$roadblock_id:$sync_label" "$endpoint_label"
+        rb_rc=$?
+        echo roadblock $sync_label exit code: $rb_rc
+        if [ $rb_rc -eq 3 ]; then
+            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nWill not run remaining tests\n"
+            break
+        fi
+        if [ $rb_rc -eq 2 ]; then
+            exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
+        fi
+    done
+done < "$rickshaw_run_dir/client-server-bench-commands/client-1"
+echo "Out of test loop"
+for i in client-server-stop-tools client-server-send-data client-server-script-finish \
+         endpoint-move-data endpoint-finish endpoint-really-finish; do
+    run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                           "$roadblock_id:$i" "$endpoint_label"
+    rb_rc=$?
+    echo roadblock $i exit code: $rb_rc
+    if [ $rb_rc -gt 0 ]; then
+        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$i"
+    fi
+done
+
+echo "Exiting k8s endpoint script"
+exit 0
+
+
