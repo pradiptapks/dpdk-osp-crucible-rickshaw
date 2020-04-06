@@ -267,7 +267,7 @@ for i in ${clients[@]}; do
     echo "            \"value\": \"$rickshaw_run_dir\"" >>$pod_json
     echo "          }," >>$pod_json
     echo "          {" >>$pod_json
-    echo "            \"name\": \"cs_id\"," >>$pod_json
+    echo "            \"name\": \"cs_label\"," >>$pod_json
     echo "            \"value\": \"$i\"" >>$pod_json
     echo "          }," >>$pod_json
     echo "          {" >>$pod_json
@@ -383,7 +383,7 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$rickshaw_run_dir/client-server-bench-commands/client-1"
+done < "$rickshaw_run_dir/bench-cmds/client/1"
 echo "Out of test loop"
 for i in client-server-stop-tools client-server-send-data client-server-script-finish \
          endpoint-move-data endpoint-finish endpoint-really-finish; do

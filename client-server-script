@@ -27,7 +27,7 @@ function do_roadblock() {
     local cmd=""
     cmd="$cmd /usr/bin/roadblock.py --role=follower --redis-server=$roadblock_server"
     cmd="$cmd --timeout=$timeout --redis-password=$roadblock_passwd"
-    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_id $extra"
+    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label $extra"
     if [ "$use_roadblock" == "1" ]; then
         echo "going to run this roadblock command: $cmd"
         local output=`$cmd 2>&1`
@@ -115,7 +115,7 @@ function archive_to_controller() {
 echo "client-server-script env:"
 env
 
-longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-id:,roadblock-server:"
+longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
@@ -134,10 +134,10 @@ while true; do
             rickshaw_run_dir=$1
             shift;
             ;;
-        --cs-id)
+        --cs-label)
             shift;
-            cs_id="$1"
-            export RS_CS_ID=$cs_id
+            cs_label="$1"
+            export RS_CS_LABEL=$cs_label
             shift;
             ;;
         --endpoint-run-dir)
@@ -175,13 +175,14 @@ done
 if [ -z "$endpoint_run_dir" ]; then
     exit_error "The endpoint run directory (--endpoint-run-dir) was not defined"
 fi
-if [ -z "$cs_id" ]; then
-    exit_error "The clien/server ID (--cs-id) was not defined"
+if [ -z "$cs_label" ]; then
+    exit_error "The clien/server label (--cs-label) was not defined"
 fi
-cs_dir="$endpoint_run_dir/$cs_id"
+cs_dir="$endpoint_run_dir/$cs_label"
 /bin/mkdir -p "$cs_dir" || exit_error "Could not mkdir $cs_dir"
 
-cs_type=`echo $cs_id | awk -F- '{print $1}'`
+cs_type=`echo $cs_label | awk -F- '{print $1}'`
+cs_id=`echo $cs_label | awk -F- '{print $2}'`
 if [ -z "$rickshaw_host" ]; then
 	exit_error "Exiting due to rickshaw host not being set"
 fi
@@ -243,21 +244,23 @@ while read line; do
     fi
 done < "$cs_files_list"
 
-# Finally, get the commands file
-for file_type in bench tool-start tool-stop; do
-    scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/client-server-$file_type-commands/$cs_id" "$cs_id-$file_type.cmds"
-    if [ ! -e ""$cs_id-$file_type.cmds ]; then
-        exit_error "Could not find $cs_id-$file_type.cmds"
-    fi
-done
+# Get the benchmark and tool commands
+scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/bench-cmds/$cs_type/$cs_id" "$cs_label-bench.cmds"
+scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/tool-cmds/$cs_type/$cs_id/start" "tool-start.cmds"
+scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/tool-cmds/$cs_type/$cs_id/stop" "tool-stop.cmds"
 
-mkdir -p tool-data
-pushd tool-data >/dev/null
 do_roadblock client-server-start-tools 300 ||
     exit_error "roablock for client-server-start-tools timed out"
-while read tool_start_cmd; do
-    $tool_start_cmd
-done < "$endpoint_run_dir/$cs_id/$cs_id-tool-start.cmds"
+mkdir -p tool-data
+pushd tool-data >/dev/null
+while read line; do
+    tool_name=`echo $line | awk -F: '{print $1}'`
+    tool_cmd=`echo $line | sed -e s/^$tool_name://`
+    /bin/mkdir -p $tool_name
+    pushd $tool_name >/dev/null
+    $tool_cmd
+    popd >/dev/null
+done <"$endpoint_run_dir/$cs_label/tool-start.cmds"
 popd >/dev/null
 
 # Run the actual tests by reading the commands file
@@ -270,8 +273,8 @@ while read line; do
     iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
     mkdir -p $iter_samp_dir ||
         exit_error "Could not mkdir iteration-$iter/sample-$samp"
-    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_id-stderrout.txt" | \
-        grep -v -- "$cs_id-bench.cmds" | grep -v -- "$cs_id-tool.cmds" | \
+    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_label-stderrout.txt" | \
+        grep -v -- "$cs_label-bench.cmds" | grep -v -- "$cs_label-tool.cmds" | \
         grep -v -- "$cs_files_list" | \
         cpio -pdum iteration-$iter/sample-$samp/ ||
         exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
@@ -293,12 +296,10 @@ while read line; do
         fi
         if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
             echo "Running server command: $cmd"
-            #CS_ID=$cs_id $cmd
             $cmd
             cmd_rc=$?
         elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
             echo "Running client command: $cmd"
-            #CS_ID=$cs_id $cmd
             $cmd
             cmd_rc=$?
         elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
@@ -320,15 +321,19 @@ while read line; do
     done
     popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
     echo PWD: `/bin/pwd`
-done < "$endpoint_run_dir/$cs_id/$cs_id-bench.cmds"
+done < "$endpoint_run_dir/$cs_label/$cs_label-bench.cmds"
 
 do_roadblock client-server-stop-tools 300 ||
     exit_error "roadblock for client-server-stop-tools timed out"
 echo -e "\nClients/servers stopping tools"
 pushd tool-data >/dev/null
-while read tool_stop_cmd; do
-    $tool_stop_cmd
-done < "$endpoint_run_dir/$cs_id/$cs_id-tool-stop.cmds"
+while read line; do
+    tool_name=`echo $line | awk -F: '{print $1}'`
+    tool_cmd=`echo $line | sed -e s/^$tool_name://`
+    pushd $tool_name >/dev/null
+    $tool_cmd
+    popd >/dev/null
+done <"$endpoint_run_dir/$cs_label/tool-stop.cmds"
 popd >/dev/null
 
 do_roadblock client-server-send-data 300 ||
@@ -336,7 +341,7 @@ do_roadblock client-server-send-data 300 ||
 echo -e "\nClients/servers copying data back to endpoint"
 
 # Send all of the test data to the controller
-archive_to_controller "$ssh_id_file" "$cs_dir" "$rickshaw_run_dir/$cs_id-data.tgz"
+archive_to_controller "$ssh_id_file" "$cs_dir" "$rickshaw_run_dir/$cs_label-data.tgz"
 
 popd >/dev/null
 do_roadblock client-server-script-finish 300 || \

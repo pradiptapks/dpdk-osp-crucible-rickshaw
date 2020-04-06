@@ -218,7 +218,9 @@ mkdir -p $endpoint_run_dir;
 echo osruntime: $osruntime
 if [ "$osruntime" == "builtin" ]; then
     # Only the container images already have the client-server-script
-    /bin/cp $rickshaw_run_dir/endpoint-run/client-server-script \
+    # /bin/cp $rickshaw_run_dir/endpoint-run/client-server-script \
+    #        $endpoint_run_dir/client-server-script
+    /bin/cp $rickshaw_run_dir/client-server-script \
             $endpoint_run_dir/client-server-script
     # All osruntimes need an ssh-key, but for local-endpoint "builtin" it can simply be copied here
     /bin/cp "$rickshaw_run_dir/rickshaw_id.rsa" $endpoint_run_dir
@@ -263,7 +265,7 @@ popd >/dev/null
 for i in ${clients[@]} ${servers[@]}; do
     if [ "$osruntime" == "builtin" ]; then
         cmd="$endpoint_run_dir/client-server-script --rickshaw-host=localhost"
-        cmd="$cmd --endpoint-run-dir=$endpoint_run_dir --cs-id=$i $cs_roadblock_opts"
+        cmd="$cmd --endpoint-run-dir=$endpoint_run_dir --cs-label=$i $cs_roadblock_opts"
         cmd="$cmd --rickshaw-run-dir=$rickshaw_run_dir"
         if [ -e "$endpoint_run_dir/client-server-script" ]; then
             if [ -z "$cs_roadblock_opts" ]; then
@@ -283,7 +285,7 @@ for i in ${clients[@]} ${servers[@]}; do
         # Same will be true for running podman
         cmd="chroot $container_mount /endpoint-run/client-server-script --rickshaw-host=localhost"
         cmd="$cmd --rickshaw-run-dir=$rickshaw_run_dir --endpoint-run-dir=/endpoint-run"
-        cmd="$cmd --cs-id=$i $cs_roadblock_opts"
+        cmd="$cmd --cs-label=$i $cs_roadblock_opts"
         if [ -z "$cs_roadblock_opts" ]; then
             # Only when not using roadblock run the client in the foreground
             $cmd
@@ -348,7 +350,7 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$rickshaw_run_dir/client-server-bench-commands/client-1"
+done < "$rickshaw_run_dir/bench-cmds/client/1"
 echo "Out of test loop"
 for i in client-server-stop-tools client-server-send-data client-server-script-finish \
          endpoint-move-data endpoint-finish endpoint-really-finish; do
