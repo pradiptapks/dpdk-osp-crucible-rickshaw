@@ -8,7 +8,7 @@
 #
 # Usage:
 # local [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,o-p,server:n-m,o-p 
-#                    --run-id <id> --rickshaw-run-dir --image-id <id>
+#                    --run-id <id> --base-run-dir --image-id <id>
 #                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
 #
 # If --validate is used all options after client/server will be ignored
@@ -52,27 +52,122 @@ function run_roadblock_follower() {
     if [ -z "$cs_roadblock_opts" ]; then
         return 0
     fi
-    echo `date` "Starting roadblock for $uuid"
+    echo `date` "Starting roadblock"
+    echo "host: $host"
+    echo "uuid: $uuid"
+    echo "follower-id: $follower"
     local cmd="/usr/bin/roadblock.py --role=follower --redis-server=$host --timeout=300"
     cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower"
     local output=`$cmd 2>&1`
     local rc=$?
     if echo $output | grep -q -- "Received abort message from leader"; then
+        echo $output
         rc=3
     fi
     if echo $output | grep -q -- "The roadblock has timed out"; then
         rc=2
+        echo $output
     fi
     if [ $rc -gt 0 ]; then
         echo "Roadblock exit code is non-zero: $rc"
+        echo $output
     fi
     echo `date` "Completed roadblock for $uuid"
     return $rc
 }
 
+function build_pod_spec() {
+local name=$1; shift # name of the pod, also the file name with .json appended
+local dir=$1; shift # what directory to store the pod spec file
+local container_names=$1; shift # a list of container names for this pod, which is typically the client/server labels
+local pod_json="$dir/$name.json"
+
+    echo "{" >$pod_json
+    echo "  \"apiVersion\": \"v1\"," >>$pod_json
+    echo "  \"kind\": \"Pod\"," >>$pod_json
+    echo "  \"metadata\": {" >>$pod_json
+    echo "    \"name\": \"$name\"" >>$pod_json
+    echo "  }," >>$pod_json
+    echo "  \"spec\": {" >>$pod_json
+    if [ ! -z "$nodeSelector" ]; then
+        echo -e "$nodeSelector," >>$pod_json
+    fi
+    echo "    \"restartPolicy\": \"Never\"," >>$pod_json
+    echo "    \"containers\": [" >>$pod_json
+
+    count=0
+    for container_name in ${container_names}; do
+        if [ $count -gt 0 ]; then
+            echo "      ,{" >>$pod_json
+        else
+            echo "      {" >>$pod_json
+        fi
+        echo "        \"name\": \"$container_name\"," >>$pod_json
+        echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_fio:latest\"," >>$pod_json
+        echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
+        echo "        \"env\": [" >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"rickshaw_host\"," >>$pod_json
+        echo "            \"value\": \"$hostname\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"base_run_dir\"," >>$pod_json
+        echo "            \"value\": \"$base_run_dir\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"cs_label\"," >>$pod_json
+        echo "            \"value\": \"$container_name\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"endpoint_run_dir\"," >>$pod_json
+        echo "            \"value\": \"/endpoint-run\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"roadblock_server\"," >>$pod_json
+        echo "            \"value\": \"$roadblock_server\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"roadblock_passwd\"," >>$pod_json
+        echo "            \"value\": \"flubber\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"roadblock_id\"," >>$pod_json
+        echo "            \"value\": \"$roadblock_id\"" >>$pod_json
+        echo "          }," >>$pod_json
+        echo "          {" >>$pod_json
+        echo "            \"name\": \"ssh_id\"," >>$pod_json
+        printf "            \"value\": \"" >>$pod_json
+        sed -z 's/\n/\\n/g' $config_dir/rickshaw_id.rsa >>$pod_json
+        echo "\"" >>$pod_json
+        echo "          }" >>$pod_json
+        echo "        ]" >>$pod_json
+        if [ ! -z "$securityConext" ]; then
+            echo -e ",$securityConext" >>$pod_json
+        fi
+        #echo "        \"securityContext\": {" >>$pod_json
+        #echo "          \"privileged\": true" >>$pod_json
+        #echo "        }," >>$pod_json
+        if [ ! -z "$resources" ]; then
+            echo -e ",$resources" >>$pod_json
+        fi
+        #echo "        \"resources\": {" >>$pod_json
+        #echo "          \"requests\": {" >>$pod_json
+        #echo "            \"cpu\": \"50m\"," >>$pod_json
+        #echo "            \"memory\": \"200Mi\"" >>$pod_json
+        #echo "          }" >>$pod_json
+        #echo "        }" >>$pod_json
+        echo "      }" >>$pod_json
+        let count=$count+1
+    done
+    echo "    ]" >>$pod_json
+    echo "  }" >>$pod_json
+    echo "}" >>$pod_json
+}
+
 endpoint_name="k8s"
+tool_collectors="master worker"
 hostname=`hostname`
-longopts="validate,endpoint-opts:,run-id:,rickshaw-run-dir:,image-id:"
+longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image-id:"
 longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
@@ -89,7 +184,11 @@ while true; do
         --endpoint-opts)
             shift;
             endpoint_opts="$1"
-            endpoint_label="$endpoint_name,$endpoint_opts"
+            shift;
+            ;;
+        --endpoint-label)
+            shift;
+            endpoint_label="$1"
             shift;
             ;;
         --run-id)
@@ -97,9 +196,9 @@ while true; do
             run_id="$1"
             shift;
             ;;
-        --rickshaw-run-dir)
+        --base-run-dir)
             shift;
-            rickshaw_run_dir="$1"
+            base_run_dir="$1"
             shift;
             ;;
         --image-id)
@@ -167,6 +266,21 @@ for i in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
         user)
             k8s_user=$val
             ;;
+        nodeSelector)
+            if [ -e $val ]; then
+                nodeSelector=`cat $val`
+            fi
+            ;;
+        securityContext)
+            if [ -e $val ]; then
+                securityContext=`cat $val`
+            fi
+            ;;
+        resources)
+            if [ -e $val ]; then
+                resources=`cat $val`
+            fi
+            ;;
         *)
             exit_error "endpoint options $arg not supported"
             ;;
@@ -199,6 +313,8 @@ fi
 k8s_nodes=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host kubectl get nodes`
 echo -e "k8s nodes:\n$k8s_nodes"
 
+
+# Figure out if we run roadblock or not
 if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; then
     echo "Not using roadblock to synchronize since some or all options were missing"
     cs_roadblock_opts=""
@@ -217,119 +333,96 @@ if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; t
 fi
 
 
+# Exit if other reqs are not met
 if [ -z "$run_id" ]; then
     exit_error "The run ID was not provided"
 fi
-if [ -z "$rickshaw_run_dir" ]; then
-    exit_error "--rickshaw-run-dir was not provided"
+if [ -z "$base_run_dir" ]; then
+    exit_error "--base-run-dir was not provided"
 fi
-if [ ! -d "$rickshaw_run_dir" ]; then
-    exit_error "The run directory [$rickshaw_run_dir] does not exist"
+if [ ! -d "$base_run_dir" ]; then
+    exit_error "The run directory [$base_run_dir] does not exist"
+fi
+config_dir="$base_run_dir/config"
+results_dir="$base_run_dir/run"
+
+if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
+    exit_error "ssh key file $config_dir/rickshaw_id.rsa was not found"
 fi
 
-if [ ! -e "$rickshaw_run_dir/rickshaw_id.rsa" ]; then
-    exit_error "The ssh id was not found"
-fi
+endpoint_run_dir="$results_dir/endpoint/$endpoint_label"
+pod_specs_dir=$endpoint_run_dir/pod-specs
+client_server_logs_dir="$results_dir/client-server/logs"
+mkdir -p $endpoint_run_dir
+mkdir -p $pod_specs_dir
+mkdir -p $client_server_logs_dir
+kubectl_nodes_json="$endpoint_run_dir/kubectl-get-nodes.json"
+kubectl_pods_json="$endpoint_run_dir/kubectl-get-pods.json"
 
-endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_label"
-mkdir -p $endpoint_run_dir;
-pod_json=$endpoint_run_dir/pod.json
-# Build a pod spec
 
-echo "{" >$pod_json
-echo "  \"apiVersion\": \"v1\"," >>$pod_json
-echo "  \"kind\": \"Pod\"," >>$pod_json
-echo "  \"metadata\": {" >>$pod_json
-echo "    \"name\": \"crucible\"" >>$pod_json
-echo "  }," >>$pod_json
-echo "  \"spec\": {" >>$pod_json
-echo "    \"restartPolicy\": \"Never\"," >>$pod_json
-echo "    \"containers\": [" >>$pod_json
-
-count=0
-echo clients: ${clients[@]}
-for i in ${clients[@]}; do
-    if [ $count -gt 0 ]; then
-        echo "      ,{" >>$pod_json
-    else
-        echo "      {" >>$pod_json
+# Gather some k8s data
+echo "Getting k8s nodes information"
+ssh $k8s_host kubectl get nodes -o json >$kubectl_nodes_json
+# Run any tools necessary for "master" and "worker" collectors, as 
+# "master" and "worker" are the only two collector-types k8s endpoint recognizes
+#
+# Identify the workers and masters
+nr_nodes=`jq '.items | length' $kubectl_nodes_json`
+masters=""
+workers=""
+for i in `seq 0 $(expr $nr_nodes - 1)`; do
+    name=`jq '.items['$i'] | .metadata.name' $kubectl_nodes_json`
+    echo "name: $name"
+    if [ "$(jq '.items['$i'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
+        echo "found master"
+        masters="$masters $name"
     fi
-    echo "        \"name\": \"$i\"," >>$pod_json
-    echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_fio:latest\"," >>$pod_json
-    echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
-    echo "        \"env\": [" >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"rickshaw_host\"," >>$pod_json
-    echo "            \"value\": \"$hostname\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"rickshaw_run_dir\"," >>$pod_json
-    echo "            \"value\": \"$rickshaw_run_dir\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"cs_label\"," >>$pod_json
-    echo "            \"value\": \"$i\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"endpoint_run_dir\"," >>$pod_json
-    echo "            \"value\": \"/endpoint-run\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"roadblock_server\"," >>$pod_json
-    echo "            \"value\": \"$roadblock_server\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"roadblock_passwd\"," >>$pod_json
-    echo "            \"value\": \"flubber\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"roadblock_id\"," >>$pod_json
-    echo "            \"value\": \"$roadblock_id\"" >>$pod_json
-    echo "          }," >>$pod_json
-    echo "          {" >>$pod_json
-    echo "            \"name\": \"ssh_id\"," >>$pod_json
-    printf "            \"value\": \"" >>$pod_json
-    sed -z 's/\n/\\n/g' $rickshaw_run_dir/rickshaw_id.rsa >>$pod_json
-    echo "\"" >>$pod_json
-    echo "          }" >>$pod_json
-    echo "        ]," >>$pod_json
-    echo "        \"securityContext\": {" >>$pod_json
-    echo "          \"privileged\": true" >>$pod_json
-    echo "        }," >>$pod_json
-    echo "        \"resources\": {" >>$pod_json
-    #echo "          \"limits\": {" >>$pod_json
-    #echo "            \"cpu\": 1," >>$pod_json
-    #echo "            \"memory\": \"2000Mi\"" >>$pod_json
-    #echo "          }," >>$pod_json
-    echo "          \"requests\": {" >>$pod_json
-    echo "            \"cpu\": 1," >>$pod_json
-    echo "            \"memory\": \"2000Mi\"" >>$pod_json
-    echo "          }" >>$pod_json
-    echo "        }" >>$pod_json
-    echo "      }" >>$pod_json
-    let count=$count+1
+    if [ "$(jq '.items['$i'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
+        echo "found worker"
+        workers="$workers $name"
+    fi
 done
-echo "    ]" >>$pod_json
-echo "  }" >>$pod_json
-echo "}" >>$pod_json
 
-# Create the pod
+# Create the pod spec files
+/bin/rm -rf /tmp/pod-specs
+pod_names=""
+for client in ${clients[@]}; do
+    # By default use one client per pod
+    pod_name="rickshaw-$client"
+    build_pod_spec "$pod_name" "$pod_specs_dir" "$client"
+    pod_names="$pod_names $pod_name"
+done
+
+# Create the pods
 echo "Copying pod spec to k8s cluster"
-scp $pod_json $k8s_host:/tmp/pod_crucible.json
-echo "Deleting existing pod (if exists)"
-ssh $k8s_host kubectl delete pod crucible
-echo "Creating pod"
-ssh $k8s_host kubectl create -f /tmp/pod_crucible.json
+ssh $k8s_host /bin/rm -rf /tmp/pod-specs
+scp -r $pod_specs_dir $k8s_host:/tmp/
+echo "Deleting existing pods"
+echo ssh $k8s_host kubectl delete pod $pod_names
+ssh $k8s_host kubectl delete pod $pod_names
+for this_pod in $pod_names; do
+    echo "Creating pod $this_pod on $k8s_host"
+    ssh $k8s_host kubectl create -f /tmp/pod-specs/$this_pod.json
+done
 
-#TODO: Ensure the pods are in a "Running" state before syncing on endpoint-deploy roadblock.
-#      This is not functioanlly necessary but useful for debugging.
-#TODO: Detect useful error states from k8s and send abort on endpoint-deploy roadblock.
+declare -A pod_status
+for pod in $pod_names; do
+    pod_status["$pod_name"]=""
+done
+count=0
+status=""
+until [ "$status" == "Running" -o $count -gt 24 ]; do
+    # TODO: parsing kubectl's json would be more reliable
+    for this_status in `ssh $k8s_host kubectl get pods -o wide | grep rickshaw | awk '{print $3}'`; do
+        status=$this_status
+        echo "pod status: $status"
+        if [ "$this_status" != "Running" ]; then
+            break
+        fi
+    done
+done
+ssh $k8s_host kubectl get pods -o json >$kubectl_pods_json
 
-#status=""
-#do
-    #status=`oc get pods -o wide | grep crucible | awk '{print $3}'`
-    #sleep 5
-#until [ "$status" == "Completed" -o "$status" == "Error" ]
 
 echo "This endpiont deployed"
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
@@ -383,10 +476,26 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$rickshaw_run_dir/bench-cmds/client/1"
-echo "Out of test loop"
-for i in client-server-stop-tools client-server-send-data client-server-script-finish \
-         endpoint-move-data endpoint-finish endpoint-really-finish; do
+done < "$config_dir/bench-cmds/client/1"
+
+for i in client-server-stop-tools client-server-send-data client-server-script-finish; do
+    run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
+                           "$roadblock_id:$i" "$endpoint_label"
+    rb_rc=$?
+    echo roadblock $i exit code: $rb_rc
+    if [ $rb_rc -gt 0 ]; then
+        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$i"
+    fi
+done
+
+# Collect the stdout/err from the pods which run the client-server-script)
+for this_pod in $pod_names; do
+    echo "Getting logs from pod this_pod"
+    this_client_server="`echo $this_pod | sed -e s/^rickshaw-//`.txt"
+    ssh $k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
+done
+
+for i in endpoint-move-data endpoint-finish endpoint-really-finish; do
     run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
                            "$roadblock_id:$i" "$endpoint_label"
     rb_rc=$?
@@ -398,5 +507,3 @@ done
 
 echo "Exiting k8s endpoint script"
 exit 0
-
-

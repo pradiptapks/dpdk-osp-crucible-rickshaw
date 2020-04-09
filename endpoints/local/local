@@ -86,7 +86,11 @@ while true; do
         --endpoint-opts)
             shift;
             endpoint_opts="$1"
-            endpoint_label="$endpoint_name,$endpoint_opts"
+            shift;
+            ;;
+        --endpoint-label)
+            shift;
+            endpoint_label="$1"
             shift;
             ;;
         --run-id)
@@ -214,7 +218,9 @@ if [ ! -d "$rickshaw_run_dir" ]; then
 fi
 
 endpoint_run_dir="$rickshaw_run_dir/endpoint-run/$endpoint_label"
-mkdir -p $endpoint_run_dir;
+client_server_logs_dir="$rickshaw_run_dir/client-server-logs"
+mkdir -p $endpoint_run_dir
+mkdir -p $client_server_logs_dir
 echo osruntime: $osruntime
 if [ "$osruntime" == "builtin" ]; then
     # Only the container images already have the client-server-script
@@ -291,7 +297,7 @@ for i in ${clients[@]} ${servers[@]}; do
             $cmd
         else
             echo -e "About to run using nohup:\n$cmd\n"
-            nohup $cmd 2>&1 >"$rickshaw_run_dir/$i-stderrout.txt" &
+            nohup $cmd 2>&1 >"$rickshaw_run_dir/client-server-logs/$i.txt" &
         fi
     elif [ "$osruntime" == "podman"]; then
         echo doing podman runtime

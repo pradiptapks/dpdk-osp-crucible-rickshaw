@@ -115,7 +115,7 @@ function archive_to_controller() {
 echo "client-server-script env:"
 env
 
-longopts="rickshaw-host:,rickshaw-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
+longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
@@ -129,9 +129,9 @@ while true; do
             rickshaw_host="$1"
             shift;
             ;;
-        --rickshaw-run-dir)
+        --base-run-dir)
             shift;
-            rickshaw_run_dir=$1
+            base_run_dir=$1
             shift;
             ;;
         --cs-label)
@@ -181,6 +181,11 @@ fi
 cs_dir="$endpoint_run_dir/$cs_label"
 /bin/mkdir -p "$cs_dir" || exit_error "Could not mkdir $cs_dir"
 
+# Directories on the controller
+config_dir="$base_run_dir/config"
+run_dir="$base_run_dir/run"
+archives_dir="$run_dir/client-server/archives"
+
 cs_type=`echo $cs_label | awk -F- '{print $1}'`
 cs_id=`echo $cs_label | awk -F- '{print $2}'`
 if [ -z "$rickshaw_host" ]; then
@@ -220,7 +225,7 @@ fi
 
 cs_files_list="$cs_type-files-list"
 # First get the file that tells us what other files to get
-scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/$cs_files_list" "$cs_files_list"
+scp_from_controller "$ssh_id_file" "$config_dir/$cs_files_list" "$cs_files_list"
 if [ ! -e "$cs_files_list" ]; then
     exit_error "Could not find $cs_files_list"
 fi
@@ -245,9 +250,9 @@ while read line; do
 done < "$cs_files_list"
 
 # Get the benchmark and tool commands
-scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/bench-cmds/$cs_type/$cs_id" "$cs_label-bench.cmds"
-scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/tool-cmds/$cs_type/$cs_id/start" "tool-start.cmds"
-scp_from_controller "$ssh_id_file" "$rickshaw_run_dir/tool-cmds/$cs_type/$cs_id/stop" "tool-stop.cmds"
+scp_from_controller "$ssh_id_file" "$config_dir/bench-cmds/$cs_type/$cs_id" "$cs_label-bench.cmds"
+scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/start" "tool-start.cmds"
+scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/stop" "tool-stop.cmds"
 
 do_roadblock client-server-start-tools 300 ||
     exit_error "roablock for client-server-start-tools timed out"
@@ -265,7 +270,7 @@ popd >/dev/null
 
 # Run the actual tests by reading the commands file
 while read line; do
-    echo "Processing this cmd: $line"
+    #echo "Processing this cmd: $line"
     iter_samp=`echo $line | awk '{print $1}'`
     cmd=`echo $line | sed -e s/^$iter_samp//`
     iter=`echo $iter_samp | awk -F- '{print $1}'`
@@ -341,7 +346,7 @@ do_roadblock client-server-send-data 300 ||
 echo -e "\nClients/servers copying data back to endpoint"
 
 # Send all of the test data to the controller
-archive_to_controller "$ssh_id_file" "$cs_dir" "$rickshaw_run_dir/$cs_label-data.tgz"
+archive_to_controller "$ssh_id_file" "$cs_dir" "$archives_dir/$cs_label-data.tgz"
 
 popd >/dev/null
 do_roadblock client-server-script-finish 300 || \
