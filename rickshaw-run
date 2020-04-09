@@ -33,7 +33,7 @@ my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
-my $rb_bin = "/usr/bin/roadblock.py";
+my $rb_bin = "/usr/local/bin/roadblock.py";
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --timeout=300" .
                          " --redis-password=" . $redis_passwd;
@@ -217,6 +217,22 @@ sub dump_endpoint_labels {
     return @labels;
 }
 
+sub dir_entries {
+    my $dir = shift;
+    my $pattern = shift;
+    my @entries;
+    if (! -e $dir) {
+        die "The directory does not exist: $dir";
+    }
+    opendir(DH, $dir);
+    @entries =  readdir(DH);
+    if (defined $pattern) {
+        @entries =  grep(/$pattern/, @entries);
+    }
+    close DH;
+    return @entries;
+}
+
 # Apply envinronment variables
 foreach my $e (qw(RS_USER RS_EMAIL RS_TAGS RS_DESC)) {
     if (exists $ENV{$e}) {
@@ -276,6 +292,8 @@ if ($? != 0) {
     exit 1;
 }
 if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
+    copy($run{'roadblock-dir'} . "/roadblock.py", $rb_bin);
+    chmod 0755, "$rb_bin";
     $use_roadblock = 1;
 }
 if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
@@ -350,12 +368,14 @@ printf "Base run directory: [%s]\n", $run{'base-run-dir'};
 printf "Bench helper subproject directory: [%s]\n", $run{'bench-dir'};
 my $config_dir = $run{'base-run-dir'} . "/config";
 mkdir($config_dir);
-my $run_dir = $run{'base-run-dir'} . "/run";
-mkdir($run_dir);
+my $client_server_config_dir = $config_dir . "/client-server";
+mkdir($client_server_config_dir);
+my $client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
+mkdir($client_server_bench_cmds_dir);
 my $tool_cmds_dir = $config_dir . "/tool-cmds";
 mkdir($tool_cmds_dir);
-my $bench_cmds_dir = $config_dir . "/bench-cmds";
-mkdir($bench_cmds_dir);
+my $run_dir = $run{'base-run-dir'} . "/run";
+mkdir($run_dir);
 my $base_endpoint_run_dir = $run_dir . "/endpoint/";
 mkdir($base_endpoint_run_dir);
 my $client_server_run_dir = $run_dir . "/client-server/";
@@ -402,9 +422,10 @@ foreach my $endpoint (@endpoints) {
               " --endpoint-opts=" . $$endpoint{'opts'} .
               " --validate";
     debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
-    my @output = `$cmd`;
+    my @output = grep(!/^#/, `$cmd`);
     if ($? > 0) {
-        die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} . " validation returned non-zero exit code:\n" . join("\n", @output);
+        die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
+            " validation returned non-zero exit code:\n" . join("\n", @output);
     }
     # Output from endpoint's validation should be 1 or more lines with "client" or "server"
     # followed by 1 or more positive integers representing the client/server IDs this
@@ -624,11 +645,11 @@ foreach my $cs_type (keys %clients_servers) {
 
 # Build the client and server bench-cmd files
 foreach my $cs_type (keys %clients_servers) {
-    make_path($bench_cmds_dir . "/" . $cs_type) ||
-        die "Could not create " . $bench_cmds_dir . "/" . $cs_type;
+    make_path($client_server_bench_cmds_dir . "/" . $cs_type) ||
+        die "Could not create " . $client_server_bench_cmds_dir . "/" . $cs_type;
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
         my $cs_id = $$cs_ref{'id'};
-        my $cmd_file = $bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
+        my $cmd_file = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
         open(FH, ">" . $cmd_file) ||
             die "[ERROR]Open bench-cmds file for writing failed: [" . $cmd_file . "]\n";
         debug_log(sprintf "writing bench-cmds [%s]\n", $cmd_file);
@@ -668,7 +689,7 @@ foreach my $cs_type (keys %clients_servers) {
 # The "client-server-script" will first scp the list (client-files-list or server-files-list).
 # then it will read this list to know what other files to copy over)
 foreach my $cs_type (keys %clients_servers) {
-    my $cs_file_list = $config_dir . "/" . $cs_type . "-files-list";
+    my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
     open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
     if (exists $bench_config{$cs_type}{"files-from-controller"}) {
         for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
@@ -765,7 +786,7 @@ if ($use_workshop) {
                                     'files' => [
                                         {
                                             'src' => $client_server_run_script,
-                                            'dst' => '/endpoint-run/'
+                                            'dst' => '/usr/local/bin'
                                         }
                                     ]
                                 }
@@ -779,7 +800,7 @@ if ($use_workshop) {
                                 'files' => [
                                     {
                                         'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                        'dst' => '/usr/bin/'
+                                        'dst' => '/usr/local/bin/'
                                     }
                                 ] 
                             }
@@ -871,7 +892,6 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
         exit 1;
     }
 }
-print "endpoint_labels:\n" . dump_endpoint_labels(\@endpoints);
 if (roadblock_leader("endpoint-deploy", dump_endpoint_labels(\@endpoints)) > 0) {
     printf "[ERROR]roadblock failed\n";
     exit 1;
@@ -929,50 +949,52 @@ if (defined $abort_test_id) {
     # iteration, then by sample, then finally by client/server.  This is needed to have
     # the benchmark's postprocessing script work.  Also background the post-process script
     # for each test and wait for them to complete.
-    opendir(my $dh, $client_server_archives_dir);
-    my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
     my $pp_cmd = $bench_config{'controller'}{'post-script'};
     $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
     $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
     $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
     my @pids;
-    close $dh;
     my $tmp_data_dir = $run_dir . "/tmp-data-dir";
     {
         mkdir($tmp_data_dir);
         my $pushd_dir = pushd($tmp_data_dir);
-        foreach my $archive (@data_archives) {
-            $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or continue;
+        foreach my $archive (dir_entries($client_server_archives_dir,
+                                         qr/^(client|server)-(\d+)-data\.tgz$/)) {
+            $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or next;
+            my $archive_full_path = $client_server_archives_dir . "/" . $archive;
             my $cs_type = $1;
             my $cs_id = $2;
-            my $tar_cmd = "tar zxf ../" . $archive;
+            my $tar_cmd = "tar zxf " . $archive_full_path;
             my $tar_output = `$tar_cmd`;
             for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                 my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
                 for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                    my $cs_dest_sampl_path = "iteration-" . $i . "/sample-" . $s .
+                    my $iter_sampl_subpath = "iteration-" . $i . "/sample-" . $s;
+                    my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
                                   "/" . $cs_type . "s/" . $cs_id;
-                    make_path($run_dir . "/" . $cs_dest_sampl_path);
-                    my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
-                    my $mv_cmd = "/bin/mv * " . $run_dir . $cs_dest_sampl_path;
+                    make_path($cs_dest_sampl_path);
+                    my $iter_sampl_dir = pushd($iter_sampl_subpath);
+                    my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
                     my $mv_output = `$mv_cmd`;
                     if (my $pid = fork) {
                         push(@pids, $pid);
                     } else {
-                        my $pushd_dir = pushd($run_dir . $cs_dest_sampl_path);
+                        my $pushd_dir = pushd($cs_dest_sampl_path);
                         system($pp_cmd . " " . $iter_params);
                         exit;
                     }
                 }
             }
-            my $cs_tool_dest_path = $run_dir . "/tool-data/" . $cs_type . "/" . $cs_id;
-            make_path($cs_tool_dest_path);
-            my $tool_dir = pushd($run_dir . "/tool-data");
-            my $mv_cmd = "/bin/mv * " . $cs_tool_dest_path;
-            my $mv_output = `$mv_cmd`;
+            if (scalar dir_entries("tool-data", qr/\w+/) > 0) {
+                my $tool_dir = pushd("tool-data");
+                my $cs_tool_dest_path = $run_dir . "/tool-data/" . $cs_type . "/" . $cs_id;
+                make_path($cs_tool_dest_path);
+                my $mv_cmd = "/bin/mv * " . $cs_tool_dest_path;
+                my $mv_output = `$mv_cmd`;
+            }
 
             if (!$debug) {
-                system("/bin/rm ../" . $archive);
+                system("/bin/rm " . $archive_full_path);
             }
             # Must be cleaned up in every loop iteraiton
             system("/bin/rm -rf " . $tmp_data_dir . "/*");

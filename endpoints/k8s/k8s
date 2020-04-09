@@ -236,9 +236,9 @@ while true; do
     esac
 done
 
-for i in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
-    arg=`echo $i | awk -F: '{print $1}'`
-    val=`echo $i | awk -F: '{print $2}'`
+for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+    arg=`echo $opt| awk -F: '{print $1}'`
+    val=`echo $opt | awk -F: '{print $2}'`
     case "$arg" in
         client|server|clients|servers)
             for ids in `echo $val | sed -e 's/,/ /'`; do
@@ -344,15 +344,17 @@ if [ ! -d "$base_run_dir" ]; then
     exit_error "The run directory [$base_run_dir] does not exist"
 fi
 config_dir="$base_run_dir/config"
-results_dir="$base_run_dir/run"
+client_server_config_dir="$config_dir/client-server"
+client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
+run_dir="$base_run_dir/run"
+client_server_logs_dir="$run_dir/client-server/logs"
+endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
+pod_specs_dir=$endpoint_run_dir/pod-specs
 
 if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
     exit_error "ssh key file $config_dir/rickshaw_id.rsa was not found"
 fi
 
-endpoint_run_dir="$results_dir/endpoint/$endpoint_label"
-pod_specs_dir=$endpoint_run_dir/pod-specs
-client_server_logs_dir="$results_dir/client-server/logs"
 mkdir -p $endpoint_run_dir
 mkdir -p $pod_specs_dir
 mkdir -p $client_server_logs_dir
@@ -370,14 +372,14 @@ ssh $k8s_host kubectl get nodes -o json >$kubectl_nodes_json
 nr_nodes=`jq '.items | length' $kubectl_nodes_json`
 masters=""
 workers=""
-for i in `seq 0 $(expr $nr_nodes - 1)`; do
-    name=`jq '.items['$i'] | .metadata.name' $kubectl_nodes_json`
+for node in `seq 0 $(expr $nr_nodes - 1)`; do
+    name=`jq '.items['$node'] | .metadata.name' $kubectl_nodes_json`
     echo "name: $name"
-    if [ "$(jq '.items['$i'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
+    if [ "$(jq '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
         echo "found master"
         masters="$masters $name"
     fi
-    if [ "$(jq '.items['$i'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
+    if [ "$(jq '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
         echo "found worker"
         workers="$workers $name"
     fi
@@ -428,7 +430,7 @@ echo "This endpiont deployed"
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
                        "$roadblock_id:endpoint-deploy" "$endpoint_label"
 rb_rc=$?
-echo roadblock $i exit code: $rb_rc
+echo roadblock exit code: $rb_rc
 if [ $rb_rc -gt 0 ]; then
     exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:endpoint-deploy"
 fi
@@ -445,16 +447,19 @@ fi
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
                        "$roadblock_id:client-server-script-start" "$endpoint_label"
 rb_rc=$?
-echo roadblock $i exit code: $rb_rc
+echo roadblock exit code: $rb_rc
 if [ $rb_rc -gt 0 ]; then
     exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-script-start"
 fi
 run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
                        "$roadblock_id:client-server-start-tools" "$endpoint_label"
 rb_rc=$?
-echo roadblock $i exit code: $rb_rc
+echo roadblock exit code: $rb_rc
 if [ $rb_rc -gt 0 ]; then
     exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
+fi
+if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
+    exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found"
 fi
 # Process the first client's bench-commands to participate in the roadblocks
 while read line; do
@@ -476,15 +481,15 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$config_dir/bench-cmds/client/1"
+done < "$client_server_bench_cmds_dir/client/1"
 
-for i in client-server-stop-tools client-server-send-data client-server-script-finish; do
+for id in client-server-stop-tools client-server-send-data client-server-script-finish; do
     run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                           "$roadblock_id:$i" "$endpoint_label"
+                           "$roadblock_id:$id" "$endpoint_label"
     rb_rc=$?
-    echo roadblock $i exit code: $rb_rc
+    echo roadblock exit code: $rb_rc
     if [ $rb_rc -gt 0 ]; then
-        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$i"
+        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$id"
     fi
 done
 
@@ -495,13 +500,13 @@ for this_pod in $pod_names; do
     ssh $k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
 done
 
-for i in endpoint-move-data endpoint-finish endpoint-really-finish; do
+for id in endpoint-move-data endpoint-finish endpoint-really-finish; do
     run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                           "$roadblock_id:$i" "$endpoint_label"
+                           "$roadblock_id:$id" "$endpoint_label"
     rb_rc=$?
-    echo roadblock $i exit code: $rb_rc
+    echo roadblock exit code: $rb_rc
     if [ $rb_rc -gt 0 ]; then
-        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$i"
+        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$id"
     fi
 done
 

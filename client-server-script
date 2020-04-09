@@ -25,7 +25,7 @@ function do_roadblock() {
         exit_error "[ERROR]do_roadblock() timeout not provided"
     fi
     local cmd=""
-    cmd="$cmd /usr/bin/roadblock.py --role=follower --redis-server=$roadblock_server"
+    cmd="$cmd $roadblock_bin --role=follower --redis-server=$roadblock_server"
     cmd="$cmd --timeout=$timeout --redis-password=$roadblock_passwd"
     cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label $extra"
     if [ "$use_roadblock" == "1" ]; then
@@ -96,7 +96,7 @@ function archive_to_controller() {
         tar czf - . | ssh \
                        -o StrictHostKeyChecking=off \
                        -o ConnectionAttempts=10 \
-                       -i "$endpoint_run_dir/rickshaw_id.rsa" \
+                       -i "/tmp/rickshaw_id.rsa" \
                        $rickshaw_host "dd of=$dest"
         ssh_rc=$?
         echo "ssh exit code: $ssh_rc"
@@ -114,6 +114,8 @@ function archive_to_controller() {
 
 echo "client-server-script env:"
 env
+echo "client-server-script params:"
+echo "$@"
 
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
@@ -178,11 +180,19 @@ fi
 if [ -z "$cs_label" ]; then
     exit_error "The clien/server label (--cs-label) was not defined"
 fi
-cs_dir="$endpoint_run_dir/$cs_label"
-/bin/mkdir -p "$cs_dir" || exit_error "Could not mkdir $cs_dir"
+if echo $cs_label | grep -q -P '^(client|server)-\d+$'; then
+    echo "client_label $cs_label valid"
+else
+    exit_error 'client_label "'$cs_label'" does not adhere to regex /^(client|server)-\d+$/'
+fi
+
+# Directories on the client/server
+cs_dir="`mktemp -d`"
+echo "cs_dir: $cs_dir"
 
 # Directories on the controller
 config_dir="$base_run_dir/config"
+client_server_config_dir="$config_dir/client-server"
 run_dir="$base_run_dir/run"
 archives_dir="$run_dir/client-server/archives"
 
@@ -192,6 +202,7 @@ if [ -z "$rickshaw_host" ]; then
 	exit_error "Exiting due to rickshaw host not being set"
 fi
 
+roadblock_bin="/usr/local/bin/roadblock.py"
 use_roadblock=1
 if [ -z "$roadblock_server" ]; then
     echo "Cannot use roadblock for synchronizaton because a server was not provided"
@@ -206,15 +217,21 @@ if [ -z "$roadblock_passwd" ]; then
     use_roadblock=0
 fi
 
+if [ "$use_roadblock" == "1" ]; then
+    if [ ! -e $roadblock_bin ]; then
+        exit_error "Could not find roadblock binary: $roadblock_bin"
+    fi
+fi
+
+pushd "$cs_dir" >/dev/null ||
+    exit_error "Could not chdir to $cs_dir"
+
 do_roadblock client-server-script-start 300 ||
     exit_error "roablock for client-server-script-start timed out"
 
 echo -e "\nClients/servers starting tools"
 
-pushd "$cs_dir" >/dev/null ||
-    exit_error "Could not chdir to $cs_dir"
-
-ssh_id_file="$endpoint_run_dir/rickshaw_id.rsa"
+ssh_id_file="/tmp/rickshaw_id.rsa"
 if [ ! -z "$ssh_id" ]; then
    echo -e "$ssh_id" > $ssh_id_file
    chmod 600 $ssh_id_file
@@ -225,7 +242,7 @@ fi
 
 cs_files_list="$cs_type-files-list"
 # First get the file that tells us what other files to get
-scp_from_controller "$ssh_id_file" "$config_dir/$cs_files_list" "$cs_files_list"
+scp_from_controller "$ssh_id_file" "$client_server_config_dir/$cs_files_list" "$cs_files_list"
 if [ ! -e "$cs_files_list" ]; then
     exit_error "Could not find $cs_files_list"
 fi
@@ -250,9 +267,14 @@ while read line; do
 done < "$cs_files_list"
 
 # Get the benchmark and tool commands
-scp_from_controller "$ssh_id_file" "$config_dir/bench-cmds/$cs_type/$cs_id" "$cs_label-bench.cmds"
+cs_bench_cmds="$cs_label-bench.cmds"
+scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id" "$cs_bench_cmds"
 scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/start" "tool-start.cmds"
 scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/stop" "tool-stop.cmds"
+
+if [ ! -e "$cs_bench_cmds" ]; then
+    exit_error "bench cmds file $cs_bench_cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+fi
 
 do_roadblock client-server-start-tools 300 ||
     exit_error "roablock for client-server-start-tools timed out"
@@ -326,7 +348,7 @@ while read line; do
     done
     popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
     echo PWD: `/bin/pwd`
-done < "$endpoint_run_dir/$cs_label/$cs_label-bench.cmds"
+done < "$cs_bench_cmds"
 
 do_roadblock client-server-stop-tools 300 ||
     exit_error "roadblock for client-server-stop-tools timed out"
@@ -347,9 +369,9 @@ echo -e "\nClients/servers copying data back to endpoint"
 
 # Send all of the test data to the controller
 archive_to_controller "$ssh_id_file" "$cs_dir" "$archives_dir/$cs_label-data.tgz"
+/bin/rm -rf $cs_dir
 
 popd >/dev/null
 do_roadblock client-server-script-finish 300 || \
     exit_error "roadblock for client-server-script-finish timed out"
 echo -e "\nAll client/server scripts are finished"
-# /bin/rm -rf iteration-*
