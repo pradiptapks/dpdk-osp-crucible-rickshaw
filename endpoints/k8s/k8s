@@ -44,40 +44,66 @@ function exit_error() {
     exit 1
 }
 
-function run_roadblock_follower() {
-    local host=$1; shift
-    local passwd=$1; shift
-    local uuid=$1; shift
-    local follower=$1; shift
-    if [ -z "$cs_roadblock_opts" ]; then
+function do_roadblock() {
+    local label=$1; shift
+    local role=$1; shift
+    # followers or members in $@
+    if [ -z "$label" ]; then
+        exit_error "do_roadblock(): label not defined"
+    fi
+    if [ -z "$role" ]; then
+        exit_error "do_roadblock(): role not defined"
+    fi
+    if [ -z "$1" ]; then
+        exit_error "do_roadblock(): follower or members not defined"
+    fi
+    if [ $use_rb -eq 0 ]; then
+        echo "Not running roadblock"
         return 0
     fi
     echo `date` "Starting roadblock"
-    echo "host: $host"
-    echo "uuid: $uuid"
-    echo "follower-id: $follower"
-    local cmd="/usr/bin/roadblock.py --role=follower --redis-server=$host --timeout=300"
-    cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower"
+    echo "role: $role"
+    echo "label: $label"
+    local uuid="$rb_id:$label"
+    local cmd="/usr/local/bin/roadblock.py"
+    cmd+=" --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid"
+    if [ "$role" == "follower" ]; then
+        cmd+=" --role follower --follower-id $1"
+        echo "follower-id: $1"
+    elif [ "$role" == "leader" ]; then
+        cmd+=" --role leader --uuid $uuid"
+        local followers=""
+        while [ ! -z $1 ]; do
+            cmd+=" --followers $1"
+            followers+=" $1"
+            shift
+        done
+        echo "followers: $followers"
+    else
+        exit_error "Roadblock role \"$role\" invalid"
+    fi
     local output=`$cmd 2>&1`
     local rc=$?
-    if echo $output | grep -q -- "Received abort message from leader"; then
+    if echo $output | grep -q -- "Received abort message"; then
         echo $output
         rc=3
     fi
     if echo $output | grep -q -- "The roadblock has timed out"; then
-        rc=2
-        echo $output
+        exit_error "$output"
     fi
     if [ $rc -gt 0 ]; then
         echo "Roadblock exit code is non-zero: $rc"
         echo $output
     fi
     echo `date` "Completed roadblock for $uuid"
+    echo "output:"
+    echo "$output"
     return $rc
 }
 
 function build_pod_spec() {
 local name=$1; shift # name of the pod, also the file name with .json appended
+local type=$1; shift # "cs" or "tool"
 local dir=$1; shift # what directory to store the pod spec file
 local container_names=$1; shift # a list of container names for this pod, which is typically the client/server labels
 local pod_json="$dir/$name.json"
@@ -103,7 +129,7 @@ local pod_json="$dir/$name.json"
             echo "      {" >>$pod_json
         fi
         echo "        \"name\": \"$container_name\"," >>$pod_json
-        echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_fio:latest\"," >>$pod_json
+        echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_uperf:latest\"," >>$pod_json
         echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
         echo "        \"env\": [" >>$pod_json
         echo "          {" >>$pod_json
@@ -124,7 +150,7 @@ local pod_json="$dir/$name.json"
         echo "          }," >>$pod_json
         echo "          {" >>$pod_json
         echo "            \"name\": \"roadblock_server\"," >>$pod_json
-        echo "            \"value\": \"$roadblock_server\"" >>$pod_json
+        echo "            \"value\": \"$rb_server\"" >>$pod_json
         echo "          }," >>$pod_json
         echo "          {" >>$pod_json
         echo "            \"name\": \"roadblock_passwd\"," >>$pod_json
@@ -132,7 +158,7 @@ local pod_json="$dir/$name.json"
         echo "          }," >>$pod_json
         echo "          {" >>$pod_json
         echo "            \"name\": \"roadblock_id\"," >>$pod_json
-        echo "            \"value\": \"$roadblock_id\"" >>$pod_json
+        echo "            \"value\": \"$rb_id\"" >>$pod_json
         echo "          }," >>$pod_json
         echo "          {" >>$pod_json
         echo "            \"name\": \"ssh_id\"," >>$pod_json
@@ -141,21 +167,18 @@ local pod_json="$dir/$name.json"
         echo "\"" >>$pod_json
         echo "          }" >>$pod_json
         echo "        ]" >>$pod_json
-        if [ ! -z "$securityConext" ]; then
-            echo -e ",$securityConext" >>$pod_json
+        if [ "$type" == "collector" ]; then
+            echo "        ,\"securityContext\": {" >>$pod_json
+            echo "          \"privileged\": true" >>$pod_json
+            echo "        }" >>$pod_json 
+        else
+            if [ ! -z "$securityConext" ]; then
+                echo -e ",$securityConext" >>$pod_json
+            fi
+            if [ ! -z "$resources" ]; then
+                echo -e ",$resources" >>$pod_json
+            fi
         fi
-        #echo "        \"securityContext\": {" >>$pod_json
-        #echo "          \"privileged\": true" >>$pod_json
-        #echo "        }," >>$pod_json
-        if [ ! -z "$resources" ]; then
-            echo -e ",$resources" >>$pod_json
-        fi
-        #echo "        \"resources\": {" >>$pod_json
-        #echo "          \"requests\": {" >>$pod_json
-        #echo "            \"cpu\": \"50m\"," >>$pod_json
-        #echo "            \"memory\": \"200Mi\"" >>$pod_json
-        #echo "          }" >>$pod_json
-        #echo "        }" >>$pod_json
         echo "      }" >>$pod_json
         let count=$count+1
     done
@@ -208,20 +231,17 @@ while true; do
             ;;
         --roadblock-server)
             shift;
-            roadblock_server="$1"
-            cs_roadblock_opts="$cs_roadblock_opts --roadblock-server=$roadblock_server"
+            rb_server="$1"
             shift;
             ;;
         --roadblock-passwd)
             shift;
-            roadblock_passwd="$1"
-            cs_roadblock_opts="$cs_roadblock_opts --roadblock-passwd=$roadblock_passwd"
+            rb_passwd="$1"
             shift;
             ;;
         --roadblock-id)
             shift;
-            roadblock_id="$1"
-            cs_roadblock_opts="$cs_roadblock_opts --roadblock-id=$roadblock_id"
+            rb_id="$1"
             shift;
             ;;
         --)
@@ -315,9 +335,9 @@ echo -e "k8s nodes:\n$k8s_nodes"
 
 
 # Figure out if we run roadblock or not
-if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; then
+if [ -z "$rb_server" -o -z "$rb_passwd" -o -z "$rb_id" ]; then
     echo "Not using roadblock to synchronize since some or all options were missing"
-    cs_roadblock_opts=""
+    use_rb=0
     rb_do_exit=0
     if [ ${#clients[@]} -gt 1 ]; then
         echo "Refusing to run because roadblock is not being used and number of clients is > 1"
@@ -330,6 +350,8 @@ if [ -z "$roadblock_server" -o -z "$roadblock_passwd" -o -z "$roadblock_id" ]; t
     if [ "$rb_do_exit" == "1" ]; then
         exit_error "Exiting do to roadblock/client/server conflict"
     fi
+else
+    use_rb=1
 fi
 
 
@@ -349,18 +371,19 @@ client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
 run_dir="$base_run_dir/run"
 client_server_logs_dir="$run_dir/client-server/logs"
 endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
-pod_specs_dir=$endpoint_run_dir/pod-specs
+cs_pod_specs_dir=$endpoint_run_dir/cs-pod-specs
+tool_pod_specs_dir=$endpoint_run_dir/tool-pod-specs
 
 if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
     exit_error "ssh key file $config_dir/rickshaw_id.rsa was not found"
 fi
 
 mkdir -p $endpoint_run_dir
-mkdir -p $pod_specs_dir
+mkdir -p $cs_pod_specs_dir
+mkdir -p $tool_pod_specs_dir
 mkdir -p $client_server_logs_dir
 kubectl_nodes_json="$endpoint_run_dir/kubectl-get-nodes.json"
 kubectl_pods_json="$endpoint_run_dir/kubectl-get-pods.json"
-
 
 # Gather some k8s data
 echo "Getting k8s nodes information"
@@ -391,20 +414,20 @@ pod_names=""
 for client in ${clients[@]}; do
     # By default use one client per pod
     pod_name="rickshaw-$client"
-    build_pod_spec "$pod_name" "$pod_specs_dir" "$client"
+    build_pod_spec "$pod_name" "cs" "$cs_pod_specs_dir" "$client"
     pod_names="$pod_names $pod_name"
 done
 
-# Create the pods
-echo "Copying pod spec to k8s cluster"
-ssh $k8s_host /bin/rm -rf /tmp/pod-specs
-scp -r $pod_specs_dir $k8s_host:/tmp/
+# Create the client/server pods
+echo "Copying client/server pod specs to k8s cluster"
+ssh $k8s_host /bin/rm -rf /tmp/cs-pod-specs
+scp -r $cs_pod_specs_dir $k8s_host:/tmp/
 echo "Deleting existing pods"
 echo ssh $k8s_host kubectl delete pod $pod_names
 ssh $k8s_host kubectl delete pod $pod_names
 for this_pod in $pod_names; do
     echo "Creating pod $this_pod on $k8s_host"
-    ssh $k8s_host kubectl create -f /tmp/pod-specs/$this_pod.json
+    ssh $k8s_host kubectl create -f /tmp/cs-pod-specs/$this_pod.json
 done
 
 declare -A pod_status
@@ -412,28 +435,58 @@ for pod in $pod_names; do
     pod_status["$pod_name"]=""
 done
 count=0
+abort=0
 status=""
-until [ "$status" == "Running" -o $count -gt 24 ]; do
+until [ "$status" == "Running" -o $count -gt 24 -o $abort -gt 0 ]; do
     # TODO: parsing kubectl's json would be more reliable
     for this_status in `ssh $k8s_host kubectl get pods -o wide | grep rickshaw | awk '{print $3}'`; do
         status=$this_status
         echo "pod status: $status"
+        if [ "$this_status" != "Error" ]; then
+            abort=1
+            break
+        fi
         if [ "$this_status" != "Running" ]; then
             break
         fi
     done
 done
-ssh $k8s_host kubectl get pods -o json >$kubectl_pods_json
 
+# Figure out which worker nodes are running these pods
+ssh $k8s_host kubectl get pods -o json >$kubectl_pods_json
+if [ ! -e $kubectl_pods_json ]; then
+    exit_error "file $kubectl_pods_json not found"
+fi
+pod_workers=`jq -r '.items[] | .metadata.name + " " +  .spec.nodeName' $kubectl_pods_json |\
+             grep ^\rickshaw-client | awk '{print $2}' | sort | uniq`
+echo "worker nodes running client-server pods: $pod_workers"
+count=1
+pod_names=""
+collectors=""
+# Create a tool pod for each worker node that runs client/server pods
+for worker_node in $pod_workers; do
+    pod_name="rickshaw-tool-$count"
+    collector="worker-$count"
+    build_pod_spec "$pod_name" "collector" "$tool_pod_specs_dir" "worker-$count"
+    pod_names+=" $pod_name"
+    collectors+=" $collector"
+done
+echo "Collectors: $collectors"
+
+# Create the tool pods
+echo "Copying tool pod specs to k8s cluster"
+ssh $k8s_host /bin/rm -rf /tmp/tool-pod-specs
+scp -r $tool_pod_specs_dir $k8s_host:/tmp/
+echo "Deleting existing pods"
+echo ssh $k8s_host kubectl delete pod $pod_names
+ssh $k8s_host kubectl delete pod $pod_names
+for this_pod in $pod_names; do
+    echo "Creating pod $this_pod on $k8s_host"
+    ssh $k8s_host kubectl create -f /tmp/tool-pod-specs/$this_pod.json
+done
 
 echo "This endpiont deployed"
-run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                       "$roadblock_id:endpoint-deploy" "$endpoint_label"
-rb_rc=$?
-echo roadblock exit code: $rb_rc
-if [ $rb_rc -gt 0 ]; then
-    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:endpoint-deploy"
-fi
+do_roadblock "endpoint-deploy" "follower" "$endpoint_label"
 
 # The next roadblock does not sync until the controller (rickshaw/leader) finishes a
 # "client/server-finish" sync
@@ -444,20 +497,11 @@ fi
 # lots of iterations/samples to run.  Rather than trying to predict a good time period
 # to execute all of these tests, it is easier to just participate in the roadblock syncs
 # for all of the tests, then run the endpoint-move-data roadblock sync.
-run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                       "$roadblock_id:client-server-script-start" "$endpoint_label"
-rb_rc=$?
-echo roadblock exit code: $rb_rc
-if [ $rb_rc -gt 0 ]; then
-    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-script-start"
-fi
-run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                       "$roadblock_id:client-server-start-tools" "$endpoint_label"
-rb_rc=$?
-echo roadblock exit code: $rb_rc
-if [ $rb_rc -gt 0 ]; then
-    exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
-fi
+for sub_label in script-start start-tools; do
+    do_roadblock "collector-$sub_label" "leader" "$collectors"
+    do_roadblock "client-server-$sub_label" "follower" "$endpoint_label"
+done
+
 if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
     exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found"
 fi
@@ -467,30 +511,21 @@ while read line; do
     iter=`echo $iter_samp | awk -F- '{print $1}'`
     samp=`echo $iter_samp | awk -F- '{print $2}'`
     for sync in server-start client-start client-stop server-stop; do
-        sync_label="test-${iter}-${samp}:$sync"
-        run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                               "$roadblock_id:$sync_label" "$endpoint_label"
+        label="test-${iter}-${samp}:$sync"
+        do_roadblock "$label" "follower" "$endpoint_label"
         rb_rc=$?
-        echo roadblock $sync_label exit code: $rb_rc
+        echo "roadblock $label exit code: $rb_rc"
         if [ $rb_rc -eq 3 ]; then
-            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+            echo -e "\nAbort exit code from iteration $iter, sample $samp"
             echo -e "\nWill not run remaining tests\n"
             break
-        fi
-        if [ $rb_rc -eq 2 ]; then
-            exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
 done < "$client_server_bench_cmds_dir/client/1"
 
-for id in client-server-stop-tools client-server-send-data client-server-script-finish; do
-    run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                           "$roadblock_id:$id" "$endpoint_label"
-    rb_rc=$?
-    echo roadblock exit code: $rb_rc
-    if [ $rb_rc -gt 0 ]; then
-        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$id"
-    fi
+for sub_label in stop-tools send-data script-finish; do
+    do_roadblock "collector-$sub_label" "leader" "$collectors"
+    do_roadblock "client-server-$sub_label" "follower" "$endpoint_label"
 done
 
 # Collect the stdout/err from the pods which run the client-server-script)
@@ -500,15 +535,10 @@ for this_pod in $pod_names; do
     ssh $k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
 done
 
-for id in endpoint-move-data endpoint-finish endpoint-really-finish; do
-    run_roadblock_follower "$roadblock_server" "$roadblock_passwd" \
-                           "$roadblock_id:$id" "$endpoint_label"
-    rb_rc=$?
-    echo roadblock exit code: $rb_rc
-    if [ $rb_rc -gt 0 ]; then
-        exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:$id"
-    fi
+for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
+    do_roadblock "$label" "follower" "$endpoint_label"
 done
 
 echo "Exiting k8s endpoint script"
 exit 0
+    label=collector-script-finish

@@ -195,7 +195,11 @@ sub add_endpoint {
     my $endpoint_ref = shift;
     my $type = shift;
     my $opts = shift;
-    my %endpoint = ( 'type' => $type, 'opts' => $opts, 'label' => scalar @{ $endpoint_ref } + 1 . "-" . $type );
+    my $num = 1;
+    for my $entry (@$endpoint_ref) {
+        $num++ if ($$entry{'type'} == $type);
+    }
+    my %endpoint = ( 'type' => $type, 'opts' => $opts, 'label' => $type . "-" . $num);
     push(@$endpoint_ref, \%endpoint);
 }
 
@@ -268,6 +272,8 @@ while (scalar @ARGV > 0) {
         } else {
             printf "[ERROR]format for --endpoint is not valid: [%s]\n", $arg;
         }
+    } elsif ($arg =~ /^debug$/) {
+        $debug = $val;
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
@@ -384,8 +390,6 @@ my $client_server_logs_dir = $client_server_run_dir . "/logs/";
 mkdir($client_server_logs_dir);
 my $client_server_archives_dir = $client_server_run_dir . "/archives/";
 mkdir($client_server_archives_dir);
-my $client_server_config_dir = $config_dir . "/client-server/";
-mkdir($client_server_config_dir);
 my $client_server_run_script = $client_server_config_dir . "/client-server-script";
 my $iterations_dir = $run_dir . "/iterations";
 mkdir($iterations_dir);
@@ -591,7 +595,7 @@ for my $collector (keys %collectors) {
         foreach my $tool_entry (@tools_params) {
             my $tool_name = $$tool_entry{'tool'};
             if (grep($tool_name, @{ $collectors{$collector} })) {
-                my $tool_cmd = $tools_configs{$tool_name}{'collector'}{$start_stop};
+                my $tool_cmd = $tool_name . ": " . $tools_configs{$tool_name}{'collector'}{$start_stop};
                 foreach my $tool_param (@{ $$tool_entry{'params'} }) {
                     $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
                 }
@@ -688,10 +692,12 @@ foreach my $cs_type (keys %clients_servers) {
 # These are files the client/server must copy from the controller before running any tests.
 # The "client-server-script" will first scp the list (client-files-list or server-files-list).
 # then it will read this list to know what other files to copy over)
-foreach my $cs_type (keys %clients_servers) {
+#
+# TODO: build these files for other collectors
+foreach my $cs_type (keys %clients_servers, keys %collectors) {
     my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
     open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
-    if (exists $bench_config{$cs_type}{"files-from-controller"}) {
+    if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
         for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
             my $src_file = $$file_spec{'src'};
             $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
@@ -959,29 +965,31 @@ if (defined $abort_test_id) {
         mkdir($tmp_data_dir);
         my $pushd_dir = pushd($tmp_data_dir);
         foreach my $archive (dir_entries($client_server_archives_dir,
-                                         qr/^(client|server)-(\d+)-data\.tgz$/)) {
-            $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or next;
+                                         qr/^(\w+)-(\d+)-data\.tgz$/)) {
+            $archive =~ /^(\w+)-(\d+)-data\.tgz$/ or next;
             my $archive_full_path = $client_server_archives_dir . "/" . $archive;
             my $cs_type = $1;
             my $cs_id = $2;
             my $tar_cmd = "tar zxf " . $archive_full_path;
             my $tar_output = `$tar_cmd`;
-            for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
-                my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
-                for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                    my $iter_sampl_subpath = "iteration-" . $i . "/sample-" . $s;
-                    my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
-                                  "/" . $cs_type . "s/" . $cs_id;
-                    make_path($cs_dest_sampl_path);
-                    my $iter_sampl_dir = pushd($iter_sampl_subpath);
-                    my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
-                    my $mv_output = `$mv_cmd`;
-                    if (my $pid = fork) {
-                        push(@pids, $pid);
-                    } else {
-                        my $pushd_dir = pushd($cs_dest_sampl_path);
-                        system($pp_cmd . " " . $iter_params);
-                        exit;
+            if ($1 =~ /^(client|server)$/) {
+                for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
+                    my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
+                    for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+                        my $iter_sampl_subpath = "iteration-" . $i . "/sample-" . $s;
+                        my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
+                                    "/" . $cs_type . "s/" . $cs_id;
+                        make_path($cs_dest_sampl_path);
+                        my $iter_sampl_dir = pushd($iter_sampl_subpath);
+                        my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
+                        my $mv_output = `$mv_cmd`;
+                        if (my $pid = fork) {
+                            push(@pids, $pid);
+                        } else {
+                            my $pushd_dir = pushd($cs_dest_sampl_path);
+                            system($pp_cmd . " " . $iter_params);
+                            exit;
+                        }
                     }
                 }
             }

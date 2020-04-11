@@ -37,7 +37,7 @@ function do_roadblock() {
             rc=3
         fi
         if echo $output | grep -q -- "The roadblock has timed out"; then 
-            rc=2
+            exit_error "Roadblock timeout: $output"
         fi
         if [ $rc -gt 0 ]; then
             echo "Roadblock exit code is non-zero: $rc"
@@ -51,20 +51,34 @@ function scp_from_controller() {
     local ssh_id_file=$1; shift
     local src=$1; shift
     local dest=$1; shift
+    if [ -z "$ssh_id_file" ]; then
+        exit_error "scp_from_controller(): ssh_id_file not defined"
+    fi
+    if [ -z "$src" ]; then
+        exit_error "scp_from_controller(): src not defined"
+    fi
+    if [ -z "$dest" ]; then
+        exit_error "scp_from_controller(): dest not defined"
+    fi
     local scp_attempts=1
     local scp_rc=1
     local max_attempts=10
+    scp_cmd="scp -o StrictHostKeyChecking=no"
+    scp_cmd+=" -o BatchMode=yes"
+    scp_cmd+=" -v"
+    scp_cmd+=" -o ConnectionAttempts=10"
+    scp_cmd+=" -i $ssh_id_file"
+    scp_cmd+=" -r $rickshaw_host:$src $dest"
     while [ $scp_rc -gt 0 -a $scp_attempts -lt $max_attempts ]; do
         echo "Trying to scp $rickshaw_host:$src $dest"
-        scp -o StrictHostKeyChecking=no \
-            -o BatchMode=yes \
-            -o ConnectionAttempts=10 \
-            -i $ssh_id_file \
-            -r $rickshaw_host:"$src" "$dest"
+        scp_output=`$scp_cmd 2>&1`
         scp_rc=$?
-        echo "scp exit code: $scp_rc"
         if [ $scp_rc -gt 0 ]; then
             echo "scp failed, trying again"
+            echo "scp exit code: $scp_rc"
+            echo "scp command: $scp_cmd"
+            echo "scp output:"
+            echo "$scp_output"
             sleep $scp_attempts
         fi
         let scp_attempts=$scp_attempts+1
@@ -178,26 +192,31 @@ if [ -z "$endpoint_run_dir" ]; then
     exit_error "The endpoint run directory (--endpoint-run-dir) was not defined"
 fi
 if [ -z "$cs_label" ]; then
-    exit_error "The clien/server label (--cs-label) was not defined"
+    exit_error "The client/server label (--cs-label) was not defined"
 fi
-if echo $cs_label | grep -q -P '^(client|server)-\d+$'; then
-    echo "client_label $cs_label valid"
+if echo $cs_label | grep -q -P '^(\w+)-\d+$'; then
+    echo "client_label \"$cs_label\" is valid"
 else
-    exit_error 'client_label "'$cs_label'" does not adhere to regex /^(client|server)-\d+$/'
+    exit_error 'cs_label "'$cs_label'" does not adhere to regex /^(\w+)-\d+$/'
 fi
 
 # Directories on the client/server
 cs_dir="`mktemp -d`"
 echo "cs_dir: $cs_dir"
+tool_start_cmds="$cs_dir/tool-start"
+tool_stop_cmds="$cs_dir/tool-stop"
+
+cs_type=`echo $cs_label | awk -F- '{print $1}'`
+cs_id=`echo $cs_label | awk -F- '{print $2}'`
 
 # Directories on the controller
 config_dir="$base_run_dir/config"
 client_server_config_dir="$config_dir/client-server"
+tool_cmds_dir="$config_dir/tool-cmds/$cs_type"
+tool_cmds_dir="$config_dir/tool-cmds/$cs_type"
 run_dir="$base_run_dir/run"
 archives_dir="$run_dir/client-server/archives"
 
-cs_type=`echo $cs_label | awk -F- '{print $1}'`
-cs_id=`echo $cs_label | awk -F- '{print $2}'`
 if [ -z "$rickshaw_host" ]; then
 	exit_error "Exiting due to rickshaw host not being set"
 fi
@@ -223,13 +242,15 @@ if [ "$use_roadblock" == "1" ]; then
     fi
 fi
 
-pushd "$cs_dir" >/dev/null ||
-    exit_error "Could not chdir to $cs_dir"
+pushd "$cs_dir" >/dev/null || exit_error "Could not chdir to $cs_dir"
 
-do_roadblock client-server-script-start 300 ||
-    exit_error "roablock for client-server-script-start timed out"
-
-echo -e "\nClients/servers starting tools"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    label=client-server-script-start
+    do_roadblock $label 300
+else
+    label=collector-script-start
+    do_roadblock $label 300
+fi
 
 ssh_id_file="/tmp/rickshaw_id.rsa"
 if [ ! -z "$ssh_id" ]; then
@@ -240,6 +261,7 @@ if [ ! -e $ssh_id_file ]; then
     exit_error "ssh key $ssh_id_file was not found"
 fi
 
+# Get files required to run benchmark and tools
 cs_files_list="$cs_type-files-list"
 # First get the file that tells us what other files to get
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/$cs_files_list" "$cs_files_list"
@@ -250,6 +272,10 @@ dest_file=""
 src_file=""
 # Now we know what files to get
 while read line; do
+    # $cs_files_list has line like:
+    # src=<file>
+    # dest=<file>
+    # (then repeat)
     if [ -z "$src_file" ]; then
         src_file=`echo $line | grep "^src=" | awk -F= '{print $2}'`
         if [ -z "$src_file" ]; then
@@ -267,17 +293,37 @@ while read line; do
 done < "$cs_files_list"
 
 # Get the benchmark and tool commands
-cs_bench_cmds="$cs_label-bench.cmds"
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id" "$cs_bench_cmds"
-scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/start" "tool-start.cmds"
-scp_from_controller "$ssh_id_file" "$config_dir/tool-cmds/$cs_type/$cs_id/stop" "tool-stop.cmds"
-
-if [ ! -e "$cs_bench_cmds" ]; then
-    exit_error "bench cmds file $cs_bench_cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    cs_bench_cmds="$cs_label-bench.cmds"
+    scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id" "$cs_bench_cmds"
+    if [ ! -e "$cs_bench_cmds" ]; then
+        exit_error "bench cmds file $cs_bench_cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+    fi
+    scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/start" "$tool_start_cmds"
+    scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/stop" "$tool_stop_cmds"
+else
+    # non-client/server get tool cmds based on endpoint-specific collector = $cs_label like "worker"
+    scp_from_controller "$ssh_id_file" "$tool_cmds_dir/start" "$tool_start_cmds"
+    scp_from_controller "$ssh_id_file" "$tool_cmds_dir/stop" "$tool_stop_cmds"
 fi
 
-do_roadblock client-server-start-tools 300 ||
-    exit_error "roablock for client-server-start-tools timed out"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    # Regular clients/servers sync with the controller before starting tools
+    label=client-server-start-tools
+    do_roadblock $label 300
+else
+    # Non client/servers, "collectors", sync with the endpoint that created them
+    # because the controller does not know how many collectors there are, but
+    # the endpoint does.
+    label=collector-start-tools
+    do_roadblock $label 300
+fi
+
+for this_tool_cmds in "$tool_start_cmds" "$tool_stop_cmds"; do
+    if [ ! -e $this_tool_cmds ]; then
+        exit_error "Tool cmd file $this_tool_cmd was not found"
+    fi
+done
 mkdir -p tool-data
 pushd tool-data >/dev/null
 while read line; do
@@ -287,72 +333,80 @@ while read line; do
     pushd $tool_name >/dev/null
     $tool_cmd
     popd >/dev/null
-done <"$endpoint_run_dir/$cs_label/tool-start.cmds"
+done <"$tool_start_cmds"
 popd >/dev/null
 
 # Run the actual tests by reading the commands file
-while read line; do
-    #echo "Processing this cmd: $line"
-    iter_samp=`echo $line | awk '{print $1}'`
-    cmd=`echo $line | sed -e s/^$iter_samp//`
-    iter=`echo $iter_samp | awk -F- '{print $1}'`
-    samp=`echo $iter_samp | awk -F- '{print $2}'`
-    iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
-    mkdir -p $iter_samp_dir ||
-        exit_error "Could not mkdir iteration-$iter/sample-$samp"
-    find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_label-stderrout.txt" | \
-        grep -v -- "$cs_label-bench.cmds" | grep -v -- "$cs_label-tool.cmds" | \
-        grep -v -- "$cs_files_list" | \
-        cpio -pdum iteration-$iter/sample-$samp/ ||
-        exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
-    pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
-    echo PWD: `/bin/pwd`
-    for sync in server-start client-start client-stop server-stop; do
-        sync_label="test-${iter}-${samp}:$sync"
-        do_roadblock "$sync_label" 300 "$abort_opt"
-        rb_rc=$?
-        cmd_rc=0
-        echo roadblock $sync_label exit code: $rb_rc
-        if [ $rb_rc -eq 3 ]; then
-            echo -e "\nAbort exit code from iteration $iter, sample $samp roadblock"
-            echo -e "\nWill not run remaining tests\n"
-            break
-        fi
-        if [ $rb_rc -eq 2 ]; then
-            exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
-        fi
-        if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
-            echo "Running server command: $cmd"
-            $cmd
-            cmd_rc=$?
-        elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
-            echo "Running client command: $cmd"
-            $cmd
-            cmd_rc=$?
-        elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
-            echo "killing server"
-            if [ -e server.pid ]; then
-                pid=`cat server.pid`
-                echo "killing PID $pid"
-                kill $pid
-            else
-                echo "Did not find server.pid file in `/bin/pwd`"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    while read line; do
+        #echo "Processing this cmd: $line"
+        iter_samp=`echo $line | awk '{print $1}'`
+        cmd=`echo $line | sed -e s/^$iter_samp//`
+        iter=`echo $iter_samp | awk -F- '{print $1}'`
+        samp=`echo $iter_samp | awk -F- '{print $2}'`
+        iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
+        mkdir -p $iter_samp_dir ||
+            exit_error "Could not mkdir iteration-$iter/sample-$samp"
+        find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_label-stderrout.txt" | \
+            grep -v -- "$cs_label-bench.cmds" | grep -v -- "$cs_label-tool.cmds" | \
+            grep -v -- "$cs_files_list" | \
+            cpio -pdum iteration-$iter/sample-$samp/ ||
+            exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
+        pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
+        echo PWD: `/bin/pwd`
+        for sync in server-start client-start client-stop server-stop; do
+            label="test-${iter}-${samp}:$sync"
+            do_roadblock "$label" 300 "$abort_opt"
+            rb_rc=$?
+            cmd_rc=0
+            echo roadblock $label exit code: $rb_rc
+            if [ $rb_rc -eq 3 ]; then
+                echo -e "\nAbort exit code from iteration $iter, sample $samp roadblock"
+                echo -e "\nWill not run remaining tests\n"
+                break
             fi
-        fi
-        if [ $cmd_rc -gt 0 ]; then
-            # An abort message must be sent so the other members know how to procede
-            abort_opt=" --abort 1"
-            echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
-            echo -e "\nWill not run remaining tests\n"
-        fi
-    done
-    popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
-    echo PWD: `/bin/pwd`
-done < "$cs_bench_cmds"
+            if [ $rb_rc -eq 2 ]; then
+                exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
+            fi
+            if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
+                echo "Running server command: $cmd"
+                $cmd
+                cmd_rc=$?
+            elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
+                echo "Running client command: $cmd"
+                $cmd
+                cmd_rc=$?
+            elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
+                echo "killing server"
+                if [ -e server.pid ]; then
+                    pid=`cat server.pid`
+                    echo "killing PID $pid"
+                    kill $pid
+                else
+                    echo "Did not find server.pid file in `/bin/pwd`"
+                fi
+            fi
+            if [ $cmd_rc -gt 0 ]; then
+                # An abort message must be sent so the other members know how to procede
+                abort_opt=" --abort 1"
+                echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
+                echo -e "\nWill not run remaining tests\n"
+            fi
+        done
+        popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
+        echo PWD: `/bin/pwd`
+    done < "$cs_bench_cmds"
+fi
 
-do_roadblock client-server-stop-tools 300 ||
-    exit_error "roadblock for client-server-stop-tools timed out"
-echo -e "\nClients/servers stopping tools"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    label=client-server-stop-tools
+    do_roadblock $label 300
+    echo -e "\nClients/servers stopping tools"
+else
+    label=collector-stop-tools
+    do_roadblock $label 300
+    echo -e "\nCollectors stopping tools"
+fi
 pushd tool-data >/dev/null
 while read line; do
     tool_name=`echo $line | awk -F: '{print $1}'`
@@ -360,18 +414,30 @@ while read line; do
     pushd $tool_name >/dev/null
     $tool_cmd
     popd >/dev/null
-done <"$endpoint_run_dir/$cs_label/tool-stop.cmds"
+done <"$tool_stop_cmds"
 popd >/dev/null
 
-do_roadblock client-server-send-data 300 ||
-    exit_error "roadblock for client-server-send-data timed out"
-echo -e "\nClients/servers copying data back to endpoint"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    label=client-server-send-data
+    do_roadblock $label 300
+    echo -e "\nClients/servers copying data back to controller"
+else
+    label=collector-send-data
+    do_roadblock $label 300
+    echo -e "\nCollectors copying data back to controller"
+fi
 
-# Send all of the test data to the controller
+# Send all of the test data to the controller and remove local data
 archive_to_controller "$ssh_id_file" "$cs_dir" "$archives_dir/$cs_label-data.tgz"
 /bin/rm -rf $cs_dir
 
 popd >/dev/null
-do_roadblock client-server-script-finish 300 || \
-    exit_error "roadblock for client-server-script-finish timed out"
-echo -e "\nAll client/server scripts are finished"
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    label=client-server-script-finish
+    do_roadblock $label 300
+    echo -e "\nAll client/server scripts are finished"
+else
+    label=collector-script-finish
+    do_roadblock $label 300
+    echo -e "\nAll collector scripts are finished"
+fi
