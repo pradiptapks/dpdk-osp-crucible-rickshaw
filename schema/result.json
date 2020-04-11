@@ -137,9 +137,19 @@
         },
         "endpoints": {
             "type": "array",
-            "items": {
-                "type": "string",
-                "pattern": "^.+$"
+             "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string"
+                    },
+                    "opts": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    }
+                }
             },
             "additionalItems": false
         },

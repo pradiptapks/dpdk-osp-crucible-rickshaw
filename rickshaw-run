@@ -21,7 +21,7 @@ use Data::Dumper;
 
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
-                 "run-dir" => tempdir(), "run-id" => $ug->create_str());
+                 "base-run-dir" => tempdir(), "run-id" => $ug->create_str());
 
 my $userenv = "rhubi8";
 my $debug = 0;
@@ -33,23 +33,23 @@ my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
-my $rb_bin = "/usr/bin/roadblock.py";
+my $rb_bin = "/usr/local/bin/roadblock.py";
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --timeout=300" .
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
-my $rickshaw_dir;
+my $rickshaw_project_dir;
 my $endpoint_roadblock_opt = "";
 my $workshop_roadblock_opt = "";
 {
     # Get the absolute path of the rickshaw project directory
-    my $dir = pushd(dirname($0));
-    $rickshaw_dir = getcwd();
+    my $pushd_dir = pushd(dirname($0));
+    $rickshaw_project_dir = getcwd();
 }
-my $bench_schema_file = $rickshaw_dir . "/schema/benchmark.json";
-my $tool_schema_file = $rickshaw_dir . "/schema/tool.json";
-my $run_schema_file = $rickshaw_dir . "/schema/run.json";
+my $bench_schema_file = $rickshaw_project_dir . "/schema/benchmark.json";
+my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
+my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
 my $json_validator = 'json-validator';
 
 sub usage {
@@ -191,6 +191,52 @@ sub file_newer_than {
     return 0;
 }
 
+sub add_endpoint {
+    my $endpoint_ref = shift;
+    my $type = shift;
+    my $opts = shift;
+    my $num = 1;
+    for my $entry (@$endpoint_ref) {
+        $num++ if ($$entry{'type'} == $type);
+    }
+    my %endpoint = ( 'type' => $type, 'opts' => $opts, 'label' => $type . "-" . $num);
+    push(@$endpoint_ref, \%endpoint);
+}
+
+sub dump_endpoint_types {
+    my $endpoint_ref = shift;
+    my @labels;
+    foreach my $endpoint (@$endpoint_ref) {
+        push(@labels, $$endpoint{'type'})
+    }
+    return @labels;
+}
+
+sub dump_endpoint_labels {
+    my $endpoint_ref = shift;
+    my @labels;
+    foreach my $endpoint (@$endpoint_ref) {
+        push(@labels, $$endpoint{'label'})
+    }
+    return @labels;
+}
+
+sub dir_entries {
+    my $dir = shift;
+    my $pattern = shift;
+    my @entries;
+    if (! -e $dir) {
+        die "The directory does not exist: $dir";
+    }
+    opendir(DH, $dir);
+    @entries =  readdir(DH);
+    if (defined $pattern) {
+        @entries =  grep(/$pattern/, @entries);
+    }
+    close DH;
+    return @entries;
+}
+
 # Apply envinronment variables
 foreach my $e (qw(RS_USER RS_EMAIL RS_TAGS RS_DESC)) {
     if (exists $ENV{$e}) {
@@ -221,13 +267,19 @@ while (scalar @ARGV > 0) {
     }
     debug_log(sprintf "processing \@ARGV, arg is: [%s], val is: [%s]\n", $arg, $val);
     if ($arg eq "endpoint") {
-        push(@endpoints, $val);
+        if ($val =~ /^(\w+),(.*)$/) {
+            add_endpoint(\@endpoints, $1, $2);
+        } else {
+            printf "[ERROR]format for --endpoint is not valid: [%s]\n", $arg;
+        }
+    } elsif ($arg =~ /^debug$/) {
+        $debug = $val;
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;
     } elsif ($arg =~ /^json-validator$/) {
         $json_validator = $val;
-    } elsif ($arg =~ /^run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
+    } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
              $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
              $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
              $arg =~ /^email$|^tags$|^desc$/) {
@@ -246,6 +298,8 @@ if ($? != 0) {
     exit 1;
 }
 if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
+    copy($run{'roadblock-dir'} . "/roadblock.py", $rb_bin);
+    chmod 0755, "$rb_bin";
     $use_roadblock = 1;
 }
 if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
@@ -283,9 +337,9 @@ for my $params (@param_sets) {
 exists $run{'tools-dir'} || die "[ERROR]You must use " . 
                                 "--tools-dir=/path/to/tools/base/subproject-dir " .
                                 "(\$CRUCIBLE_HOME/subprojects/tools)\n";
-# Load the tool config
+# Load the default tool params
 if (not exists $run{'tool-params'} ) {
-    $run{'tool-params'} = $rickshaw_dir . "/config/tools.json";
+    $run{'tool-params'} = $rickshaw_project_dir . "/config/tools.json";
 }
 my @tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
 my %tools_configs;
@@ -304,27 +358,48 @@ foreach my $p (keys %defaults) {
     }
 }
 
-# Ensure the bench-dir, run-dir, and tools-dir have absolute paths
+# Ensure the bench-dir, base-run-dir, and tools-dir have absolute paths
 # because they may be referenced by clients and servers later
-for my $dirtype (qw(run-dir bench-dir tools-dir)) {
+for my $dirtype (qw(base-run-dir bench-dir tools-dir)) {
     {
-        my $dir = pushd($run{$dirtype});
+        my $pushd_dir = pushd($run{$dirtype});
         debug_log(sprintf "pushd to [%s]\n", $run{$dirtype});
         my $cwd = getcwd();
         debug_log(sprintf "cwd [%s]\n", $cwd);
         $run{$dirtype} = $cwd;
     }
 }
--e $run{'run-dir'} || mkdir($run{'run-dir'});
-printf "Run directory: [%s]\n", $run{'run-dir'};
-printf "Bench directory: [%s]\n", $run{'bench-dir'};
+-e $run{'base-run-dir'} || mkdir($run{'base-run-dir'});
+printf "Base run directory: [%s]\n", $run{'base-run-dir'};
+printf "Bench helper subproject directory: [%s]\n", $run{'bench-dir'};
+my $config_dir = $run{'base-run-dir'} . "/config";
+mkdir($config_dir);
+my $client_server_config_dir = $config_dir . "/client-server";
+mkdir($client_server_config_dir);
+my $client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
+mkdir($client_server_bench_cmds_dir);
+my $tool_cmds_dir = $config_dir . "/tool-cmds";
+mkdir($tool_cmds_dir);
+my $run_dir = $run{'base-run-dir'} . "/run";
+mkdir($run_dir);
+my $base_endpoint_run_dir = $run_dir . "/endpoint/";
+mkdir($base_endpoint_run_dir);
+my $client_server_run_dir = $run_dir . "/client-server/";
+mkdir($client_server_run_dir);
+my $client_server_logs_dir = $client_server_run_dir . "/logs/";
+mkdir($client_server_logs_dir);
+my $client_server_archives_dir = $client_server_run_dir . "/archives/";
+mkdir($client_server_archives_dir);
+my $client_server_run_script = $client_server_config_dir . "/client-server-script";
+my $iterations_dir = $run_dir . "/iterations";
+mkdir($iterations_dir);
 
 # If there are no endpoints, assume 1 endpoint using the 'local' extension
 if (scalar @endpoints == 0) {
     if (exists $bench_config{'client'} and exists $bench_config{'server'}) {
-        push(@endpoints, "local:client[1],server[1]");
+        add_endpoint(\@endpoints, "local", "client[1],server[1]");
     } else {
-        push(@endpoints, "local:client[1]");
+        add_endpoint(\@endpoints, "local", "client[1]");
     }
 }
 
@@ -346,44 +421,38 @@ printf "Confirming the endpoints will satisfy the benchmark-client ";
 printf "and benchmark-server " if exists $bench_config{'server'};
 printf "requirements\n";
 foreach my $endpoint (@endpoints) {
-    if ($endpoint =~ /(^\w+),(.+$)/) {
-        my $type = $1;
-        my $opts = $2;
-        my $dir = pushd("./endpoints/" . $type);
-        my $cmd = "./" . $type .
-                  " --endpoint-opts=" . $opts .
-                  " --validate";
-        debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
-        my @output = `$cmd`;
-        if ($? > 0) {
-            die "[ERROR]Endpoint " . $type . " with options " . $opts . " validation returned non-zero exit code:\n" . join("\n", @output);
-        }
-        # Output from endpoint's validation should be 1 or more lines with "client" or "server"
-        # followed by 1 or more positive integers representing the client/server IDs this
-        # endpoint handles::
-        # client <int> [int]
-        # server <int> [int]
-        foreach my $line (@output) {
-            chomp $line;
-            if ($line =~ /(client|server)\s+(.+)$/) {
-                my $t = $1;
-                my $ids = $2;
-                foreach my $id (split(/\s+/, $ids)) {
-                    die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
-                    my %info = ( 'endpoint-type' => $type, 'id' => $id );
-                    $clients_servers{$t}[$id - 1] = \%info;
-                    push(@rb_cs_ids, $t . "-" . $id);
-                    $min_id = $id if (! defined $min_id or $id < $min_id);
-                    $max_id = $id if (! defined $max_id or $id > $max_id);
-                }
-            } else {
-                printf "[ERROR]output from endpoint validation incorrect:\n%s\n", $line;
-                exit 1;
+    my $pushd_dir = pushd("./endpoints/" . $$endpoint{'type'});
+    my $cmd = "./" . $$endpoint{'type'} .
+              " --endpoint-opts=" . $$endpoint{'opts'} .
+              " --validate";
+    debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
+    my @output = grep(!/^#/, `$cmd`);
+    if ($? > 0) {
+        die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
+            " validation returned non-zero exit code:\n" . join("\n", @output);
+    }
+    # Output from endpoint's validation should be 1 or more lines with "client" or "server"
+    # followed by 1 or more positive integers representing the client/server IDs this
+    # endpoint handles::
+    # client <int> [int]
+    # server <int> [int]
+    foreach my $line (@output) {
+        chomp $line;
+        if ($line =~ /(client|server)\s+(.+)$/) {
+            my $client_server = $1;
+            my $ids = $2;
+            foreach my $id (split(/\s+/, $ids)) {
+                die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
+                my %info = ( 'endpoint-type' => $$endpoint{'type'}, 'id' => $id );
+                $clients_servers{$client_server}[$id - 1] = \%info;
+                push(@rb_cs_ids, $client_server . "-" . $id);
+                $min_id = $id if (! defined $min_id or $id < $min_id);
+                $max_id = $id if (! defined $max_id or $id > $max_id);
             }
+        } else {
+            printf "[ERROR]output from endpoint validation incorrect:\n%s\n", $line;
+            exit 1;
         }
-    } else {
-        printf "[ERROR]endpoint value is not valid: [%s]\n", $endpoint;
-        exit 1;
     }
 }
 if ($min_id != 1) {
@@ -472,7 +541,7 @@ if ($run{'test-order'} eq 's') {
 
 # Run on the controller (the host running this script) the benchmark-specific "pre-script"
 if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controller"}{"pre-script"} ne "") {
-    my $dir = pushd($run{'run-dir'});
+    my $pushd_dir = pushd($run_dir);
     # Note that the user params for the benchmark are from the first set only
     # This pre-script is run only once before all of the tests are started.
     # If this script generates a file to aid in benchmark execution (such as a job file),
@@ -481,47 +550,113 @@ if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controll
     # to either augment a file generated here or create a completely new file.
     my $cmd = $bench_config{"controller"}{"pre-script"} . " " . dump_params($run{'iterations'}[0]{'params'});
     $cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
-    $cmd =~ s/\%run-dir\%/$run{'run-dir'}/g;
+    $cmd =~ s/\%run-dir\%/$run_dir/g;
     debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
     my $pre_cmd_output = `$cmd . '2>&1'`;
     debug_log(sprintf "controller pre-script output:\n%s\n", $pre_cmd_output);
 }
 
-# All data needed for any endpoint to run is copied to the endpoint run directory.
-my $base_endpoint_run_dir = $run{'run-dir'} . "/endpoint-run/";
-mkdir($base_endpoint_run_dir);
-copy($rickshaw_dir . "/client-server-script", $base_endpoint_run_dir . "/client-server-script")
-    || die "Could not copy client-server-script to " . $base_endpoint_run_dir .
+copy($rickshaw_project_dir . "/client-server-script", $client_server_run_script)
+    || die "Could not copy client-server-script to " . $client_server_run_script .
            "/client-server-script";
-chmod 0755, $base_endpoint_run_dir . "/client-server-script";
-
-# Build the client and server benchmark-command and tool-command files
-# and put them in the base endpoint run dir
-my $cs_cmds_dir = $run{'run-dir'} . "/client-server-bench-commands";
-my $cs_tool_start_cmds_dir = $run{'run-dir'} . "/client-server-tool-start-commands";
-my $cs_tool_stop_cmds_dir = $run{'run-dir'} . "/client-server-tool-stop-commands";
--e $cs_cmds_dir || mkdir($cs_cmds_dir) ||
-    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_cmds_dir . "]\n";
--e $cs_tool_start_cmds_dir || mkdir($cs_tool_start_cmds_dir) ||
-    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_tool_start_cmds_dir . "]\n";
--e $cs_tool_stop_cmds_dir || mkdir($cs_tool_stop_cmds_dir) ||
-    die "[ERROR]Could not create directory for endpoint scripts: [" . $cs_tool_stop_cmds_dir . "]\n";
+chmod 0755, "$client_server_run_script";
+# Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
+# or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
+# to see if we need to build a command file for any of these collectors.
+my %collectors;
+foreach my $tool_entry (@tools_params) {
+    my $tool_name = $$tool_entry{'tool'};
+    if (exists $tools_configs{$tool_name}{'collector'}{'whitelist'}) {
+        for my $i (@{ $tools_configs{$tool_name}{'collector'}{'whitelist'} }) {
+            my $endpoint = $$i{'endpoint'};
+            # Does this endpoint in tool config match one of th endpoints used for this run?
+            if (grep(/^$endpoint$/, dump_endpoint_types(\@endpoints))) {
+                # Then add this tool to the list of tools for this collector
+                for my $collector (@{ $$i{'collector-types'} }) {
+                    if (! exists($collectors{$collector})) {
+                        $collectors{$collector} = ();
+                    }
+                    push(@{ $collectors{$collector} }, $tool_name);
+                }
+            }
+        }
+    }
+}
+# Now build all of the tool start and stop cmd files for each collector
+for my $collector (keys %collectors) {
+    for my $start_stop ("start", "stop") {
+        my $collector_tool_cmds_dir = $tool_cmds_dir . "/" . $collector;
+        -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
+            die "[ERROR]Create collector directory failed: [" . $collector_tool_cmds_dir . "]\n";
+        my $tool_cmd_file = $collector_tool_cmds_dir . "/" . $start_stop; 
+        open(TOOL_CMD_FH, ">" . $tool_cmd_file) ||
+            die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
+        debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
+        foreach my $tool_entry (@tools_params) {
+            my $tool_name = $$tool_entry{'tool'};
+            if (grep($tool_name, @{ $collectors{$collector} })) {
+                my $tool_cmd = $tool_name . ": " . $tools_configs{$tool_name}{'collector'}{$start_stop};
+                foreach my $tool_param (@{ $$tool_entry{'params'} }) {
+                    $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
+                }
+                printf TOOL_CMD_FH "%s\n", $tool_cmd;
+            }
+        }
+        close(TOOL_CMD_FILE);
+        chmod 0755, $tool_cmd_file;
+    }
+}
+# By default all tools run on client and servers.  However,
+# in some cases tools should not be run in the client or server, either
+# because there is nothing to collect in that runtime, or the tool is
+# already collecting that data from a different source (and a client
+# and/or server would be collecting duplicate data).  For this reason tool
+# cmd files are built specifically for each client and server.
 foreach my $cs_type (keys %clients_servers) {
+    for my $start_stop ("start", "stop") {
+        foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
+            my $cs_tool_cmds_dir = $tool_cmds_dir . "/" . $cs_type . "/" . $$cs_ref{'id'};
+            make_path($cs_tool_cmds_dir);
+            my $tool_cmd_file = $cs_tool_cmds_dir . "/" . $start_stop;
+            open(TOOL_CMD_FH, ">" . $tool_cmd_file) ||
+                die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
+            my $cs_endpoint = $$cs_ref{'endpoint-type'};
+            foreach my $tool_entry (@tools_params) {
+                my $tool_name = $$tool_entry{'tool'};
+                my $tool_cmd = $tool_name . ": " . $tools_configs{$tool_name}{'collector'}{$start_stop};
+                foreach my $tool_param (@{ $$tool_entry{'params'} }) {
+                    $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
+                }
+                # Check if the client/server is deployed by an endpoint that blacklists this tool 
+                if (exists $tools_configs{$tool_name}{'collector'}{'blacklist'}) {
+                    for my $i (@{ $tools_configs{$tool_name}{'collector'}{'blacklist'} }) {
+                        if ($$cs_ref{'endpoint-type'} eq $$i{'endpoint'}) {
+                            # If it is, don't let this client/server run this tool
+                            debug_log(sprintf "%s %d will not run tool %s\n",
+                                              $cs_type, $$cs_ref{'id'}, $tool_name);
+                            undef $tool_cmd;
+                        }
+                    }
+                }
+                if (defined $tool_cmd) {
+                    printf TOOL_CMD_FH "%s\n", $tool_cmd;
+                }
+            }
+            close(TOOL_CMD_FH);
+        }
+    }
+}
+
+# Build the client and server bench-cmd files
+foreach my $cs_type (keys %clients_servers) {
+    make_path($client_server_bench_cmds_dir . "/" . $cs_type) ||
+        die "Could not create " . $client_server_bench_cmds_dir . "/" . $cs_type;
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
         my $cs_id = $$cs_ref{'id'};
-        my $cs_type_id = $cs_type . "-" . $cs_id;
-        my $cmd_file = $cs_cmds_dir . "/" . $cs_type_id;
-        my $tool_start_cmd_file = $cs_tool_start_cmds_dir . "/" . $cs_type_id;
-        my $tool_stop_cmd_file = $cs_tool_stop_cmds_dir . "/" . $cs_type_id;
-        open(FH, ">" . $cmd_file) || die "[ERROR]could not open cmd file for writing: ["
-                                            . $cmd_file . "]\n";
-        debug_log(sprintf "writing script file [%s]\n", $cmd_file);
-        open(TOOL_START_FH, ">" . $tool_start_cmd_file) || die "[ERROR]could not open cmd file for writing: ["
-                                            . $tool_start_cmd_file . "]\n";
-        debug_log(sprintf "writing script file [%s]\n", $tool_start_cmd_file);
-        open(TOOL_STOP_FH, ">" . $tool_stop_cmd_file) || die "[ERROR]could not open cmd file for writing: ["
-                                            . $tool_stop_cmd_file . "]\n";
-        debug_log(sprintf "writing script file [%s]\n", $tool_stop_cmd_file);
+        my $cmd_file = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
+        open(FH, ">" . $cmd_file) ||
+            die "[ERROR]Open bench-cmds file for writing failed: [" . $cmd_file . "]\n";
+        debug_log(sprintf "writing bench-cmds [%s]\n", $cmd_file);
         foreach my $test_ref (@tests) {
             my $test_iter = $$test_ref{'iteration-id'};
             my $test_samp = $$test_ref{'sample-id'};
@@ -550,21 +685,6 @@ foreach my $cs_type (keys %clients_servers) {
         }
         close FH;
         chmod 0755, $cmd_file;
-        foreach my $tool_entry (@tools_params) {
-            my $tool_name = $$tool_entry{'tool'};
-            my $tool_start_cmd = $tools_configs{$tool_name}{'collector'}{'start'};
-            my $tool_stop_cmd = $tools_configs{$tool_name}{'collector'}{'stop'};
-            foreach my $tool_param (@{ $$tool_entry{'params'} }) {
-                $tool_start_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
-                $tool_stop_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
-            }
-            printf TOOL_START_FH "%s\n", $tool_start_cmd;
-            printf TOOL_STOP_FH "%s\n", $tool_stop_cmd;
-        }
-        close TOOL_START_FH;
-        close TOOL_STOP_FH;
-        chmod 0755, $tool_start_cmd_file;
-        chmod 0755, $tool_stop_cmd_file;
     }
 }
 
@@ -572,14 +692,17 @@ foreach my $cs_type (keys %clients_servers) {
 # These are files the client/server must copy from the controller before running any tests.
 # The "client-server-script" will first scp the list (client-files-list or server-files-list).
 # then it will read this list to know what other files to copy over)
-foreach my $cs_type (keys %clients_servers) {
-    my $cs_file_list = $run{'run-dir'} . "/" . $cs_type . "-files-list";
+#
+# TODO: build these files for other collectors
+foreach my $cs_type (keys %clients_servers, keys %collectors) {
+    my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
     open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
-    if (exists $bench_config{$cs_type}{"files-from-controller"}) {
+    if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
         for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
             my $src_file = $$file_spec{'src'};
             $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
-            $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+            $src_file =~ s/\%run-dir\%/$run_dir\//g;
+            $src_file =~ s/\%config-dir\%/$config_dir\//g;
             my $dest_file = $$file_spec{'dest'};
             printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
         }
@@ -590,7 +713,8 @@ foreach my $cs_type (keys %clients_servers) {
             for my $file_spec (@{ $tools_configs{$tool_name}{'collector'}{"files-from-controller"} } ) {
                 my $src_file = $$file_spec{'src'};
                 $src_file =~ s/\%tool-dir\%/$run{'tools-dir'}\/$$tool_entry{'tool'}\//g;
-                $src_file =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+                $src_file =~ s/\%run-dir\%/$run_dir\//g;
+                $src_file =~ s/\%config-dir\%/$config_dir\//g;
                 my $dest_file = $$file_spec{'dest'};
                 printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
             }
@@ -610,7 +734,6 @@ if ($use_workshop) {
     my $image_json = `buildah  images --json`;
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
-    #print Dumper $image_json_ref;
     my $image_found = 0;
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
         if (exists $$image_json_ref[$i]{'names'}[0]) {
@@ -624,7 +747,7 @@ if ($use_workshop) {
                 $image_time = `date -d $image_time +%s`;
                 my @files = ($run{'bench-dir'} . "/workshop.json",
                             $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
-                            $rickshaw_dir . "/client-server-script");
+                            $rickshaw_project_dir . "/client-server-script");
                 foreach my $tool_entry (@tools_params) {
                     push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
                 }
@@ -646,10 +769,10 @@ if ($use_workshop) {
         #
         # We want to avoid adding content to the image that changes
         # with each invocation of rickshaw because we want to cache
-        # these images [eventually].  So, we shouold not include anything
+        # these images [eventually].  So, we should not include anything
         # like "client-server-commands" because this changes every time
         # rickshaw is run.
-        my $cs_req_file = $run{'run-dir'} . "/cs-req.json";
+        my $cs_req_file = $config_dir . "/cs-req.json";
         my %cs_req = (  'workshop' => {
                             'schema' => {
                                 'version' => '2020.03.02'
@@ -668,8 +791,8 @@ if ($use_workshop) {
                                 'files_info' => {
                                     'files' => [
                                         {
-                                            'src' => $base_endpoint_run_dir,
-                                            'dst' => '/endpoint-run/'
+                                            'src' => $client_server_run_script,
+                                            'dst' => '/usr/local/bin'
                                         }
                                     ]
                                 }
@@ -683,7 +806,7 @@ if ($use_workshop) {
                                 'files' => [
                                     {
                                         'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                        'dst' => '/usr/bin/'
+                                        'dst' => '/usr/local/bin/'
                                     }
                                 ] 
                             }
@@ -727,25 +850,29 @@ if ($use_workshop) {
 }
 
 # Create temporary ssh keys so endpoint clients/servers can pull/push data
-my $keygen_cmd = 'ssh-keygen -f ' . $run{'run-dir'} . '/rickshaw_id.rsa -P "" 2>&1';
+my $keygen_cmd = 'ssh-keygen -f ' . $config_dir . '/rickshaw_id.rsa -P "" 2>&1';
 my $keygen_output = `$keygen_cmd`;
-system('cat ' . $run{'run-dir'} . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
+system('cat ' . $config_dir . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 
 # Deploy ths endpoints so they are ready to run benchmark and tools.
 # Each endpoint is responible for launching a osruntime for each client and server.
 print "Deploying endpoints\n";
 debug_log(sprintf "\nendpoint output:\n");
-foreach my $endpoint (@endpoints) {
-    my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $endpoint;
+for (my $i = 0; $i < scalar @endpoints; $i++) {
+    my $type = $endpoints[$i]{'type'};
+    my $opts = $endpoints[$i]{'opts'};
+    my $label = $endpoints[$i]{'label'};
+    my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $label;
     mkdir($this_endpoint_run_dir);
-    die if ! -e $this_endpoint_run_dir;
-    (my $type, my $endpoint_opts) = ($endpoint =~ /(\w+),(.*)/);
-    if (-e $rickshaw_dir . "/endpoints/" . $type) {
-        my $dir = pushd($rickshaw_dir . "/endpoints/" . $type);
+    die "Could not create $this_endpoint_run_dir" if ! -e $this_endpoint_run_dir;
+    my $endpoint_project_dir = $rickshaw_project_dir . "/endpoints/" . $type;
+    if (-e $endpoint_project_dir) {
+        my $pushd_dir = pushd($endpoint_project_dir);
         my $cmd = "./" . $type .
-                  " --endpoint-opts=" . $endpoint_opts .
+                  " --endpoint-opts=" . $opts .
+                  " --endpoint-label=" . $label .
                   " --run-id=" . $run{'run-id'} .
-                  " --rickshaw-run-dir=" . $run{'run-dir'} .
+                  " --base-run-dir=" . $run{'base-run-dir'} .
                   $endpoint_image_opt .
                   $endpoint_roadblock_opt .
                   " >" . $this_endpoint_run_dir . "/endpoint-stdout.txt" .
@@ -761,9 +888,9 @@ foreach my $endpoint (@endpoints) {
         if ($endpoint_roadblock_opt eq "") {
             # There is only one client and no synchronization, so we wait for the endpoint to finish
             debug_log(sprintf "going to run and wait for: %s\n", $cmd);
-            system($cmd);
+            #system($cmd);
         } else {
-            debug_log(sprintf "going to run %s\n", $cmd);
+            #debug_log(sprintf "going to run %s\n", $cmd);
             system($cmd . " &");
         }
     } else {
@@ -771,14 +898,14 @@ foreach my $endpoint (@endpoints) {
         exit 1;
     }
 }
-if (roadblock_leader("endpoint-deploy", @endpoints) > 0) {
+if (roadblock_leader("endpoint-deploy", dump_endpoint_labels(\@endpoints)) > 0) {
     printf "[ERROR]roadblock failed\n";
     exit 1;
 }
 
 # Cycle through the list of tests using roadblock to kick them off
 for my $sync (qw(client-server-script-start client-server-start-tools)) {
-    if (roadblock_leader($sync, (@rb_cs_ids, @endpoints)) > 0) {
+    if (roadblock_leader($sync, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
@@ -790,7 +917,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $iter_array_idx = $iter_id - 1;
     my $test_id = $iter_id . "-" . $samp_id;
     for my $sync_point (qw(server-start client-start client-stop server-stop)) {
-        my $rc = roadblock_leader("test-" . $test_id . ":" . $sync_point, (@rb_cs_ids, @endpoints));
+        my $rc = roadblock_leader("test-" . $test_id . ":" . $sync_point, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         if ($rc > 0) {
             if ($rc == 3) {
                 printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
@@ -804,13 +931,13 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     }
 }
 for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
-    if (roadblock_leader($sync, (@rb_cs_ids, @endpoints)) > 0) {
+    if (roadblock_leader($sync, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
 }
 for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
-    if (roadblock_leader($sync, @endpoints) > 0) {
+    if (roadblock_leader($sync, dump_endpoint_labels(\@endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
@@ -828,60 +955,71 @@ if (defined $abort_test_id) {
     # iteration, then by sample, then finally by client/server.  This is needed to have
     # the benchmark's postprocessing script work.  Also background the post-process script
     # for each test and wait for them to complete.
-    opendir(my $dh, $run{'run-dir'});
-    my @data_archives = grep(/^(client|server)-(\d+)-data\.tgz$/, readdir($dh));
     my $pp_cmd = $bench_config{'controller'}{'post-script'};
     $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
-    $pp_cmd =~ s/\%run-dir\%/$run{'run-dir'}\//g;
+    $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
+    $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
     my @pids;
-    close $dh;
+    my $tmp_data_dir = $run_dir . "/tmp-data-dir";
     {
-        mkdir($run{'run-dir'} . "/tmp-data-dir");
-        my $dir = pushd($run{'run-dir'} . "/tmp-data-dir");
-        foreach my $archive (@data_archives) {
-            $archive =~ /^(client|server)-(\d+)-data\.tgz$/ or continue;
+        mkdir($tmp_data_dir);
+        my $pushd_dir = pushd($tmp_data_dir);
+        foreach my $archive (dir_entries($client_server_archives_dir,
+                                         qr/^(\w+)-(\d+)-data\.tgz$/)) {
+            $archive =~ /^(\w+)-(\d+)-data\.tgz$/ or next;
+            my $archive_full_path = $client_server_archives_dir . "/" . $archive;
             my $cs_type = $1;
             my $cs_id = $2;
-            my $tar_cmd = "tar zxf ../" . $archive;
+            my $tar_cmd = "tar zxf " . $archive_full_path;
             my $tar_output = `$tar_cmd`;
-            for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
-                my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
-                for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                    my $cs_path = "/iteration-" . $i . "/sample-" . $s .
-                                  "/" . $cs_type . "s/" . $cs_id;
-                    make_path($run{'run-dir'} . $cs_path);
-                    my $iter_sampl_dir = pushd("iteration-" . $i . "/sample-" . $s);
-                    my $mv_cmd = "/bin/mv * " . $run{'run-dir'} . $cs_path;
-                    my $mv_output = `$mv_cmd`;
-                    if (my $pid = fork) {
-                        push(@pids, $pid);
-                    } else {
-                        my $dir = pushd($run{'run-dir'} . $cs_path);
-                        system($pp_cmd . " " . $iter_params);
-                        exit;
+            if ($1 =~ /^(client|server)$/) {
+                for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
+                    my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
+                    for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
+                        my $iter_sampl_subpath = "iteration-" . $i . "/sample-" . $s;
+                        my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
+                                    "/" . $cs_type . "s/" . $cs_id;
+                        make_path($cs_dest_sampl_path);
+                        my $iter_sampl_dir = pushd($iter_sampl_subpath);
+                        my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
+                        my $mv_output = `$mv_cmd`;
+                        if (my $pid = fork) {
+                            push(@pids, $pid);
+                        } else {
+                            my $pushd_dir = pushd($cs_dest_sampl_path);
+                            system($pp_cmd . " " . $iter_params);
+                            exit;
+                        }
                     }
                 }
             }
-            #if (!$debug) {
-            #system("/bin/rm ../" . $archive);
-            #}
+            if (scalar dir_entries("tool-data", qr/\w+/) > 0) {
+                my $tool_dir = pushd("tool-data");
+                my $cs_tool_dest_path = $run_dir . "/tool-data/" . $cs_type . "/" . $cs_id;
+                make_path($cs_tool_dest_path);
+                my $mv_cmd = "/bin/mv * " . $cs_tool_dest_path;
+                my $mv_output = `$mv_cmd`;
+            }
+
+            if (!$debug) {
+                system("/bin/rm " . $archive_full_path);
+            }
+            # Must be cleaned up in every loop iteraiton
+            system("/bin/rm -rf " . $tmp_data_dir . "/*");
         }
-        rmdir($run{'run-dir'} . "/tmp-data-dir/*");
-        system("/bin/rm -rf " . $run{'run-dir'} . "/tmp-data-dir/*");
-        system("/bin/ls " . $run{'run-dir'} . "/tmp-data-dir");
     }
     printf "Waiting for %d per-client/server post-processing jobs to complete\n", scalar @pids;
     while (wait() > -1) {
     }
-    rmdir($run{'run-dir'} . "/tmp-data-dir/");
+    rmdir($tmp_data_dir);
 }
 
 # TODO: remove temporary ssh keys from local authorized_keys file
 
 # These run details don't belong in the json we generate for the run
-my $run_file = $run{'run-dir'} . "/rickshaw-run.json";
+my $run_file = $run_dir . "/rickshaw-run.json";
 for my $this_key (qw(bench-dir bench-params num-samples roadblock-dir
-                     run-dir tool-params tools-dir workshop-dir tool-group)) {
+                     base-run-dir tool-params tools-dir workshop-dir tool-group)) {
     delete $run{$this_key};
 }
 $run{'rickshaw-run'}{'schema'}{'version'} = "2020.03.18";
