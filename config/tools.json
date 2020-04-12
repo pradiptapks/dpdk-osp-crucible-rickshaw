@@ -1,0 +1,17 @@
+[
+    {
+        "tool": "sysstat",
+        "group": "default",
+        "params": [
+            {
+                "arg": "collectors",
+                "val": "mpstat"
+            },
+            {
+                "arg": "interval",
+                "val": "2"
+            }
+        ],
+        "skip": [ "server" ]
+    }
+]
