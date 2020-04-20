@@ -346,6 +346,9 @@ if [ $rb_rc -gt 0 ]; then
     exit_error "Exiting: exit code $rb_rc from roadblock $roadblock_id:client-server-start-tools"
 fi
 # Process the first client's bench-commands to participate in the roadblocks
+if [ ! -e "$client_server_bench_cmds_dir/client/1/start" ]; then
+    exit_error "$client_server_bench_cmds_dir/client/1/start not found"
+fi
 while read line; do
     iter_samp=`echo $line | awk '{print $1}'`
     iter=`echo $iter_samp | awk -F- '{print $1}'`
@@ -365,8 +368,8 @@ while read line; do
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
         fi
     done
-done < "$client_server_bench_cmds_dir/client/1" # We use "1" because we can use any client file
-                                                # and we know "1" will always be present
+done < "$client_server_bench_cmds_dir/client/1/start" # We use "1" because we can use any client file
+                                                      # and we know "1" will always be present
 echo "Out of test loop"
 for id in client-server-stop-tools client-server-send-data client-server-script-finish \
          endpoint-move-data endpoint-finish endpoint-really-finish; do

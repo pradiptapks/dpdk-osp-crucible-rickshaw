@@ -649,42 +649,47 @@ foreach my $cs_type (keys %clients_servers) {
 
 # Build the client and server bench-cmd files
 foreach my $cs_type (keys %clients_servers) {
-    make_path($client_server_bench_cmds_dir . "/" . $cs_type) ||
-        die "Could not create " . $client_server_bench_cmds_dir . "/" . $cs_type;
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
+        my @cmd_type_files = ("start");
+        if ($cs_type eq "server") {
+            push(@cmd_type_files, "stop");
+        }
         my $cs_id = $$cs_ref{'id'};
-        my $cmd_file = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
-        open(FH, ">" . $cmd_file) ||
-            die "[ERROR]Open bench-cmds file for writing failed: [" . $cmd_file . "]\n";
-        debug_log(sprintf "writing bench-cmds [%s]\n", $cmd_file);
-        foreach my $test_ref (@tests) {
-            my $test_iter = $$test_ref{'iteration-id'};
-            my $test_samp = $$test_ref{'sample-id'};
-            my $iter_array_idx = $test_iter - 1;
-            my $rb_session = "start-test:" . $test_iter . "-" . $test_samp;
-            if (exists $bench_config{$cs_type}{"bin"} and
-            $bench_config{$cs_type}{"bin"} ne "") {
-                my $cmd = $bench_config{$cs_type}{"bin"} . " " .
-                          dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
-                debug_log(sprintf "cmd: [%s]\n", $cmd);
-                # Apply a regex from the benchmark config file to the command
-                # This is used to remove things like "--clients=" because the
-                # native benchmark does not understand this parameter
-                if ($bench_config{$cs_type} and $bench_config{$cs_type}{"param_regex"}) {
-                    for my $r (@{ $bench_config{$cs_type}{"param_regex"} }) {
-                        # to apply the 's/x/y/' regex from the file, some eval trickery is necessary
-                        # todo: first test the $r regex separately for [perl syntax] errors with eval
-                        # before doing below
-                        $cmd = eval "\$_='$cmd'; $r; return scalar \$_";
+        my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
+        make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
+        foreach my $cmd_type (@cmd_type_files) {
+            my $this_cmd_file = $this_cmds_dir . "/" . $cmd_type;
+            open(FH, ">" . $this_cmd_file) ||
+                die "[ERROR]Open bench-cmds file for writing failed: [" . $this_cmd_file . "]\n";
+            debug_log(sprintf "writing bench-cmds [%s]\n", $this_cmd_file);
+            foreach my $test_ref (@tests) {
+                my $test_iter = $$test_ref{'iteration-id'};
+                my $test_samp = $$test_ref{'sample-id'};
+                my $iter_array_idx = $test_iter - 1;
+                if (exists $bench_config{$cs_type}{$cmd_type} and
+                    $bench_config{$cs_type}{$cmd_type} ne "") {
+                    my $cmd = $bench_config{$cs_type}{$cmd_type} . " " .
+                            dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
+                    debug_log(sprintf "cmd: [%s]\n", $cmd);
+                    # Apply a regex from the benchmark config file to the command
+                    # This is used to remove things like "--clients=" because the
+                    # native benchmark does not understand this parameter
+                    if ($bench_config{$cs_type} and $bench_config{$cs_type}{"param_regex"}) {
+                        for my $r (@{ $bench_config{$cs_type}{"param_regex"} }) {
+                            # to apply the 's/x/y/' regex from the file, some eval trickery is necessary
+                            # todo: first test the $r regex separately for [perl syntax] errors with eval
+                            # before doing below
+                            $cmd = eval "\$_='$cmd'; $r; return scalar \$_";
+                        }
                     }
+                    printf FH "%d-%d %s\n", $test_iter, $test_samp, $cmd;
+                } else {
+                    die "[ERROR]Could not find " . $cmd_type . " in bench_config\n";
                 }
-                printf FH "%d-%d %s\n", $test_iter, $test_samp, $cmd;
-            } else {
-                die "[ERROR]Could not find client binary in bench_config\n";
+            close FH;
+            chmod 0755, $this_cmd_file;
             }
         }
-        close FH;
-        chmod 0755, $cmd_file;
     }
 }
 
@@ -730,17 +735,21 @@ if ($use_workshop) {
     # First determine if we need to build a new image
     my $must_rebuild = 0;
     my $image_time;
-    my $image_name = "workshop_" . $userenv . "_" . $run{'benchmark'};
+    my $image_name = "workshop/" . $userenv . "_" . $run{'benchmark'};
     my $image_json = `buildah  images --json`;
     my $coder = JSON::XS->new;
     my $image_json_ref = $coder->decode($image_json);
     my $image_found = 0;
+    my @newer_files;
     for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
         if (exists $$image_json_ref[$i]{'names'}[0]) {
             my $name = $$image_json_ref[$i]{'names'}[0];
-            $name =~ s/.*\///;
+            printf "name: [%s]\n", $name;
+            $name =~ s/[^\/]+\///;
             $name =~ s/:.*//;
+            printf "Comparing [%s] to [%s]\n", $image_name, $name;
             if ($name eq $image_name) {
+                print "Found existing image\n";
                 $image_found = 1;
                 $image_id = $$image_json_ref[$i]{'id'};
                 $image_time = $$image_json_ref[$i]{'createdatraw'};
@@ -754,14 +763,22 @@ if ($use_workshop) {
                 for my $file (@files) {
                     if ( file_newer_than($file, $image_time) > 0) {
                         printf "%s is newer than the container image\n", $file;
+                        push(@newer_files, $file);
                         $must_rebuild = 1;
                     }
                 }
             }
         }
     }
-    if ($must_rebuild or ! $image_found) {
-        printf "The container image must be rebuilt\n";
+    if ($must_rebuild or !$image_found) {
+        printf "The container image must be rebuilt because:\n";
+        if (!$image_found) {
+            printf "* the existing container image name [%s] was not found\n", $image_name;
+        }
+        if ($must_rebuild) {
+            printf "* the container image is older than a file that goes in it:\n%s",
+                   join('\n', @newer_files);
+        }
         # Build a container image for the clients/servers
         # Create a json which tells workshop to include these files:
         # - the client-server-script (which has logic to execute all tests)

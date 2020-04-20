@@ -9,7 +9,7 @@
                     "properties": {
                         "version": {
                             "type": "string",
-                            "pattern": "^2020\\.03\\.18$"
+                            "pattern": "^2020\\.04\\.14$"
                         }
                     },
                     "required": [ "version" ],
@@ -59,7 +59,7 @@
                     },
                     "additionalItems": false
                 },
-                "bin": {
+                "start": {
                     "type": "string",
                     "pattern": "^.+$"
                 },
@@ -95,7 +95,11 @@
                     },
                     "additionalItems": false
                 },
-                "bin": {
+                "start": {
+                    "type": "string",
+                    "pattern": "^.+$"
+                },
+                "stop": {
                     "type": "string",
                     "pattern": "^.+$"
                 },

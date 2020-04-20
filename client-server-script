@@ -131,6 +131,8 @@ env
 echo "client-server-script params:"
 echo "$@"
 
+version=100
+echo "version: $version"
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
@@ -153,7 +155,6 @@ while true; do
         --cs-label)
             shift;
             cs_label="$1"
-            export RS_CS_LABEL=$cs_label
             shift;
             ;;
         --endpoint-run-dir)
@@ -199,6 +200,7 @@ if echo $cs_label | grep -q -P '^(\w+)-\d+$'; then
 else
     exit_error 'cs_label "'$cs_label'" does not adhere to regex /^(\w+)-\d+$/'
 fi
+export RS_CS_LABEL=$cs_label
 
 # Directories on the client/server
 cs_dir="`mktemp -d`"
@@ -294,10 +296,16 @@ done < "$cs_files_list"
 
 # Get the benchmark and tool commands
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
-    cs_bench_cmds="$cs_label-bench.cmds"
-    scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id" "$cs_bench_cmds"
-    if [ ! -e "$cs_bench_cmds" ]; then
-        exit_error "bench cmds file $cs_bench_cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+    cs_start_bench_cmds="$cs_label-start-bench.cmds"
+    scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/start" "bench-start-cmds"
+    if [ ! -e "bench-start-cmds" ]; then
+        exit_error "bench cmds file bench-start-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+    fi
+    if [ "$cs_type" == "server" ]; then
+        scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds"
+        if [ ! -e "bench-stop-cmds" ]; then
+            exit_error "bench cmds file bench-stop-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
+        fi
     fi
     scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/start" "$tool_start_cmds"
     scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/stop" "$tool_stop_cmds"
@@ -336,12 +344,43 @@ while read line; do
 done <"$tool_start_cmds"
 popd >/dev/null
 
+declare -A bench_start_cmds
+declare -A bench_stop_cmds
+if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    count=0
+    if [ -e bench-start-cmds ]; then
+        while read line; do
+            bench_start_cmds[$count]=$line
+        done < bench-start-cmds
+        let "count = $count +1"
+    else
+        exit_error "bench-start-cmds not found"
+    fi
+fi
+if [ "$cs_type" == "server" ]; then
+    if [ -e bench-stop-cmds ]; then
+        count=0
+        while read line; do
+            bench_stop_cmds[$count]=$line
+        done < bench-stop-cmds
+        let "count = $count +1"
+    else
+        exit_error "bench-stop-cmds not found"
+    fi
+fi
+    
 # Run the actual tests by reading the commands file
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
-    while read line; do
-        #echo "Processing this cmd: $line"
-        iter_samp=`echo $line | awk '{print $1}'`
-        cmd=`echo $line | sed -e s/^$iter_samp//`
+    #while read line; do
+    len=${#bench_start_cmds[@]}
+    for (( i=0; i<$len; $i++ )); do
+        #iter_samp=`echo $line | awk '{print $1}'`
+        #cmd=`echo $line | sed -e s/^$iter_samp//`
+        iter_samp=`echo ${bench_start_cmds[$i]} | awk '{print $1}'`
+        start_cmd=`echo ${bench_start_cmds[$i]} | sed -e s/^$iter_samp//`
+        if [ "$cs_type" == "server" ]; then
+            stop_cmd=`echo ${bench_stop_cmds[$i]} | sed -e s/^$iter_samp//`
+        fi
         iter=`echo $iter_samp | awk -F- '{print $1}'`
         samp=`echo $iter_samp | awk -F- '{print $2}'`
         iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
@@ -368,23 +407,22 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             if [ $rb_rc -eq 2 ]; then
                 exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
             fi
+            # These combinations don't run a command:
+            #  sync=server-start & cs_type=client
+            #  sync=client-start & cs_type=server
+            #  sync=server-stop & cs_type=client
             if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
-                echo "Running server command: $cmd"
-                $cmd
+                echo "Running $sync command: $start_cmd"
+                $start_cmd
                 cmd_rc=$?
             elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
-                echo "Running client command: $cmd"
-                $cmd
+                echo "Running $sync command: $start_cmd"
+                $start_cmd
                 cmd_rc=$?
             elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
-                echo "killing server"
-                if [ -e server.pid ]; then
-                    pid=`cat server.pid`
-                    echo "killing PID $pid"
-                    kill $pid
-                else
-                    echo "Did not find server.pid file in `/bin/pwd`"
-                fi
+                echo "Running $sync command: $stop_cmd"
+                $stop_cmd
+                cmd_rc=$?
             fi
             if [ $cmd_rc -gt 0 ]; then
                 # An abort message must be sent so the other members know how to procede
@@ -395,7 +433,8 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         done
         popd >/dev/null  # from $iter_sampl_dir back to $cs_dir
         echo PWD: `/bin/pwd`
-    done < "$cs_bench_cmds"
+    #done < "$cs_bench_cmds"
+    done
 fi
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
