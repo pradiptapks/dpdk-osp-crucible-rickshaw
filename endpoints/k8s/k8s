@@ -316,6 +316,7 @@ if [ "$do_validate" == 1 ]; then
         echo "[ERROR]This endpoint does not support servers yet"
         exit 1
     fi
+    #TODO: validate host and user and KUBECONFIG
     exit
 fi
 
@@ -387,7 +388,7 @@ kubectl_pods_json="$endpoint_run_dir/kubectl-get-pods.json"
 
 # Gather some k8s data
 echo "Getting k8s nodes information"
-ssh $k8s_host kubectl get nodes -o json >$kubectl_nodes_json
+ssh $k8s_user@$k8s_host kubectl get nodes -o json >$kubectl_nodes_json
 # Run any tools necessary for "master" and "worker" collectors, as 
 # "master" and "worker" are the only two collector-types k8s endpoint recognizes
 #
@@ -420,14 +421,14 @@ done
 
 # Create the client/server pods
 echo "Copying client/server pod specs to k8s cluster"
-ssh $k8s_host /bin/rm -rf /tmp/cs-pod-specs
-scp -r $cs_pod_specs_dir $k8s_host:/tmp/
+ssh $k8s_user@$k8s_host /bin/rm -rf /tmp/cs-pod-specs
+scp -r $cs_pod_specs_dir $k8s_user@$k8s_host:/tmp/
 echo "Deleting existing pods"
-echo ssh $k8s_host kubectl delete pod $pod_names
-ssh $k8s_host kubectl delete pod $pod_names
+echo ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
+ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
 for this_pod in $pod_names; do
-    echo "Creating pod $this_pod on $k8s_host"
-    ssh $k8s_host kubectl create -f /tmp/cs-pod-specs/$this_pod.json
+    echo "Creating pod $this_pod on $k8s_user@$k8s_host"
+    ssh $k8s_user@$k8s_host kubectl create -f /tmp/cs-pod-specs/$this_pod.json
 done
 
 declare -A pod_status
@@ -439,7 +440,7 @@ abort=0
 status=""
 until [ "$status" == "Running" -o $count -gt 24 -o $abort -gt 0 ]; do
     # TODO: parsing kubectl's json would be more reliable
-    for this_status in `ssh $k8s_host kubectl get pods -o wide | grep rickshaw | awk '{print $3}'`; do
+    for this_status in `ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep rickshaw | awk '{print $3}'`; do
         status=$this_status
         echo "pod status: $status"
         if [ "$this_status" != "Error" ]; then
@@ -453,7 +454,7 @@ until [ "$status" == "Running" -o $count -gt 24 -o $abort -gt 0 ]; do
 done
 
 # Figure out which worker nodes are running these pods
-ssh $k8s_host kubectl get pods -o json >$kubectl_pods_json
+ssh $k8s_user@$k8s_host kubectl get pods -o json >$kubectl_pods_json
 if [ ! -e $kubectl_pods_json ]; then
     exit_error "file $kubectl_pods_json not found"
 fi
@@ -475,14 +476,14 @@ echo "Collectors: $collectors"
 
 # Create the tool pods
 echo "Copying tool pod specs to k8s cluster"
-ssh $k8s_host /bin/rm -rf /tmp/tool-pod-specs
-scp -r $tool_pod_specs_dir $k8s_host:/tmp/
+ssh $k8s_user@$k8s_host /bin/rm -rf /tmp/tool-pod-specs
+scp -r $tool_pod_specs_dir $k8s_user@$k8s_host:/tmp/
 echo "Deleting existing pods"
-echo ssh $k8s_host kubectl delete pod $pod_names
-ssh $k8s_host kubectl delete pod $pod_names
+echo ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
+ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
 for this_pod in $pod_names; do
-    echo "Creating pod $this_pod on $k8s_host"
-    ssh $k8s_host kubectl create -f /tmp/tool-pod-specs/$this_pod.json
+    echo "Creating pod $this_pod on $k8s_user@$k8s_host"
+    ssh $k8s_user@$k8s_host kubectl create -f /tmp/tool-pod-specs/$this_pod.json
 done
 
 echo "This endpiont deployed"
@@ -521,7 +522,7 @@ while read line; do
             break
         fi
     done
-done < "$client_server_bench_cmds_dir/client/1"
+done < "$client_server_bench_cmds_dir/client/1/start"
 
 for sub_label in stop-tools send-data script-finish; do
     do_roadblock "collector-$sub_label" "leader" "$collectors"
@@ -532,7 +533,7 @@ done
 for this_pod in $pod_names; do
     echo "Getting logs from pod this_pod"
     this_client_server="`echo $this_pod | sed -e s/^rickshaw-//`.txt"
-    ssh $k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
+    ssh $k8s_user@$k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
 done
 
 for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
