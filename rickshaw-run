@@ -51,6 +51,7 @@ my $bench_schema_file = $rickshaw_project_dir . "/schema/benchmark.json";
 my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
 my $json_validator = 'json-validator';
+my $roadblock_exit_abort = 4;
 
 sub usage {
     print "\nusage:\n\n";
@@ -69,7 +70,7 @@ sub usage {
 sub roadblock_leader {
     if ($use_roadblock) {
         my $uuid = shift;
-        my $uuid_param = " --uuid=" . $run{'run-id'} . ":" . $uuid;
+        my $uuid_param = " --leader-id=controller --uuid=" . $run{'run-id'} . ":" . $uuid;
         my $follower_param = "";
         while (scalar @_ > 0) {
             $follower_param .= " --followers=" . shift;
@@ -82,15 +83,15 @@ sub roadblock_leader {
         debug_log($output);
         debug_log(sprintf "roadblock exit code: %d\n", $rc);
         # Becasue roadblock leader does not exit with right code
-        if ( my $g_output = grep(/Exiting\swith\sabort/, $output) ) {
-            printf "Found \"Exiting with abort:\"\n%s\n", $g_output;
+        if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
+            printf "Found:\n%s\n", $g_output;
+            printf "%s\n", $output;
+            $rc = $roadblock_exit_abort;
+        }
+        if ( my $g_output = grep(/(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)/, $output) ) {
+            printf "Found:\n%s\n", $g_output;
             printf "%s\n", $output;
             $rc = 3;
-        }
-        if ( my $g_output = grep(/The\sroadblock\shas\stimed\sout/, $output) ) {
-            printf "Found \"Exiting with timeout:\"\n%s\n", $g_output;
-            printf "%s\n", $output;
-            $rc = 2;
         }
         printf "Completed roadblock for: %s, return code %d\n", $uuid, $rc;
         return $rc;
@@ -686,9 +687,9 @@ foreach my $cs_type (keys %clients_servers) {
                 } else {
                     die "[ERROR]Could not find " . $cmd_type . " in bench_config\n";
                 }
+            }
             close FH;
             chmod 0755, $this_cmd_file;
-            }
         }
     }
 }
@@ -936,9 +937,10 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     for my $sync_point (qw(server-start client-start client-stop server-stop)) {
         my $rc = roadblock_leader("test-" . $test_id . ":" . $sync_point, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         if ($rc > 0) {
-            if ($rc == 3) {
+            if ($rc == $roadblock_exit_abort) {
                 printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
                 $abort_test_id = $tid;
+                $tid = scalar @tests; # Force break from outer loop
                 last;
             } else {
                 printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
