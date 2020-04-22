@@ -27,16 +27,16 @@ function do_roadblock() {
     local cmd=""
     cmd="$cmd $roadblock_bin --role=follower --redis-server=$roadblock_server"
     cmd="$cmd --timeout=$timeout --redis-password=$roadblock_passwd"
-    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label $extra"
+    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label --leader-id=controller $extra"
     if [ "$use_roadblock" == "1" ]; then
         echo "going to run this roadblock command: $cmd"
         local output=`$cmd 2>&1`
         local rc=$?
-        echo $output
-        if echo $output | grep -q -- "Received abort message from leader"; then
-            rc=3
+        echo -e "$output"
+        if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+            rc=4
         fi
-        if echo $output | grep -q -- "The roadblock has timed out"; then 
+        if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
             exit_error "Roadblock timeout: $output"
         fi
         if [ $rc -gt 0 ]; then
@@ -350,9 +350,9 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     count=0
     if [ -e bench-start-cmds ]; then
         while read line; do
-            bench_start_cmds[$count]=$line
+            bench_start_cmds[$count]="$line"
+            let count=$count+1
         done < bench-start-cmds
-        let "count = $count +1"
     else
         exit_error "bench-start-cmds not found"
     fi
@@ -361,9 +361,9 @@ if [ "$cs_type" == "server" ]; then
     if [ -e bench-stop-cmds ]; then
         count=0
         while read line; do
-            bench_stop_cmds[$count]=$line
+            bench_stop_cmds[$count]="$line"
+            let count=$count+1
         done < bench-stop-cmds
-        let "count = $count +1"
     else
         exit_error "bench-stop-cmds not found"
     fi
@@ -371,11 +371,9 @@ fi
     
 # Run the actual tests by reading the commands file
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
-    #while read line; do
+    echo ${bench_start_cmds[@]}
     len=${#bench_start_cmds[@]}
-    for (( i=0; i<$len; $i++ )); do
-        #iter_samp=`echo $line | awk '{print $1}'`
-        #cmd=`echo $line | sed -e s/^$iter_samp//`
+    for (( i=0; i<$len; i++ )); do
         iter_samp=`echo ${bench_start_cmds[$i]} | awk '{print $1}'`
         start_cmd=`echo ${bench_start_cmds[$i]} | sed -e s/^$iter_samp//`
         if [ "$cs_type" == "server" ]; then
@@ -399,10 +397,10 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             rb_rc=$?
             cmd_rc=0
             echo roadblock $label exit code: $rb_rc
-            if [ $rb_rc -eq 3 ]; then
+            if [ $rb_rc -eq 4 ]; then
                 echo -e "\nAbort exit code from iteration $iter, sample $samp roadblock"
                 echo -e "\nWill not run remaining tests\n"
-                break
+                break 2 # break out of the outer loop
             fi
             if [ $rb_rc -eq 2 ]; then
                 exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
@@ -426,7 +424,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             fi
             if [ $cmd_rc -gt 0 ]; then
                 # An abort message must be sent so the other members know how to procede
-                abort_opt=" --abort 1"
+                abort_opt=" --abort"
                 echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
                 echo -e "\nWill not run remaining tests\n"
             fi

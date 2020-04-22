@@ -51,14 +51,14 @@ function run_roadblock_follower() {
     fi
     echo `date` "Starting roadblock for $uuid"
     local cmd="/usr/bin/roadblock.py --role=follower --redis-server=$host --timeout=300"
-    cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower"
+    cmd="$cmd --redis-password=$passwd --uuid=$uuid --follower-id=$follower --leader-id=controller"
     local output=`$cmd 2>&1`
     local rc=$?
-    if echo $output | grep -q -- "Received abort message from leader"; then
-        rc=3
+    if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+        rc=$roadblock_exit_abort
     fi
-    if echo $output | grep -q -- "The roadblock has timed out"; then
-        rc=2
+    if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+        rc=$roadblock_exit_timeout
     fi
     if [ $rc -gt 0 ]; then
         echo "Roadblock exit code is non-zero: $rc"
@@ -70,6 +70,8 @@ function run_roadblock_follower() {
 echo "#params: $@"
 endpoint_name="local"
 osruntime="builtin" # to be changed to "chroot" when implemented
+roadblock_exit_timeout=3
+roadblock_exit_abort=4
 longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image-id:"
 longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
@@ -359,10 +361,10 @@ while read line; do
                                "$roadblock_id:$sync_label" "$endpoint_label"
         rb_rc=$?
         echo roadblock $sync_label exit code: $rb_rc
-        if [ $rb_rc -eq 3 ]; then
+        if [ $rb_rc -eq $roadblock_exit_abort ]; then
             echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
             echo -e "\nWill not run remaining tests\n"
-            break
+            break 2 # Break out of the outer loop
         fi
         if [ $rb_rc -eq 2 ]; then
             exit_error "Exiting: exit code 2 (timeout) from roadblock iteration $iter, sample $samp"
