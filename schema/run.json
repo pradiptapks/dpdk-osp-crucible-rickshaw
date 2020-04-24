@@ -90,6 +90,6 @@
             "pattern": "^.+$"
         }
     },
-    "required": [ "email", "name", "tags", "run-id", "test-order", "endpoints", "iterations", "benchmark", "rickshaw-run" ],
+    "required": [ "email", "name", "run-id", "test-order", "endpoints", "iterations", "benchmark", "rickshaw-run" ],
     "addtionalProperties": false
 }

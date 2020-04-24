@@ -58,7 +58,8 @@ sub put_json_file {
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            print "errors:\n" . Dumper \@errors;
+            printf "Validation errors for file %s with schema %s:\n" . Dumper \@errors,
+                   $filename, $schema_filename;
             exit 1;
         }
     }
@@ -92,7 +93,8 @@ sub get_json_file {
         $jv->schema($json_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            print "errors:\n" . Dumper \@errors;
+            printf "Validaton errors for file %s with schema %s:\n" . Dumper \@errors,
+                   $filename, $schema_filename;
             exit 1;
         }
     }

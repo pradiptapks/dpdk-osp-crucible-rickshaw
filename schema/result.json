@@ -75,7 +75,7 @@
                                                                 },
                                                                 "name-format": {
                                                                     "type": "string",
-                                                                    "pattern": "^.+$"
+                                                                    "pattern": "^.*$"
                                                                 },
                                                                 "class": {
                                                                     "type": "string",
