@@ -842,8 +842,6 @@ if ($use_workshop) {
         close($fh);
     }
     my $image_md5 = $md5->hexdigest;
-    #my $registry_proj = "atheurer";
-    #my $registry_repo = "crucible";
     my $image_tag = $image_md5;
     my $image_url = $run{'registry-host'} . "/" . $run{'registry-proj'} . "/" .
                     $run{'registry-repo'} . ":" . $image_tag;
@@ -883,59 +881,7 @@ if ($use_workshop) {
             }
         }
     }
-    # TODO: While changing the contents of these files will change the md5sum
-    # and trigger a different/new image name, it is possible that these
-    # requirement files do not change, but the package(s) they request *do* 
-    # get updated.  This needs to be detected and trigger a new image build.
-    # We already do this for "client-server-script" by having it be part of
-    # the md5.  This would be difficult to do for some requirements, especially
-    # things like RPMs with no version (meanwhile the package in the repo
-    # does get updated and we don't detect that).
-    ###my $image_id;
-    # First determine if we need to build a new image
-    ###my $must_rebuild = 0;
-    ###my $image_time;
-    ###my $image_name = "workshop/" . $image_md5;
-    ###my $image_json = `buildah  images --json`;
-    ####my $coder = JSON::XS->new;
-    ###my $image_json_ref = $coder->decode($image_json);
-    ###my @newer_files;
-    ###for (my $i=0; $i< scalar @$image_json_ref ; $i++) {
-        ###if (exists $$image_json_ref[$i]{'names'}[0]) {
-            ###my $name = $$image_json_ref[$i]{'names'}[0];
-            ###printf "name: [%s]\n", $name;
-            ###$name =~ s/[^\/]+\///;
-            ###$name =~ s/:.*//;
-            ###printf "Comparing [%s] to [%s]\n", $image_name, $name;
-            ###if ($name eq $image_name) {
-                ###print "Found existing image\n";
-                ###$image_found = 1;
-                ###$image_id = $$image_json_ref[$i]{'id'};
-                ###$image_time = $$image_json_ref[$i]{'createdatraw'};
-                ###$image_time = `date -d $image_time +%s`;
-                ####for my $file (@files) {
-                    ####if ( file_newer_than($file, $image_time) > 0) {
-                        ####printf "%s is newer than the container image\n", $file;
-                        ####push(@newer_files, $file);
-                        ####$must_rebuild = 1;
-                    ####}
-                ####}
-            ###}
-        ###}
-    ###}
     if (!$image_found) {
-        ###printf "The container image must be rebuilt because:\n";
-        ###if (!$image_found) {
-            ###printf "* the existing container image name [%s] was not found\n", $image_name;
-        ###}
-        ###if ($must_rebuild) {
-            ###printf "* the container image is older than a file that goes in it:\n%s",
-                   ###join('\n', @newer_files);
-        ###}
-        # Build a container image for the clients/servers
-        
-        # Building an image must include requiremetns from rickshaw, one benchmark,
-        # and optionally one or more tools and roadblock.
         # TODO: only build when existing image is not found in registry
         my $workshop_image_id;
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
@@ -967,7 +913,6 @@ if ($use_workshop) {
         my $workshop_ref = $coder->decode($workshop_json);
         $workshop_image_id = $$workshop_ref[0]{'id'};
         printf "workshop image id: %s\n", $workshop_image_id;
-        #my $cmd = "buildah push localhost/workshop/$image_md5 $run{'registry-host'}/crucible/$image_md5:latest";
         my $cmd = "buildah push localhost/workshop/$image_md5 $image_url";
         print $cmd . "\n";
         my $output = `$cmd`;
