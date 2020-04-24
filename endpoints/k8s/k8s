@@ -8,7 +8,7 @@
 #
 # Usage:
 # local [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,o-p,server:n-m,o-p 
-#                    --run-id <id> --base-run-dir --image-id <id>
+#                    --run-id <id> --base-run-dir --image <location>
 #                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
 #
 # If --validate is used all options after client/server will be ignored
@@ -47,6 +47,7 @@ function exit_error() {
 function do_roadblock() {
     local label=$1; shift
     local role=$1; shift
+    local leader=$1; shift
     # followers or members in $@
     if [ -z "$label" ]; then
         exit_error "do_roadblock(): label not defined"
@@ -66,7 +67,7 @@ function do_roadblock() {
     echo "label: $label"
     local uuid="$rb_id:$label"
     local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid"
+    cmd+=" --leader-id=$leader --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid"
     if [ "$role" == "follower" ]; then
         cmd+=" --role follower --follower-id $1"
         echo "follower-id: $1"
@@ -84,11 +85,11 @@ function do_roadblock() {
     fi
     local output=`$cmd 2>&1`
     local rc=$?
-    if echo $output | grep -q -- "Received abort message"; then
-        echo $output
-        rc=3
+
+    if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+        rc=$roadblock_exit_abort
     fi
-    if echo $output | grep -q -- "The roadblock has timed out"; then
+    if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
         exit_error "$output"
     fi
     if [ $rc -gt 0 ]; then
@@ -129,7 +130,7 @@ local pod_json="$dir/$name.json"
             echo "      {" >>$pod_json
         fi
         echo "        \"name\": \"$container_name\"," >>$pod_json
-        echo "        \"image\": \"quay.io/atheurer/workshop-rhubi8_uperf:latest\"," >>$pod_json
+        echo "        \"image\": \"$image\"," >>$pod_json
         echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
         echo "        \"env\": [" >>$pod_json
         echo "          {" >>$pod_json
@@ -190,7 +191,9 @@ local pod_json="$dir/$name.json"
 endpoint_name="k8s"
 tool_collectors="master worker"
 hostname=`hostname`
-longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image-id:"
+roadblock_exit_timeout=3
+roadblock_exit_abort=4
+longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
 longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
@@ -224,9 +227,9 @@ while true; do
             base_run_dir="$1"
             shift;
             ;;
-        --image-id)
+        --image)
             shift;
-            image_id="$1"
+            image="$1"
             shift;
             ;;
         --roadblock-server)
@@ -316,7 +319,7 @@ if [ "$do_validate" == 1 ]; then
         echo "[ERROR]This endpoint does not support servers yet"
         exit 1
     fi
-    #TODO: validate host and user and KUBECONFIG
+    #TODO: validate host and user, KUBECONFIG, and kubectl
     exit
 fi
 
@@ -454,6 +457,7 @@ until [ "$status" == "Running" -o $count -gt 24 -o $abort -gt 0 ]; do
 done
 
 # Figure out which worker nodes are running these pods
+# TODO: Also run tools on masters with collector-type "master"
 ssh $k8s_user@$k8s_host kubectl get pods -o json >$kubectl_pods_json
 if [ ! -e $kubectl_pods_json ]; then
     exit_error "file $kubectl_pods_json not found"
@@ -487,7 +491,7 @@ for this_pod in $pod_names; do
 done
 
 echo "This endpiont deployed"
-do_roadblock "endpoint-deploy" "follower" "$endpoint_label"
+do_roadblock "endpoint-deploy" "follower" "controller" "$endpoint_label"
 
 # The next roadblock does not sync until the controller (rickshaw/leader) finishes a
 # "client/server-finish" sync
@@ -499,8 +503,8 @@ do_roadblock "endpoint-deploy" "follower" "$endpoint_label"
 # to execute all of these tests, it is easier to just participate in the roadblock syncs
 # for all of the tests, then run the endpoint-move-data roadblock sync.
 for sub_label in script-start start-tools; do
-    do_roadblock "collector-$sub_label" "leader" "$collectors"
-    do_roadblock "client-server-$sub_label" "follower" "$endpoint_label"
+    do_roadblock "collector-$sub_label" "leader" "endpoint" "$collectors"
+    do_roadblock "client-server-$sub_label" "follower" "controller" "$endpoint_label"
 done
 
 if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
@@ -513,20 +517,20 @@ while read line; do
     samp=`echo $iter_samp | awk -F- '{print $2}'`
     for sync in server-start client-start client-stop server-stop; do
         label="test-${iter}-${samp}:$sync"
-        do_roadblock "$label" "follower" "$endpoint_label"
+        do_roadblock "$label" "follower" "controller" "$endpoint_label"
         rb_rc=$?
         echo "roadblock $label exit code: $rb_rc"
-        if [ $rb_rc -eq 3 ]; then
+        if [ $rb_rc -eq $roadblock_exit_abort ]; then
             echo -e "\nAbort exit code from iteration $iter, sample $samp"
             echo -e "\nWill not run remaining tests\n"
-            break
+            break 2
         fi
     done
 done < "$client_server_bench_cmds_dir/client/1/start"
 
 for sub_label in stop-tools send-data script-finish; do
-    do_roadblock "collector-$sub_label" "leader" "$collectors"
-    do_roadblock "client-server-$sub_label" "follower" "$endpoint_label"
+    do_roadblock "collector-$sub_label" "leader" "endpoint" "$collectors"
+    do_roadblock "client-server-$sub_label" "follower" "controller" "$endpoint_label"
 done
 
 # Collect the stdout/err from the pods which run the client-server-script)
@@ -537,9 +541,8 @@ for this_pod in $pod_names; do
 done
 
 for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
-    do_roadblock "$label" "follower" "$endpoint_label"
+    do_roadblock "$label" "follower" "controller" "$endpoint_label"
 done
 
 echo "Exiting k8s endpoint script"
 exit 0
-    label=collector-script-finish

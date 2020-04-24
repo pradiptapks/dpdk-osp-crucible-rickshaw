@@ -72,7 +72,7 @@ endpoint_name="local"
 osruntime="builtin" # to be changed to "chroot" when implemented
 roadblock_exit_timeout=3
 roadblock_exit_abort=4
-longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image-id:"
+longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
 longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
@@ -106,9 +106,9 @@ while true; do
             base_run_dir="$1"
             shift;
             ;;
-        --image-id)
+        --image)
             shift;
-            image_id="$1"
+            image="$1"
             shift;
             ;;
         --roadblock-server)
@@ -248,7 +248,7 @@ elif [ "$osruntime" == "chroot" ]; then
         buildah rm $endpoint_label
     fi
     echo "Adding mount for chroot osruntime"
-    container_name=`buildah from --name $endpoint_label $image_id`
+    container_name=`buildah from --name $endpoint_label $image`
     if [ "$container_name" == "$endpoint_label" ]; then
         container_mount=`buildah mount "$container_name"`
         echo "container mount: $container_mount"
@@ -272,13 +272,6 @@ elif [ "$osruntime" == "podman" ]; then
 fi
 
 # For each client and server launch the actual script which will run it.
-
-#TODO: get rid of below and copy any necessary files (like a fio.job) based on the benchamrk json
-pushd $base_run_dir >/dev/null || exit_error "Could not chdir to $base_run_dir"
-find . -mindepth 1 -maxdepth 1 -type f -print | cpio -pdumv "$endpoint_run_dir" 2>&1 || \
-    exit_error "Could not copy files from run dir to $endpoint_run_dir"
-popd >/dev/null
-
 for this_cs_label in ${clients[@]} ${servers[@]}; do
     this_cs_log_file="$client_server_logs_dir/$this_cs_label.txt"
     base_cmd="$client_server_run_script --rickshaw-host=localhost"
@@ -396,5 +389,3 @@ fi
 # At this point the endpoint is "deployed" and can exit
 echo "Exiting local endpoint script"
 exit 0
-
-
