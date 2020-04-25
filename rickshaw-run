@@ -139,7 +139,8 @@ sub put_json_file {
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            print "errors for writing " . $filename . ":\n" . Dumper \@errors;
+            print "Validation errors when writing %s with schema %s:\n" . Dumper \@errors,
+                  $filename, $schema_filename;
             exit 1;
         }
     }
@@ -172,7 +173,10 @@ sub get_json_file {
         close FH;
         $jv->schema($json_text);
         my @errors = $jv->validate($json_ref);
-        print "errors reading " . $filename . ":\n" . Dumper \@errors;
+        if (scalar @errors > 0) {
+            printf "Validation errors when reading %s with schema %s:\n" . Dumper \@errors,
+                   $filename, $schema_filename;
+        }
     }
     return $json_ref;
 }
@@ -198,7 +202,7 @@ sub add_endpoint {
     my $opts = shift;
     my $num = 1;
     for my $entry (@$endpoint_ref) {
-        $num++ if ($$entry{'type'} == $type);
+        $num++ if ($$entry{'type'} eq $type);
     }
     my %endpoint = ( 'type' => $type, 'opts' => $opts, 'label' => $type . "-" . $num);
     push(@$endpoint_ref, \%endpoint);
@@ -239,19 +243,15 @@ sub dir_entries {
 }
 
 # Apply envinronment variables
-print "ENV:\n" . Dumper \%ENV;
 foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REGISTRY_TOKEN RS_REGISTRY_AUTH_FILE
                   RS_REGSITRY_HOST RS_REGISTRY_PROJ RS_REGISTRY_REPO)) {
-    printf "looking for env var: %s\n", $e;
     if (exists $ENV{$e}) {
         my $var = $e;
         $var =~ s/^RS_//;
         $var =~ tr/[A-Z]/[a-z]/;
         $var =~ s/_/\-/g;
-        printf "Found envornment variable: %s, assigning to %s\n", $e, $var;
+        printf "Found envornment variable: %s, assigning \"%s\" to %s\n", $e, $ENV{$e}, $var;
         $run{$var} = $ENV{$e};
-    } else {
-        printf "Did not find %s\n", $e;
     }
 }
 
@@ -611,7 +611,7 @@ for my $collector (keys %collectors) {
         -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
             die "[ERROR]Create collector directory failed: [" . $collector_tool_cmds_dir . "]\n";
         my $tool_cmd_file = $collector_tool_cmds_dir . "/" . $start_stop; 
-        open(TOOL_CMD_FH, ">" . $tool_cmd_file) ||
+        open(my $fh, ">" . $tool_cmd_file) ||
             die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
         debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
         foreach my $tool_entry (@tools_params) {
@@ -621,10 +621,10 @@ for my $collector (keys %collectors) {
                 foreach my $tool_param (@{ $$tool_entry{'params'} }) {
                     $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
                 }
-                printf TOOL_CMD_FH "%s\n", $tool_cmd;
+                printf $fh "%s\n", $tool_cmd;
             }
         }
-        close(TOOL_CMD_FILE);
+        close($fh);
         chmod 0755, $tool_cmd_file;
     }
 }
@@ -845,23 +845,19 @@ if ($use_workshop) {
     my $image_tag = $image_md5;
     my $image_url = $run{'registry-host'} . "/" . $run{'registry-proj'} . "/" .
                     $run{'registry-repo'} . ":" . $image_tag;
-    printf "image url: [%s]\n", $image_url;
     $endpoint_image_opt = " --image=" . $image_url;
-    printf "endpoint_image_opt: %s\n", $endpoint_image_opt;
-    printf "image_md5: %s\n", $image_md5;
     my $image_found = 0;
-    printf "XDG_RUNTIME_DIR: %s\n", $ENV{'XDG_RUNTIME_DIR'};
-    my $cmd = "skopeo inspect docker://" . $image_url;
-    printf "running: %s\n", $cmd;
+    my $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
+    debug_log(sprintf "running: %s\n", $cmd);
     my $output = `$cmd`;
     my $rc = $?;
     if ($rc ==  0) {
-        printf "Image was found at %s:\n", $run{'registry-host'};
-        printf "%s\n", $output;
+        printf "Image was found at %s:\n", $image_url;
+        debug_log(sprintf "%s\n", $output);
         $image_found = 1;
     } else {
-        printf "Image was not found at %s:\n", $run{'registry-host'};
-        printf "%s\n", $output;
+        printf "Image was not found at %s:\n", $image_url;
+        debug_log(sprintf "%s\n", $output);
         printf "Checking for local workhop image\n";
         my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$image_md5"`;
         my $rc = $?;
