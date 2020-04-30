@@ -769,11 +769,11 @@ if ($use_workshop) {
     my %cs_conf = (
                     'workshop' => {
                         'schema' => {
-                            'version' => '2020.03.02'
+                            'version' => '2020.04.30'
                         }
                     },
                     'config' => {
-                        'entrypoint' => "/bin/sh -c /usr/local/bin/client-server-script"
+                        'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
                     }
                   );
     my $cs_req_file = $config_dir . "/cs-req.json";
@@ -842,6 +842,7 @@ if ($use_workshop) {
         close($fh);
     }
     my $image_md5 = $md5->hexdigest;
+    my $workshop_image = $userenv . "_" . $image_md5;
     my $image_tag = $image_md5;
     my $image_url = $run{'registry-host'} . "/" . $run{'registry-proj'} . "/" .
                     $run{'registry-repo'} . ":" . $image_tag;
@@ -859,7 +860,8 @@ if ($use_workshop) {
         printf "Image was not found at %s:\n", $image_url;
         debug_log(sprintf "%s\n", $output);
         printf "Checking for local workhop image\n";
-        my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$image_md5"`;
+        # TODO: get json from buildah and search properly instead of this:
+        my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$workshop_image"`;
         my $rc = $?;
         if ($rc > 0) {
             printf "Local workshop image was also not found:\n";
@@ -867,13 +869,12 @@ if ($use_workshop) {
         } else {
             printf "Found local workshop image\n";
             $image_found = 1;
-            #my $cmd = "buildah push localhost/workshop/$image_md5 $run{'registry-host'}/crucible/$image_md5:latest";
-            my $cmd = "buildah push localhost/workshop/$image_md5 $image_url";
+            my $cmd = "buildah push localhost/workshop/$workshop_image $image_url";
             print $cmd . "\n";
             my $output = `$cmd`;
             my $rc = $?;
             if ($rc > 0) {
-                die "Pushing workshop image localhost/workshop/$image_md5 to $image_url failed";
+                die "Pushing workshop image localhost/workshop/$workshop_image to $image_url failed";
             }
         }
     }
@@ -909,7 +910,7 @@ if ($use_workshop) {
         my $workshop_ref = $coder->decode($workshop_json);
         $workshop_image_id = $$workshop_ref[0]{'id'};
         printf "workshop image id: %s\n", $workshop_image_id;
-        my $cmd = "buildah push localhost/workshop/$image_md5 $image_url";
+        my $cmd = "buildah push localhost/workshop/$workshop_image $image_url";
         print $cmd . "\n";
         my $output = `$cmd`;
         my $rc = $?;
