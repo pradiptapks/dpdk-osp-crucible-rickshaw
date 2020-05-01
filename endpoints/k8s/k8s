@@ -120,6 +120,9 @@ local pod_json="$dir/$name.json"
         echo -e "$nodeSelector," >>$pod_json
     fi
     echo "    \"restartPolicy\": \"Never\"," >>$pod_json
+    echo "    \"hostPID\": true," >>$pod_json
+    echo "    \"hostNetwork\": true", >>$pod_json
+    echo "    \"hostIPC\": true," >>$pod_json
     echo "    \"containers\": [" >>$pod_json
 
     count=0
