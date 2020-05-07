@@ -39,513 +39,334 @@
 # - synchronization of execution
 # - sending tool and benchmark data back to the controller (where this endpoint script runs)
 
-function exit_error() {
-    echo "$1"
+# Source the base file for common functions and config
+this_endpoint_dir=$(dirname `readlink -e $0` | sed -e 'sX/binXX')
+endpoint_base_dir=$(cd $this_endpoint_dir >/dev/null && cd .. && /bin/pwd)
+if [ -e "$endpoint_base_dir/base" ]; then
+    . "$endpoint_base_dir/base"
+else
+    echo "Could not find endpoint source file "$endpoint_base_dir/base", exiting"
     exit 1
-}
-
-function do_roadblock() {
-    local label=$1; shift
-    local role=$1; shift
-    local leader=$1; shift
-    # followers or members in $@
-    if [ -z "$label" ]; then
-        exit_error "do_roadblock(): label not defined"
-    fi
-    if [ -z "$role" ]; then
-        exit_error "do_roadblock(): role not defined"
-    fi
-    if [ -z "$1" ]; then
-        exit_error "do_roadblock(): follower or members not defined"
-    fi
-    if [ $use_rb -eq 0 ]; then
-        echo "Not running roadblock"
-        return 0
-    fi
-    echo `date` "Starting roadblock"
-    echo "role: $role"
-    echo "label: $label"
-    local uuid="$rb_id:$label"
-    local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --leader-id=$leader --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid"
-    if [ "$role" == "follower" ]; then
-        cmd+=" --role follower --follower-id $1"
-        echo "follower-id: $1"
-    elif [ "$role" == "leader" ]; then
-        cmd+=" --role leader --uuid $uuid"
-        local followers=""
-        while [ ! -z $1 ]; do
-            cmd+=" --followers $1"
-            followers+=" $1"
-            shift
-        done
-        echo "followers: $followers"
-    else
-        exit_error "Roadblock role \"$role\" invalid"
-    fi
-    local output=`$cmd 2>&1`
-    local rc=$?
-
-    if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-        rc=$roadblock_exit_abort
-    fi
-    if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
-        exit_error "$output"
-    fi
-    if [ $rc -gt 0 ]; then
-        echo "Roadblock exit code is non-zero: $rc"
-        echo $output
-    fi
-    echo `date` "Completed roadblock for $uuid"
-    echo "output:"
-    echo "$output"
-    return $rc
-}
-
-function build_pod_spec() {
-local name=$1; shift # name of the pod, also the file name with .json appended
-local type=$1; shift # "cs" or "tool"
-local dir=$1; shift # what directory to store the pod spec file
-local container_names=$1; shift # a list of container names for this pod, which is typically the client/server labels
-local pod_json="$dir/$name.json"
-
-    echo "{" >$pod_json
-    echo "  \"apiVersion\": \"v1\"," >>$pod_json
-    echo "  \"kind\": \"Pod\"," >>$pod_json
-    echo "  \"metadata\": {" >>$pod_json
-    echo "    \"name\": \"$name\"" >>$pod_json
-    echo "  }," >>$pod_json
-    echo "  \"spec\": {" >>$pod_json
-    if [ ! -z "$nodeSelector" ]; then
-        echo -e "$nodeSelector," >>$pod_json
-    fi
-    echo "    \"restartPolicy\": \"Never\"," >>$pod_json
-    echo "    \"hostPID\": true," >>$pod_json
-    echo "    \"hostNetwork\": true", >>$pod_json
-    echo "    \"hostIPC\": true," >>$pod_json
-    echo "    \"containers\": [" >>$pod_json
-
-    count=0
-    for container_name in ${container_names}; do
-        if [ $count -gt 0 ]; then
-            echo "      ,{" >>$pod_json
-        else
-            echo "      {" >>$pod_json
-        fi
-        echo "        \"name\": \"$container_name\"," >>$pod_json
-        echo "        \"image\": \"$image\"," >>$pod_json
-        echo "        \"imagePullPolicy\": \"Always\"," >>$pod_json
-        echo "        \"env\": [" >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"rickshaw_host\"," >>$pod_json
-        echo "            \"value\": \"$hostname\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"base_run_dir\"," >>$pod_json
-        echo "            \"value\": \"$base_run_dir\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"cs_label\"," >>$pod_json
-        echo "            \"value\": \"$container_name\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"endpoint_run_dir\"," >>$pod_json
-        echo "            \"value\": \"/endpoint-run\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"roadblock_server\"," >>$pod_json
-        echo "            \"value\": \"$rb_server\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"roadblock_passwd\"," >>$pod_json
-        echo "            \"value\": \"flubber\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"roadblock_id\"," >>$pod_json
-        echo "            \"value\": \"$rb_id\"" >>$pod_json
-        echo "          }," >>$pod_json
-        echo "          {" >>$pod_json
-        echo "            \"name\": \"ssh_id\"," >>$pod_json
-        printf "            \"value\": \"" >>$pod_json
-        sed -z 's/\n/\\n/g' $config_dir/rickshaw_id.rsa >>$pod_json
-        echo "\"" >>$pod_json
-        echo "          }" >>$pod_json
-        echo "        ]" >>$pod_json
-        if [ "$type" == "collector" ]; then
-            echo "        ,\"securityContext\": {" >>$pod_json
-            echo "          \"privileged\": true" >>$pod_json
-            echo "        }" >>$pod_json 
-        else
-            if [ ! -z "$securityConext" ]; then
-                echo -e ",$securityConext" >>$pod_json
-            fi
-            if [ ! -z "$resources" ]; then
-                echo -e ",$resources" >>$pod_json
-            fi
-        fi
-        echo "      }" >>$pod_json
-        let count=$count+1
-    done
-    echo "    ]" >>$pod_json
-    echo "  }" >>$pod_json
-    echo "}" >>$pod_json
-}
-
-endpoint_name="k8s"
-tool_collectors="master worker"
-hostname=`hostname`
-roadblock_exit_timeout=3
-roadblock_exit_abort=4
-longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
-longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:"
-opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
-if [ $? -ne 0 ]; then
-    printf -- "\tUnrecognized option specified\n\n"
-    exit 1
+    exit
 fi
-eval set -- "$opts";
-while true; do
-    case "$1" in
-        --validate)
-            do_validate=1
-            shift;
-            ;;
-        --endpoint-opts)
-            shift;
-            endpoint_opts="$1"
-            shift;
-            ;;
-        --endpoint-label)
-            shift;
-            endpoint_label="$1"
-            shift;
-            ;;
-        --run-id)
-            shift;
-            run_id="$1"
-            shift;
-            ;;
-        --base-run-dir)
-            shift;
-            base_run_dir="$1"
-            shift;
-            ;;
-        --image)
-            shift;
-            image="$1"
-            shift;
-            ;;
-        --roadblock-server)
-            shift;
-            rb_server="$1"
-            shift;
-            ;;
-        --roadblock-passwd)
-            shift;
-            rb_passwd="$1"
-            shift;
-            ;;
-        --roadblock-id)
-            shift;
-            rb_id="$1"
-            shift;
-            ;;
-        --)
-            shift;
-            break;
-           ;;
-        *)
-           exit_error "Unexpected argument [$1]"
-           shift;
-           break;
-           ;;
-    esac
-done
+endpoint_name="k8s"
+# TODO: instead of using a prefix in the pods' names, use a unique k8s project
+pod_prefix="rickshaw"
 
-for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
-    arg=`echo $opt| awk -F: '{print $1}'`
-    val=`echo $opt | awk -F: '{print $2}'`
-    case "$arg" in
-        client|server|clients|servers)
-            for ids in `echo $val | sed -e 's/,/ /'`; do
-                if echo $ids | grep -q -- "-"; then
-                    range=`echo $ids | sed 's/-/ /'`
-                    for j in `seq $range`; do
-                        if [ "$arg" == "clients" -o "$arg" == "client" ]; then
-                            clients[$j]="client-$j"
-                        elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
-                            servers[$j]="server-$j"
-                        fi
-                    done
-                else
-                    if [ "$arg" == "clients" -o "$arg" == "client" ]; then
-                        clients[$ids]="client-$ids"
-                    elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
-                        servers[$ids]="server-$ids"
-                    fi
-                fi
-            done
-            ;;
-        host)
-            k8s_host=$val
-            ;;
-        user)
-            k8s_user=$val
-            ;;
-        nodeSelector)
-            if [ -e $val ]; then
-                nodeSelector=`cat $val`
-            fi
-            ;;
-        securityContext)
-            if [ -e $val ]; then
-                securityContext=`cat $val`
-            fi
-            ;;
-        resources)
-            if [ -e $val ]; then
-                resources=`cat $val`
-            fi
-            ;;
-        *)
-            exit_error "endpoint options $arg not supported"
-            ;;
-    esac
-done
-
-# Validation just returns what clients and servers would be used
-if [ "$do_validate" == 1 ]; then
-    if [ ${#clients[@]} -gt 0 ]; then
-        echo "client ${!clients[@]}"
+function k8s_req_check() {
+    k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
+    if [ -z "$k8s_kubeconfig" ]; then
+        echo "[ERROR]KUBECONFIG on k8s host $k8s_host not defined"
+        exit 1
     fi
+    k8s_kubectl=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host kubectl 2>&1`
+    if [ $? -gt 0 ]; then
+        exit_error "Could not run kubectl on k8s host: $k8s_kubectl"
+    fi
+    # Also exit if asking for servers even in not in --validate
     if [ ${#servers[@]} -gt 0 ]; then
         echo "[ERROR]This endpoint does not support servers yet"
         exit 1
     fi
-    #TODO: validate host and user, KUBECONFIG, and kubectl
-    exit
-fi
-
-# Also exit if asking for servers even in not in --validate
-if [ ${#servers[@]} -gt 0 ]; then
-    echo "[ERROR]This endpoint does not support servers yet"
-    exit 1
-fi
-
-k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
-if [ -z "$k8s_kubeconfig" ]; then
-    echo "[ERROR]KUBECONFIG on k8s host $k8s_host not defined"
-    exit 1
-fi
-k8s_nodes=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host kubectl get nodes`
-echo -e "k8s nodes:\n$k8s_nodes"
-
-
-# Figure out if we run roadblock or not
-if [ -z "$rb_server" -o -z "$rb_passwd" -o -z "$rb_id" ]; then
-    echo "Not using roadblock to synchronize since some or all options were missing"
-    use_rb=0
-    rb_do_exit=0
-    if [ ${#clients[@]} -gt 1 ]; then
-        echo "Refusing to run because roadblock is not being used and number of clients is > 1"
-        rb_do_exit=1
+    # Validation just returns what clients and servers would be used
+    if [ "$do_validate" == 1 ]; then
+        echo_clients_servers
+        exit
     fi
-    if [ ${#servers[@]} -gt 0 ]; then
-        echo "Refusing to run because roadblock is not being used and servers are used"
-        rb_do_exit=1
+}
+
+function process_k8s_opts() {
+    local endpoint_opts="$1"
+    for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+        arg=`echo $opt| awk -F: '{print $1}'`
+        val=`echo $opt | awk -F: '{print $2}'`
+        case "$arg" in
+            client|server|clients|servers)
+                addto_clients_servers "$arg" "$val"
+                ;;
+            host)
+                k8s_host=$val
+                ;;
+            user)
+                k8s_user=$val
+                ;;
+            nodeSelector)
+                if [ -e $val ]; then
+                    nodeSelector=`cat $val`
+                fi
+                ;;
+            securityContext)
+                if [ -e $val ]; then
+                    securityContext=`cat $val`
+                fi
+                ;;
+            resources)
+                if [ -e $val ]; then
+                    resources=`cat $val`
+                fi
+                ;;
+            *)
+                exit_error "endpoint options $arg not supported"
+                ;;
+        esac
+    done
+}
+
+function build_pod_spec() {
+    local name=$1; shift
+    local type=$1; shift
+    local dir=$1; shift
+    local json="$dir/$name.json"
+
+    echo "{" >$json
+    echo "  \"apiVersion\": \"v1\"," >>$json
+    echo "  \"kind\": \"Pod\"," >>$json
+    echo "  \"metadata\": {" >>$json
+    echo "    \"name\": \"$pod_prefix-$name\"" >>$json
+    echo "  }," >>$json
+    echo "  \"spec\": {" >>$json
+    echo "    \"restartPolicy\": \"Never\"," >>$json
+    if [ "$type" == "cs" -a ! -z "$nodeSelector" ]; then
+        echo -e "$nodeSelector," >>$json
     fi
-    if [ "$rb_do_exit" == "1" ]; then
-        exit_error "Exiting do to roadblock/client/server conflict"
+    if [ "$type" == "master-tool" ]; then
+        echo '    "tolerations": [' >>$json
+        echo '        {' >>$json
+        echo '            "key": "node-role.kubernetes.io/master",' >>$json
+        echo '            "effect": "NoSchedule"' >>$json
+        echo '        }' >>$json
+        echo '    ],' >>$json
     fi
-else
-    use_rb=1
-fi
-
-
-# Exit if other reqs are not met
-if [ -z "$run_id" ]; then
-    exit_error "The run ID was not provided"
-fi
-if [ -z "$base_run_dir" ]; then
-    exit_error "--base-run-dir was not provided"
-fi
-if [ ! -d "$base_run_dir" ]; then
-    exit_error "The run directory [$base_run_dir] does not exist"
-fi
-config_dir="$base_run_dir/config"
-client_server_config_dir="$config_dir/client-server"
-client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
-run_dir="$base_run_dir/run"
-client_server_logs_dir="$run_dir/client-server/logs"
-endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
-cs_pod_specs_dir=$endpoint_run_dir/cs-pod-specs
-tool_pod_specs_dir=$endpoint_run_dir/tool-pod-specs
-
-if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
-    exit_error "ssh key file $config_dir/rickshaw_id.rsa was not found"
-fi
-
-mkdir -p $endpoint_run_dir
-mkdir -p $cs_pod_specs_dir
-mkdir -p $tool_pod_specs_dir
-mkdir -p $client_server_logs_dir
-kubectl_nodes_json="$endpoint_run_dir/kubectl-get-nodes.json"
-kubectl_pods_json="$endpoint_run_dir/kubectl-get-pods.json"
-
-# Gather some k8s data
-echo "Getting k8s nodes information"
-ssh $k8s_user@$k8s_host kubectl get nodes -o json >$kubectl_nodes_json
-# Run any tools necessary for "master" and "worker" collectors, as 
-# "master" and "worker" are the only two collector-types k8s endpoint recognizes
-#
-# Identify the workers and masters
-nr_nodes=`jq '.items | length' $kubectl_nodes_json`
-masters=""
-workers=""
-for node in `seq 0 $(expr $nr_nodes - 1)`; do
-    name=`jq '.items['$node'] | .metadata.name' $kubectl_nodes_json`
-    echo "name: $name"
-    if [ "$(jq '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
-        echo "found master"
-        masters="$masters $name"
+    if [ "$type" == "worker-tool" -o "$type" == "master-tool" ]; then
+        echo "    \"nodeSelector\": {" >>$json
+        echo "        \"kubernetes.io/hostname\": \"$name\"" >>$json
+        echo "    }," >>$json
+        echo "    \"hostPID\": true," >>$json
+        echo "    \"hostNetwork\": true", >>$json
+        echo "    \"hostIPC\": true," >>$json
     fi
-    if [ "$(jq '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
-        echo "found worker"
-        workers="$workers $name"
-    fi
-done
-
-# Create the pod spec files
-/bin/rm -rf /tmp/pod-specs
-pod_names=""
-for client in ${clients[@]}; do
-    # By default use one client per pod
-    pod_name="rickshaw-$client"
-    build_pod_spec "$pod_name" "cs" "$cs_pod_specs_dir" "$client"
-    pod_names="$pod_names $pod_name"
-done
-
-# Create the client/server pods
-echo "Copying client/server pod specs to k8s cluster"
-ssh $k8s_user@$k8s_host /bin/rm -rf /tmp/cs-pod-specs
-scp -r $cs_pod_specs_dir $k8s_user@$k8s_host:/tmp/
-echo "Deleting existing pods"
-echo ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
-ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
-for this_pod in $pod_names; do
-    echo "Creating pod $this_pod on $k8s_user@$k8s_host"
-    ssh $k8s_user@$k8s_host kubectl create -f /tmp/cs-pod-specs/$this_pod.json
-done
-
-declare -A pod_status
-for pod in $pod_names; do
-    pod_status["$pod_name"]=""
-done
-count=0
-abort=0
-status=""
-until [ "$status" == "Running" -o $count -gt 24 -o $abort -gt 0 ]; do
-    # TODO: parsing kubectl's json would be more reliable
-    for this_status in `ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep rickshaw | awk '{print $3}'`; do
-        status=$this_status
-        echo "pod status: $status"
-        if [ "$this_status" != "Error" ]; then
-            abort=1
-            break
+    echo "    \"containers\": [" >>$json
+    echo "      {" >>$json
+    echo "        \"name\": \"$name\"," >>$json
+    echo "        \"image\": \"$image\"," >>$json
+    echo "        \"imagePullPolicy\": \"Always\"," >>$json
+    echo "        \"env\": [" >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"rickshaw_host\"," >>$json
+    echo "            \"value\": \"$hostname\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"base_run_dir\"," >>$json
+    echo "            \"value\": \"$base_run_dir\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"cs_label\"," >>$json
+    echo "            \"value\": \"$name\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"endpoint_run_dir\"," >>$json
+    echo "            \"value\": \"/endpoint-run\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"roadblock_server\"," >>$json
+    echo "            \"value\": \"$rb_server\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"roadblock_passwd\"," >>$json
+    echo "            \"value\": \"flubber\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"roadblock_id\"," >>$json
+    echo "            \"value\": \"$rb_id\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"ssh_id\"," >>$json
+    printf "            \"value\": \"" >>$json
+    sed -z 's/\n/\\n/g' $config_dir/rickshaw_id.rsa >>$json
+    echo "\"" >>$json
+    echo "          }" >>$json
+    echo "        ]" >>$json
+    if [ "$type" == "worker-tool" -o "$type" == "master-tool" ]; then
+        echo "        ,\"securityContext\": {" >>$json
+        echo "          \"privileged\": true" >>$json
+        echo "        }" >>$json 
+    else
+        if [ ! -z "$securityConext" ]; then
+            echo -e ",$securityConext" >>$json
         fi
-        if [ "$this_status" != "Running" ]; then
-            break
+        if [ ! -z "$resources" ]; then
+            echo -e ",$resources" >>$json
+        fi
+    fi
+    echo "      }" >>$json
+    let count=$count+1
+    echo "    ]" >>$json
+    echo "  }" >>$json
+    echo "}" >>$json
+}
+
+function create_pods() {
+    local type="$1"; shift
+    local dir="$endpoint_run_dir/$type-pod-objects"
+    local pods=""
+    if [ -z "$*" ]; then
+        exit_error "You must request one or more pods to create"
+    fi
+    mkdir -p "$dir"
+    while [ ! -z "$1" ]; do
+        local name="$1"; shift
+        delete_pods "$name"
+        build_pod_spec "$name" "$type" "$dir"
+        if [ -e "$dir/$name.json" ]; then
+            local create_output=`cat "$dir/$name.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1"`
+            if [ $? -gt 0 ]; then
+                exit_error "Failed to create pod $name"
+            fi
+            pods+=" $name"
+        else
+            exit_error "Could not find $dir/$name.json to create pod: $create_output"
         fi
     done
-done
+    echo "$pods"
+}
 
-# Figure out which worker nodes are running these pods
-# TODO: Also run tools on masters with collector-type "master"
-ssh $k8s_user@$k8s_host kubectl get pods -o json >$kubectl_pods_json
-if [ ! -e $kubectl_pods_json ]; then
-    exit_error "file $kubectl_pods_json not found"
-fi
-pod_workers=`jq -r '.items[] | .metadata.name + " " +  .spec.nodeName' $kubectl_pods_json |\
-             grep ^\rickshaw-client | awk '{print $2}' | sort | uniq`
-echo "worker nodes running client-server pods: $pod_workers"
-count=1
-pod_names=""
-collectors=""
-# Create a tool pod for each worker node that runs client/server pods
-for worker_node in $pod_workers; do
-    pod_name="rickshaw-tool-$count"
-    collector="worker-$count"
-    build_pod_spec "$pod_name" "collector" "$tool_pod_specs_dir" "worker-$count"
-    pod_names+=" $pod_name"
-    collectors+=" $collector"
-done
-echo "Collectors: $collectors"
+function verify_pods_running() {
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    ref1=""
+    local kubectl_get_pods="$endpoint_run_dir/kubectl-get-pods.txt"
+    declare -A unverified_pods
+    declare -A verified_pods
+    if [ -z "$1" ]; then
+        exit_error "You must provide at least 1 pod to verify"
+    fi
+    while [ ! -z "$1" ]; do
+        unverified_pods[$1]=1; shift
+    done
+    local num_pods=${#unverified_pods[@]}
+    local count=0
+    local max_attempts=12
+    local abort=0
+    until [ ${#unverified_pods[@]} -eq 0 -o $count -gt $max_attempts -o $abort -gt 0 ]; do
+        sleep 5
+        ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep $pod_prefix >$kubectl_get_pods
+        while read line; do
+            local this_status=`echo $line | awk '{print $3}'`
+            local this_pod=`echo $line | awk '{print $1}' | sed -e s/^$pod_prefix-//`
+            local node=`echo $line | awk '{print $7}'`
+            if [ "$this_status" == "Error" -a ! -z "${unverified_pods[$this_pod]}" ]; then
+                # If just 1 pod is in error bail immediately
+                abort=1
+                ssh $k8s_user@$k8s_host kubectl describe pod $pod_name >"$endpoint_run_dir/$pod_name.txt"
+                break
+            fi
+            if [ "$this_status" == "Running" -a -z "${verified_pods[$this_pod]}" ]; then
+                verified_pods[$this_pod]="$node"
+                unset unverified_pods[$this_pod]
+            fi
+        done <$kubectl_get_pods
+        let count=$count+1
+    done
+    if [ $abort -eq 1 -o $count -gt $max_attempts ]; then
+        exit_error "Failed to verify pods are running"
+    fi
+    declare -A nodes
+    for i in ${verified_pods[@]}; do
+        nodes[$i]=1
+    done
+    # var is assigned a space-separated list of nodes
+    ref1+=" ${!nodes[@]}"
+}
 
-# Create the tool pods
-echo "Copying tool pod specs to k8s cluster"
-ssh $k8s_user@$k8s_host /bin/rm -rf /tmp/tool-pod-specs
-scp -r $tool_pod_specs_dir $k8s_user@$k8s_host:/tmp/
-echo "Deleting existing pods"
-echo ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
-ssh $k8s_user@$k8s_host kubectl delete pod $pod_names
-for this_pod in $pod_names; do
-    echo "Creating pod $this_pod on $k8s_user@$k8s_host"
-    ssh $k8s_user@$k8s_host kubectl create -f /tmp/tool-pod-specs/$this_pod.json
-done
+function get_pod_logs() {
+    if [ -z "$1" ]; then
+        exit_error "get_pod_logs(): at least 1 pod must be provided"
+    fi
+    while [ ! -z "$1" ]; do
+        local name="$1"; shift
+        echo "Getting logs from pod $name"
+        this_log="`echo $name | sed -e s/^$pod_prefix-//`.txt"
+        ssh $k8s_user@$k8s_host kubectl logs $name >/$client_server_logs_dir/$this_log
+    done
+}
 
-echo "This endpiont deployed"
-do_roadblock "endpoint-deploy" "follower" "controller" "$endpoint_label"
-
-# The next roadblock does not sync until the controller (rickshaw/leader) finishes a
-# "client/server-finish" sync
-
-# The following is for participating in the roadblock syncs for each benchmark execution.
-# The endpoint does not really need to participate in this, but if it does not, it will
-# wait on the next roadblock sync (endpoint-move-data) and likely time out when there are
-# lots of iterations/samples to run.  Rather than trying to predict a good time period
-# to execute all of these tests, it is easier to just participate in the roadblock syncs
-# for all of the tests, then run the endpoint-move-data roadblock sync.
-for sub_label in script-start start-tools; do
-    do_roadblock "collector-$sub_label" "leader" "endpoint" "$collectors"
-    do_roadblock "client-server-$sub_label" "follower" "controller" "$endpoint_label"
-done
-
-if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
-    exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found"
-fi
-# Process the first client's bench-commands to participate in the roadblocks
-while read line; do
-    iter_samp=`echo $line | awk '{print $1}'`
-    iter=`echo $iter_samp | awk -F- '{print $1}'`
-    samp=`echo $iter_samp | awk -F- '{print $2}'`
-    for sync in server-start client-start client-stop server-stop; do
-        label="test-${iter}-${samp}:$sync"
-        do_roadblock "$label" "follower" "controller" "$endpoint_label"
-        rb_rc=$?
-        echo "roadblock $label exit code: $rb_rc"
-        if [ $rb_rc -eq $roadblock_exit_abort ]; then
-            echo -e "\nAbort exit code from iteration $iter, sample $samp"
-            echo -e "\nWill not run remaining tests\n"
-            break 2
+function delete_pods() {
+    if [ -z "$1" ]; then
+        exit_error "delete_pods(): at least 1 pod must be provided"
+    fi
+    while [ ! -z "$1" ]; do
+        local name="$1"; shift
+        local existing_pod="`ssh $k8s_user@$k8s_host kubectl get pods | grep "^$pod_prefix-$name " | awk '{print $1}'`"
+        if [ ! -z "$existing_pod" ]; then
+            local delete_output=`ssh $k8s_user@$k8s_host "kubectl delete pod $existing_pod 2>&1"`
+            if [ $? -gt 0 ]; then
+                exit_error "Error deleting pod $existing_pod: $delete_output"
+            fi
         fi
     done
-done < "$client_server_bench_cmds_dir/client/1/start"
+}
 
-for sub_label in stop-tools send-data script-finish; do
-    do_roadblock "collector-$sub_label" "leader" "endpoint" "$collectors"
-    do_roadblock "client-server-$sub_label" "follower" "controller" "$endpoint_label"
-done
+function delete_old_pods() {
+    local pods=`ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep $pod_prefix | awk '{print $1}' | sed -e s/$pod_prefix-//`
+    if [ ! -z "$pods" ]; then
+        echo "Going to delete these old pods: $pods"
+        delete_pods $pods
+    else
+        echo "No old pods to delete"
+    fi
+}
 
-# Collect the stdout/err from the pods which run the client-server-script)
-for this_pod in $pod_names; do
-    echo "Getting logs from pod this_pod"
-    this_client_server="`echo $this_pod | sed -e s/^rickshaw-//`.txt"
-    ssh $k8s_user@$k8s_host kubectl logs $this_pod >/$client_server_logs_dir/$this_client_server
-done
+function get_k8s_config() {
+    local kubectl_nodes_json="$endpoint_run_dir/kubectl-get-nodes.json"
+    local kubectl_nodes_stderr="$endpoint_run_dir/kubectl-get-nodes.stderr"
+    local k8s_nodes=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host kubectl get nodes`
+    ssh $k8s_user@$k8s_host kubectl get nodes -o json >$kubectl_nodes_json 2>$kubectl_nodes_stderr
+    local nr_nodes=`jq -r '.items | length' $kubectl_nodes_json`
+    local masters=""
+    local workers=""
+    local node=""
+    for node in `seq 0 $(expr $nr_nodes - 1)`; do
+        local name=`jq -r '.items['$node'] | .metadata.name' $kubectl_nodes_json`
+        #if [ "$(jq -r '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
+            #masters="$masters $name"
+        #fi
+        if [ "$(jq -r '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
+            workers="$workers $name"
+        fi
+    done
+    masters=`ssh $k8s_user@$k8s_host kubectl get nodes | grep " master " | grep " Ready " | awk '{print $1}'`
+    echo "$workers" >"$endpoint_run_dir/worker-nodes.txt"
+    echo "$masters" >"$endpoint_run_dir/master-nodes.txt"
+}
 
-for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
-    do_roadblock "$label" "follower" "controller" "$endpoint_label"
-done
-
-echo "Exiting k8s endpoint script"
-exit 0
+process_opts "$@"
+process_k8s_opts "$endpoint_opts"
+init_common_dirs
+k8s_req_check
+base_req_check
+get_k8s_config
+delete_old_pods
+echo "This endpoint to run these clients: ${clients[@]}"
+cs_pods=`create_pods cs ${clients[@]}`
+echo "These client pods were created: $cs_pods"
+verify_pods_running active_worker_nodes $cs_pods
+echo "These nodes are hosting the client-server pods: $active_worker_nodes"
+echo "Working on creating worker-tool pods"
+worker_tool_pods="`create_pods worker-tool $active_worker_nodes`"
+echo "These worker-tool pods were created: $worker_tool_pods"
+verify_pods_running tool_worker_nodes $worker_tool_pods
+echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
+if [ 1 -eq 1 ]; then
+    master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
+    echo "These nodes are masters: $master_nodes"
+    echo "Working on creating these master-tool pods"
+    master_tool_pods="`create_pods master-tool $master_nodes`"
+    echo "These master-tool pods were created: $master_tool_pods"
+    verify_pods_running tool_master_nodes $master_tool_pods
+    echo "These nodes are hosting the master-tool pods: $master_tool_nodes"
+fi
+process_prebench_roadblocks $worker_tool_pods $master_tool_pods
+process_bench_roadblocks
+process_postbench_roadblocks $worker_tool_pods $master_tool_pods
+get_pod_logs $worker_tool_pods $master_tool_pods $cs_pods
+delete_pods $worker_tool_pods $master_tool_pods $cs_pods
+process_final_roadblocks

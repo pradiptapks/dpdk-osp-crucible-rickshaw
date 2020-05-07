@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+
+# Shared init and functions for endpoints
+
+echo "#params: $@"
+hostname=`hostname`
+rb_exit_timeout=3
+rb_exit_abort=4
+declare -A clients
+declare -A servers
+
+function exit_error() {
+    echo "$1"
+    exit 1
+}
+
+function process_opts() {
+    local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
+    local longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:"
+    local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
+    if [ $? -ne 0 ]; then
+        printf -- "\tUnrecognized option specified\n\n"
+        exit 1
+    fi
+    eval set -- "$opts";
+    while true; do
+        case "$1" in
+            --validate)
+                do_validate=1
+                shift;
+                ;;
+            --endpoint-opts)
+                shift;
+                endpoint_opts="$1"
+                shift;
+                ;;
+            --endpoint-label)
+                shift;
+                endpoint_label="$1"
+                shift;
+                ;;
+            --run-id)
+                shift;
+                run_id="$1"
+                shift;
+                ;;
+            --base-run-dir)
+                shift;
+                base_run_dir="$1"
+                shift;
+                ;;
+            --image)
+                shift;
+                image="$1"
+                shift;
+                ;;
+            --roadblock-server)
+                shift;
+                rb_server="$1"
+                cs_rb_opts="$cs_rb_opts --roadblock-server=$rb_server"
+                shift;
+                ;;
+            --roadblock-passwd)
+                shift;
+                rb_passwd="$1"
+                cs_rb_opts="$cs_rb_opts --roadblock-passwd=$rb_passwd"
+                shift;
+                ;;
+            --roadblock-id)
+                shift;
+                rb_id="$1"
+                cs_rb_opts="$cs_rb_opts --roadblock-id=$rb_id"
+                shift;
+                ;;
+            --)
+                shift;
+                break;
+            ;;
+            *)
+            exit_error "Unexpected argument [$1]"
+            shift;
+            break;
+            ;;
+        esac
+    done
+}
+
+function addto_clients_servers() {
+    local arg="$1"; shift
+    local val="$1"; shift
+    for ids in `echo $val | sed -e 's/,/ /'`; do
+        if echo $ids | grep -q -- "-"; then
+            range=`echo $ids | sed 's/-/ /'`
+            for j in `seq $range`; do
+                if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                    clients[$j]="client-$j"
+                elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                    servers[$j]="server-$j"
+                fi
+            done
+        else
+            if [ "$arg" == "clients" -o "$arg" == "client" ]; then
+                clients[$ids]="client-$ids"
+            elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
+                servers[$ids]="server-$ids"
+            fi
+        fi
+    done
+}
+
+function echo_clients_servers() {
+    if [ ${#clients[@]} -gt 0 ]; then
+        echo "client ${!clients[@]}"
+    fi
+    if [ ${#servers[@]} -gt 0 ]; then
+        echo "server ${!servers[@]}"
+    fi
+}
+
+function init_common_dirs() {
+    config_dir="$base_run_dir/config"
+    client_server_config_dir="$config_dir/client-server"
+    client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
+    run_dir="$base_run_dir/run"
+    client_server_logs_dir="$run_dir/client-server/logs"
+    endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
+    client_server_run_script="/usr/local/bin/client-server-script"
+    mkdir -p $endpoint_run_dir
+    mkdir -p $client_server_logs_dir
+}
+
+function base_req_check() {
+    if [ -z "$rb_server" -o -z "$rb_passwd" -o -z "$rb_id" ]; then
+        echo "Not using roadblock to synchronize since some or all options were missing"
+        use_rb=0
+        cs_rb_opts=""
+        rb_do_exit=0
+        if [ ${#clients[@]} -gt 1 ]; then
+            echo "Refusing to run because roadblock is not being used and number of clients is > 1"
+            rb_do_exit=1
+        fi
+        if [ ${#servers[@]} -gt 0 ]; then
+            echo "Refusing to run because roadblock is not being used and servers are used"
+            rb_do_exit=1
+        fi
+        if [ "$rb_do_exit" == "1" ]; then
+            exit_error "Exiting do to roadblock/client/server conflict"
+        fi
+    else
+        use_rb=1
+    fi
+    if [ -z "$run_id" ]; then
+        exit_error "The run ID was not provided"
+    fi
+    if [ -z "$base_run_dir" ]; then
+        exit_error "--base-run-dir was not provided"
+    fi
+    if [ ! -d "$base_run_dir" ]; then
+        exit_error "The run directory [$base_run_dir] does not exist"
+    fi
+    if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
+        exit_error "Could not find $config_dir/rickshaw_id.rsa"
+    fi
+    if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
+        exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found"
+    fi
+}
+
+function do_roadblock() {
+    local label=$1; shift
+    local role=$1; shift
+    ###  followers or members remain in $@  ###
+    if [ -z "$role" ]; then
+        exit_error "do_roadblock(): role not defined"
+    fi
+    if [ $use_rb -eq 0 ]; then
+        echo "Not running roadblock"
+        return 0
+    fi
+    echo `date` "Starting roadblock"
+    echo "role: $role"
+    local uuid="$rb_id:$label"
+    echo "uuid: $uuid"
+    local cmd="/usr/local/bin/roadblock.py"
+    cmd+=" --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid --role=$role"
+    if [ "$role" == "follower" ]; then
+        cmd+=" --leader-id controller --follower-id $endpoint_label"
+    elif [ "$role" == "leader" ]; then
+        if [ -z "$1" ]; then
+            exit_error "do_roadblock(): follower(s) not defined"
+        fi
+        cmd+=" --leader-id endpoint"
+        local followers=""
+        while [ ! -z $1 ]; do
+            cmd+=" --followers $1"
+            followers+=" $1"
+            shift
+        done
+        echo "followers: $followers"
+    else
+        exit_error "Roadblock role \"$role\" invalid"
+    fi
+    local output=`$cmd 2>&1`
+    local rc=$?
+
+    if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+        rc=$rb_exit_abort
+    fi
+    if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+        exit_error "$output"
+    fi
+    if [ $rc -gt 0 ]; then
+        echo "Roadblock exit code is non-zero: $rc"
+        echo $output
+    fi
+    echo `date` "Completed roadblock for $uuid"
+    echo "output:"
+    echo "$output"
+    return $rc
+}
+
+function process_prebench_roadblocks() {
+    do_roadblock "endpoint-deploy" "follower"
+    for sub_label in script-start start-tools; do
+        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+            do_roadblock "collector-$sub_label" "leader" $@
+        fi
+        do_roadblock "client-server-$sub_label" "follower"
+    done
+}
+
+function process_bench_roadblocks() {
+    while read line; do
+        iter_samp=`echo $line | awk '{print $1}'`
+        iter=`echo $iter_samp | awk -F- '{print $1}'`
+        samp=`echo $iter_samp | awk -F- '{print $2}'`
+        for sync in server-start client-start client-stop server-stop; do
+            label="test-${iter}-${samp}:$sync"
+            do_roadblock "$label" "follower"
+            rb_rc=$?
+            echo "roadblock $label exit code: $rb_rc"
+            if [ $rb_rc -eq $rb_exit_abort ]; then
+                echo -e "\nAbort exit code from iteration $iter, sample $samp"
+                echo -e "\nWill not run remaining tests\n"
+                break 2
+            fi
+        done
+    done < "$client_server_bench_cmds_dir/client/1/start"
+    # Process the first client's bench-commands to participate in the roadblocks
+    # What the start or stop command is not important; we just need to know
+    # the number of tests in the right order
+}
+
+function process_postbench_roadblocks() {
+    for sub_label in stop-tools send-data script-finish; do
+        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+            do_roadblock "collector-$sub_label" "leader" $@
+        fi
+        do_roadblock "client-server-$sub_label" "follower"
+    done
+}
+
+function process_final_roadblocks() {
+    for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
+        do_roadblock "$label" "follower"
+    done
+}

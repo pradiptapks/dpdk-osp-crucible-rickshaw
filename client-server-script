@@ -2,6 +2,10 @@
 # -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
+rb_exit_timeout=3
+rb_exit_abort=4
+rb_exit_nonet=5
+
 function exit_error() {
     local message=$1; shift
     local code=$1; shift
@@ -34,11 +38,14 @@ function do_roadblock() {
         local output=`$cmd 2>&1`
         local rc=$?
         echo -e "$output"
-        if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-            rc=4
-        fi
-        if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
-            exit_error "Roadblock timeout: $output"
+        if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
+            rc=rb_exit_nonet
+            exit_error "Roadblock error: $output"
+        elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+            rc=rb_exit_abort
+        elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+            rc=rb_exit_timeout
+            exit_error "Roadblock error: $output"
         fi
         if [ $rc -gt 0 ]; then
             echo "Roadblock exit code is non-zero: $rc"
@@ -398,7 +405,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             rb_rc=$?
             cmd_rc=0
             echo roadblock $label exit code: $rb_rc
-            if [ $rb_rc -eq 4 ]; then
+            if [ $rb_rc -eq $rb_exit_abort ]; then
                 echo -e "\nReceived abort exit code from iteration $iter, sample $samp roadblock"
                 echo -e "\nWill not run remaining tests\n"
                 if [ "$cs_type" == "server" ]; then

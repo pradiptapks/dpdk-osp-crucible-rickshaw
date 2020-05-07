@@ -277,11 +277,8 @@ while (scalar @ARGV > 0) {
     }
     debug_log(sprintf "processing \@ARGV, arg is: [%s], val is: [%s]\n", $arg, $val);
     if ($arg eq "endpoint") {
-        if ($val =~ /^(\w+),(.*)$/) {
-            add_endpoint(\@endpoints, $1, $2);
-        } else {
-            printf "[ERROR]format for --endpoint is not valid: [%s]\n", $arg;
-        }
+        $val =~ /^(\w+),(.*)$/;
+         add_endpoint(\@endpoints, $1, $2);
     } elsif ($arg =~ /^debug$/) {
         $debug = $val;
     } elsif ($arg =~ /^help$/) {
