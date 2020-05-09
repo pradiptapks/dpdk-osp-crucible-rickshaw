@@ -315,14 +315,8 @@ if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
     if ( ! exists $run{'registry-host'} ) {
         die "You must define a container registry (--registry-host) to use workshop"
     }
-    if (exists $run{'registry-token'}) {
-        printf "Attmpting to login to registry with podman:\n";
-        system("podman login -p " . $run{'registry-token'} . " -u unused " . $run{'registry-host'});
-    } elsif (exists $run{'registry-auth-file'}) {
-        printf "Attmpting to login to registry with podman:\n";
-        system("podman login --authfile " . $run{'registry-auth-file'} . " " . $run{'registry-host'});
-    } else {
-        printf "WARNING: you have not logged into a container registry\n";
+    if ( ! exists $run{'registry-auth-file'} ) {
+        die "You must define a container registry (--registry-host) to use workshop"
     }
 }
 
@@ -867,7 +861,7 @@ if ($use_workshop) {
         } else {
             printf "Found local workshop image\n";
             $image_found = 1;
-            my $cmd = "buildah push localhost/workshop/$workshop_image $image_url";
+            my $cmd = "buildah --authfile " . $run{'registry-auth-file'} . " push localhost/workshop/$workshop_image $image_url";
             print $cmd . "\n";
             my $output = `$cmd`;
             my $rc = $?;
