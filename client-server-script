@@ -1,6 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+exec 2>&1
+test -e /etc/profile && . /etc/profile
 
 rb_exit_timeout=3
 rb_exit_abort=4
@@ -116,7 +118,7 @@ function archive_to_controller() {
     while [ $ssh_rc -gt 0 -a $ssh_attempts -lt $max_attempts ]; do
         echo "Trying to tar/ssh fron $src to $rickshaw_host:$dest"
         tar czf - . | ssh \
-                       -o StrictHostKeyChecking=off \
+                       -o StrictHostKeyChecking=no \
                        -o ConnectionAttempts=10 \
                        -i "/tmp/rickshaw_id.rsa" \
                        $rickshaw_host "dd of=$dest"
@@ -138,9 +140,16 @@ echo "client-server-script env:"
 env
 echo "client-server-script params:"
 echo "$@"
-
-version=101
+echo
+echo os-release:
+cat /etc/os-release
+echo
+echo "uname:"
+uname -a
+echo
+version=20200509
 echo "version: $version"
+echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts="${longopts},roadblock-passwd:,roadblock-id:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
