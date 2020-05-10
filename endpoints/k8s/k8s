@@ -284,8 +284,8 @@ function get_pod_logs() {
     while [ ! -z "$1" ]; do
         local name="$1"; shift
         echo "Getting logs from pod $name"
-        this_log="`echo $name | sed -e s/^$pod_prefix-//`.txt"
-        ssh $k8s_user@$k8s_host kubectl logs $name >/$client_server_logs_dir/$this_log
+        pod_name="rickshaw-$name"
+        ssh $k8s_user@$k8s_host kubectl logs $pod_name >/$client_server_logs_dir/$name
     done
 }
 
@@ -333,7 +333,7 @@ function get_k8s_config() {
             workers="$workers $name"
         fi
     done
-    masters=`ssh $k8s_user@$k8s_host kubectl get nodes | grep " master " | grep " Ready " | awk '{print $1}'`
+    masters=`ssh $k8s_user@$k8s_host kubectl get nodes | grep " master " | grep " Ready " | grep -v "SchedulingDisabled" | awk '{print $1}'`
     echo "$workers" >"$endpoint_run_dir/worker-nodes.txt"
     echo "$masters" >"$endpoint_run_dir/master-nodes.txt"
 }

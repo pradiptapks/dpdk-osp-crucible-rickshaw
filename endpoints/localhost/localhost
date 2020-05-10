@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
 # This script implements the 'local' endpoint for rickshaw.  It runs 1 or more
@@ -36,7 +36,7 @@ else
 fi
 
 endpoint_name="local"
-osruntime="builtin" # to be changed to "chroot" when implemented
+osruntime="chroot"
 
 function cleanup_osruntime() {
     if [ "$osruntime" == "chroot" ]; then
@@ -150,10 +150,10 @@ function launch_osruntime() {
             cmd="chroot $container_mount $base_cmd"
             if [ -z "$cs_rb_opts" ]; then
                 # Only when not using roadblock run the client in the foreground
-                $cmd 2>&1 | tee "$this_cs_log_file"
+                $cmd | tee "$this_cs_log_file"
             else
                 echo -e "About to run using nohup:\n$cmd\n"
-                nohup $cmd 2>&1 >"$this_cs_log_file" &
+                nohup $cmd >"$this_cs_log_file" &
             fi
         elif [ "$osruntime" == "podman"]; then
             echo doing podman runtime
