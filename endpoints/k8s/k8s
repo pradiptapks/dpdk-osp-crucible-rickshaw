@@ -52,6 +52,7 @@ fi
 endpoint_name="k8s"
 # TODO: instead of using a prefix in the pods' names, use a unique k8s project
 pod_prefix="rickshaw"
+userenv="rhubi8"
 
 function k8s_req_check() {
     k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
@@ -68,9 +69,10 @@ function k8s_req_check() {
         echo "[ERROR]This endpoint does not support servers yet"
         exit 1
     fi
-    # Validation just returns what clients and servers would be used
+    # Validation returns what clients and servers would be used and the userenv
     if [ "$do_validate" == 1 ]; then
         echo_clients_servers
+        echo "userenv $userenv"
         exit
     fi
 }
@@ -89,6 +91,9 @@ function process_k8s_opts() {
                 ;;
             user)
                 k8s_user=$val
+                ;;
+            userenv)
+                userenv=$val
                 ;;
             nodeSelector)
                 if [ -e $val ]; then
@@ -285,7 +290,7 @@ function get_pod_logs() {
         local name="$1"; shift
         echo "Getting logs from pod $name"
         pod_name="rickshaw-$name"
-        ssh $k8s_user@$k8s_host kubectl logs $pod_name >/$client_server_logs_dir/$name
+        ssh $k8s_user@$k8s_host kubectl logs $pod_name >"$client_server_logs_dir/$name.txt"
     done
 }
 

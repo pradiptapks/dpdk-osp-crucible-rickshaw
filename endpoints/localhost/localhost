@@ -37,6 +37,7 @@ fi
 
 endpoint_name="local"
 osruntime="chroot"
+userenv="rhubi8"
 
 function cleanup_osruntime() {
     if [ "$osruntime" == "chroot" ]; then
@@ -70,6 +71,9 @@ function process_localhost_opts() {
                         ;;
                 esac
                 ;;
+            userenv)
+                userenv=$val
+                ;;
             *)
                 exit_error "endpoint options $arg not supported"
                 ;;
@@ -78,9 +82,10 @@ function process_localhost_opts() {
 }
 
 function localhost_req_check() {
-    # Validation just returns what clients and servers would be used
+    # Validation returns what clients and servers would be used and the userenv
     if [ "$do_validate" == 1 ]; then
         echo_clients_servers
+        echo "userenv $userenv"
         exit
     fi
 }
