@@ -23,12 +23,12 @@ my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str());
 
-my $userenv = "rhubi8";
 my $debug = 0;
 my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
 my @endpoints;
+my %userenvs;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
@@ -39,9 +39,21 @@ my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --ti
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
+my $config_dir;
+my $client_server_config_dir;
+my $client_server_bench_cmds_dir;
+my $tool_cmds_dir;
+my $run_dir;
+my $base_endpoint_run_dir;
+my $client_server_run_dir;
+my $client_server_logs_dir;
+my $client_server_archives_dir;
+my $client_server_run_script;
+my $iterations_dir;
 my $rickshaw_project_dir;
 my $endpoint_roadblock_opt = "";
 my $workshop_roadblock_opt = "";
+my @tools_params;
 {
     # Get the absolute path of the rickshaw project directory
     my $pushd_dir = pushd(dirname($0));
@@ -242,6 +254,185 @@ sub dir_entries {
     return @entries;
 }
 
+sub build_container_image {
+    my $userenv = shift;
+    my $image_url; # What we will return
+    if ($use_workshop) {
+        # First, calculate the image ID, which is a md5sum of all the
+        # image requirementi jsons.
+    
+        # There are potentially several requirement jsons, the first
+        # being the one that defines the req for client-server-scrtipt
+        # and roadblock, below:
+        #
+        # We want to avoid adding content to the image that changes
+        # with each invocation of rickshaw because we want to cache
+        # these images So, we should not include anything
+        # like "client-server-commands" because this changes every time
+        # rickshaw is run.
+        my $cs_conf_file = $config_dir . "/cs-conf.json";
+        my %cs_conf = (
+                        'workshop' => {
+                            'schema' => {
+                                'version' => '2020.04.30'
+                            }
+                        },
+                        'config' => {
+                            'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
+                        }
+                    );
+        my $cs_req_file = $config_dir . "/cs-req.json";
+        my %cs_req = (
+                        'workshop' => {
+                            'schema' => {
+                                'version' => '2020.03.02'
+                            }
+                        },
+                        'userenvs' => [
+                            {
+                                'name' => 'default',
+                                'requirements' => [ 'endpoint-run' ]
+                            }
+                        ],
+                        'requirements' => [
+                            {
+                                'name' => 'endpoint-run',
+                                'type' => 'files',
+                                'files_info' => {
+                                    'files' => [
+                                        {
+                                            #'src' => $client_server_run_script,
+                                            'src' => $rickshaw_project_dir . "/client-server-script",
+                                            'dst' => '/usr/local/bin'
+                                        }
+                                    ]
+                                }
+                            }
+                        ] 
+                    );
+        if ($use_roadblock) {
+            my %rb_req = (  'name' => 'roadblock-client',
+                            'type' => 'files',
+                            'files_info' => {
+                                'files' => [
+                                    {
+                                        'src' => $run{'roadblock-dir'} . "/roadblock.py",
+                                        'dst' => '/usr/local/bin/'
+                                    }
+                                ] 
+                            }
+                        );
+            push(@{ $cs_req{'requirements'} }, \%rb_req);
+            push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
+        }
+        put_json_file($cs_req_file, \%cs_req);
+        put_json_file($cs_conf_file, \%cs_conf);
+    
+        # The rest of the requirements come from the user-environment (base Linux OS),
+        # the benchmark, and tools
+        my @files = ($run{'bench-dir'} . "/workshop.json",
+                    $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
+                    $cs_req_file, $cs_conf_file,
+                    $rickshaw_project_dir . "/client-server-script");
+        foreach my $tool_entry (@tools_params) {
+            push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
+        }
+        my $md5 = Digest::MD5->new;
+        my $coder = JSON::XS->new->canonical;
+        my $js = $coder->encode(\%cs_req);
+        for my $file (@files) {
+            open(my $fh, $file);
+            binmode($fh);
+            $md5->addfile($fh);
+            close($fh);
+        }
+        my $image_md5 = $md5->hexdigest;
+        my $workshop_image = $userenv . "_" . $image_md5;
+        my $image_tag = $image_md5;
+        $image_url = $run{'reg-host'} . "/" . $run{'reg-proj'} . "/" .
+                        $run{'reg-repo'} . ":" . $image_tag;
+        my $image_found = 0;
+        my $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
+        debug_log(sprintf "running: %s\n", $cmd);
+        my $output = `$cmd`;
+        my $rc = $?;
+        if ($rc ==  0) {
+            printf "Image was found at %s:\n", $image_url;
+            debug_log(sprintf "%s\n", $output);
+            $image_found = 1;
+        } else {
+            printf "Image was not found at %s\n", $image_url;
+            debug_log(sprintf "%s\n", $output);
+            printf "Checking for local workhop image\n";
+            # TODO: get json from buildah and search properly instead of this:
+            my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$workshop_image"`;
+            my $rc = $?;
+            if ($rc > 0) {
+                printf "Local workshop image was also not found:\n";
+                printf "%s\n", $output;
+            } else {
+                printf "Found local workshop image\n";
+                $image_found = 1;
+                my $cmd = "buildah --authfile " . $run{'reg-auth-file'} . " push localhost/workshop/$workshop_image $image_url";
+                print $cmd . "\n";
+                my $output = `$cmd`;
+                my $rc = $?;
+                if ($rc > 0) {
+                    die "Pushing workshop image localhost/workshop/$workshop_image to $image_url failed";
+                }
+            }
+        }
+        if (!$image_found) {
+            my $workshop_image_id;
+            my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
+                            #" --label " . $run{'benchmark'} .
+                            " --config " . $cs_conf_file .
+                            " --label " . $image_md5 .
+                            " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
+                            " --requirements " . $run{'bench-dir'} . "/workshop.json" .
+                            " --requirements " . $cs_req_file .
+                            $workshop_roadblock_opt .
+                            " 2>&1"; 
+            foreach my $tool_entry (@tools_params) {
+                $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
+                                $$tool_entry{'tool'} . "/workshop.json ";
+            }
+            printf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_cmd;
+            printf "This may take a few minutes\n";
+            my @workshop_output = `$workshop_cmd`;
+            my $workshop_rc = $?;
+            if ($workshop_rc > 0) {
+                printf "Workshop build failed:\n";
+                sprintf "%s\n", join("", @workshop_output);
+                exit 1;
+            }
+            debug_log(sprintf "%s\n", join("", @workshop_output));
+            # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
+            # actual JSON, find the JSON by starting at the end and scanning backwards
+            my $workshop_json = "";
+            for (my $i = scalar @workshop_output - 1; $i > 0; $i--) {
+                $workshop_json = $workshop_output[$i] . $workshop_json;
+                # Break out if we found all of the JSON
+                # In this case the JSON begins with an array '['
+                last if ($workshop_output[$i] eq "[\n");
+            }
+            my $coder = JSON::XS->new;
+            my $workshop_ref = $coder->decode($workshop_json);
+            $workshop_image_id = $$workshop_ref[0]{'id'};
+            my $buildah_cmd = "buildah push localhost/workshop/$workshop_image $image_url 2>&1";
+            printf "Workshop complete.  Now pushing to container registry with this command:\n\n%s\n", $buildah_cmd;
+            print $buildah_cmd . "\n";
+            my $output = `$buildah_cmd`;
+            my $buildah_rc = $?;
+            if ($buildah_rc > 0) {
+                printf "Pushing workshop image failed:\n%s\n", $output;
+                exit 1;
+            }
+        }
+    }
+    return $image_url;
+}
+
 # Apply envinronment variables
 foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REG_AUTH_FILE
                   RS_REG_HOST RS_REG_PROJ RS_REG_REPO)) {
@@ -355,7 +546,7 @@ exists $run{'tools-dir'} || die "[ERROR]You must use " .
 if (not exists $run{'tool-params'} ) {
     $run{'tool-params'} = $rickshaw_project_dir . "/config/tool-params.json";
 }
-my @tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
+@tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
 my %tools_configs;
 # Load a tool configuration for every tool the user is asking for
 foreach my $tool_entry (@tools_params) {
@@ -386,34 +577,34 @@ for my $dirtype (qw(base-run-dir bench-dir tools-dir)) {
 -e $run{'base-run-dir'} || mkdir($run{'base-run-dir'});
 printf "Base run directory: [%s]\n", $run{'base-run-dir'};
 printf "Bench helper subproject directory: [%s]\n", $run{'bench-dir'};
-my $config_dir = $run{'base-run-dir'} . "/config";
+$config_dir = $run{'base-run-dir'} . "/config";
 mkdir($config_dir);
-my $client_server_config_dir = $config_dir . "/client-server";
+$client_server_config_dir = $config_dir . "/client-server";
 mkdir($client_server_config_dir);
-my $client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
+$client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
 mkdir($client_server_bench_cmds_dir);
-my $tool_cmds_dir = $config_dir . "/tool-cmds";
+$tool_cmds_dir = $config_dir . "/tool-cmds";
 mkdir($tool_cmds_dir);
-my $run_dir = $run{'base-run-dir'} . "/run";
+$run_dir = $run{'base-run-dir'} . "/run";
 mkdir($run_dir);
-my $base_endpoint_run_dir = $run_dir . "/endpoint/";
+$base_endpoint_run_dir = $run_dir . "/endpoint/";
 mkdir($base_endpoint_run_dir);
-my $client_server_run_dir = $run_dir . "/client-server/";
+$client_server_run_dir = $run_dir . "/client-server/";
 mkdir($client_server_run_dir);
-my $client_server_logs_dir = $client_server_run_dir . "/logs/";
+$client_server_logs_dir = $client_server_run_dir . "/logs/";
 mkdir($client_server_logs_dir);
-my $client_server_archives_dir = $client_server_run_dir . "/archives/";
+$client_server_archives_dir = $client_server_run_dir . "/archives/";
 mkdir($client_server_archives_dir);
-my $client_server_run_script = $client_server_config_dir . "/client-server-script";
-my $iterations_dir = $run_dir . "/iterations";
+$client_server_run_script = $client_server_config_dir . "/client-server-script";
+$iterations_dir = $run_dir . "/iterations";
 mkdir($iterations_dir);
 
 # If there are no endpoints, assume 1 endpoint using the 'local' extension
 if (scalar @endpoints == 0) {
     if (exists $bench_config{'client'} and exists $bench_config{'server'}) {
-        add_endpoint(\@endpoints, "local", "client:1,server:1");
+        add_endpoint(\@endpoints, "localhost", "client:1,server:1");
     } else {
-        add_endpoint(\@endpoints, "local", "client:1");
+        add_endpoint(\@endpoints, "localhost", "client:1");
     }
 }
 
@@ -463,6 +654,12 @@ foreach my $endpoint (@endpoints) {
                 $min_id = $id if (! defined $min_id or $id < $min_id);
                 $max_id = $id if (! defined $max_id or $id > $max_id);
             }
+        } elsif ($line =~ /(userenv)\s+(.+)$/) {
+            $$endpoint{'userenv'} = $2;
+            printf "Clients/servers for endpoint %s will have userenv %s\n",
+                   $$endpoint{'label'}, $$endpoint{'userenv'};
+            my %userenv_info = ( 'image' => '' );
+            $userenvs{$$endpoint{'userenv'}} = \%userenv_info;
         } else {
             printf "[ERROR]output from endpoint validation incorrect:\n%s\n", $line;
             exit 1;
@@ -742,181 +939,8 @@ foreach my $cs_type (keys %clients_servers, keys %collectors) {
     close FH;
 }
 
-# Build a new container image if one does not exist or is stale
-my $endpoint_image_opt = "";
-if ($use_workshop) {
-    # First, calculate the image ID, which is a md5sum of all the
-    # image requirementi jsons.
-
-    # There are potentially several requirement jsons, the first
-    # being the one that defines the req for client-server-scrtipt
-    # and roadblock, below:
-    #
-    # We want to avoid adding content to the image that changes
-    # with each invocation of rickshaw because we want to cache
-    # these images So, we should not include anything
-    # like "client-server-commands" because this changes every time
-    # rickshaw is run.
-    my $cs_conf_file = $config_dir . "/cs-conf.json";
-    my %cs_conf = (
-                    'workshop' => {
-                        'schema' => {
-                            'version' => '2020.04.30'
-                        }
-                    },
-                    'config' => {
-                        'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
-                    }
-                  );
-    my $cs_req_file = $config_dir . "/cs-req.json";
-    my %cs_req = (
-                    'workshop' => {
-                        'schema' => {
-                            'version' => '2020.03.02'
-                        }
-                    },
-                    'userenvs' => [
-                        {
-                            'name' => 'default',
-                            'requirements' => [ 'endpoint-run' ]
-                        }
-                    ],
-                    'requirements' => [
-                        {
-                            'name' => 'endpoint-run',
-                            'type' => 'files',
-                            'files_info' => {
-                                'files' => [
-                                    {
-                                        #'src' => $client_server_run_script,
-                                        'src' => $rickshaw_project_dir . "/client-server-script",
-                                        'dst' => '/usr/local/bin'
-                                    }
-                                ]
-                            }
-                        }
-                    ] 
-                );
-    if ($use_roadblock) {
-        my %rb_req = (  'name' => 'roadblock-client',
-                        'type' => 'files',
-                        'files_info' => {
-                            'files' => [
-                                {
-                                    'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                    'dst' => '/usr/local/bin/'
-                                }
-                            ] 
-                        }
-                    );
-        push(@{ $cs_req{'requirements'} }, \%rb_req);
-        push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
-    }
-    put_json_file($cs_req_file, \%cs_req);
-    put_json_file($cs_conf_file, \%cs_conf);
-
-    # The rest of the requirements come from the user-environment (base Linux OS),
-    # the benchmark, and tools
-    my @files = ($run{'bench-dir'} . "/workshop.json",
-                $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
-                $cs_req_file, $cs_conf_file,
-                $rickshaw_project_dir . "/client-server-script");
-    foreach my $tool_entry (@tools_params) {
-        push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
-    }
-    my $md5 = Digest::MD5->new;
-    my $coder = JSON::XS->new->canonical;
-    my $js = $coder->encode(\%cs_req);
-    for my $file (@files) {
-        open(my $fh, $file);
-        binmode($fh);
-        $md5->addfile($fh);
-        close($fh);
-    }
-    my $image_md5 = $md5->hexdigest;
-    my $workshop_image = $userenv . "_" . $image_md5;
-    my $image_tag = $image_md5;
-    my $image_url = $run{'reg-host'} . "/" . $run{'reg-proj'} . "/" .
-                    $run{'reg-repo'} . ":" . $image_tag;
-    $endpoint_image_opt = " --image=" . $image_url;
-    my $image_found = 0;
-    my $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
-    debug_log(sprintf "running: %s\n", $cmd);
-    my $output = `$cmd`;
-    my $rc = $?;
-    if ($rc ==  0) {
-        printf "Image was found at %s:\n", $image_url;
-        debug_log(sprintf "%s\n", $output);
-        $image_found = 1;
-    } else {
-        printf "Image was not found at %s\n", $image_url;
-        debug_log(sprintf "%s\n", $output);
-        printf "Checking for local workhop image\n";
-        # TODO: get json from buildah and search properly instead of this:
-        my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$workshop_image"`;
-        my $rc = $?;
-        if ($rc > 0) {
-            printf "Local workshop image was also not found:\n";
-            printf "%s\n", $output;
-        } else {
-            printf "Found local workshop image\n";
-            $image_found = 1;
-            my $cmd = "buildah --authfile " . $run{'reg-auth-file'} . " push localhost/workshop/$workshop_image $image_url";
-            print $cmd . "\n";
-            my $output = `$cmd`;
-            my $rc = $?;
-            if ($rc > 0) {
-                die "Pushing workshop image localhost/workshop/$workshop_image to $image_url failed";
-            }
-        }
-    }
-    if (!$image_found) {
-        my $workshop_image_id;
-        my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
-                        #" --label " . $run{'benchmark'} .
-                        " --config " . $cs_conf_file .
-                        " --label " . $image_md5 .
-                        " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
-                        " --requirements " . $run{'bench-dir'} . "/workshop.json" .
-                        " --requirements " . $cs_req_file .
-                        $workshop_roadblock_opt .
-                        " 2>&1"; 
-        foreach my $tool_entry (@tools_params) {
-            $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
-                             $$tool_entry{'tool'} . "/workshop.json ";
-        }
-        printf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_cmd;
-        printf "This may take a few minutes\n";
-        my @workshop_output = `$workshop_cmd`;
-        my $workshop_rc = $?;
-        if ($workshop_rc > 0) {
-            printf "Workshop build failed:\n";
-            sprintf "%s\n", join("", @workshop_output);
-            exit 1;
-        }
-        debug_log(sprintf "%s\n", join("", @workshop_output));
-        # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
-        # actual JSON, find the JSON by starting at the end and scanning backwards
-        my $workshop_json = "";
-        for (my $i = scalar @workshop_output - 1; $i > 0; $i--) {
-            $workshop_json = $workshop_output[$i] . $workshop_json;
-            # Break out if we found all of the JSON
-            # In this case the JSON begins with an array '['
-            last if ($workshop_output[$i] eq "[\n");
-        }
-        my $coder = JSON::XS->new;
-        my $workshop_ref = $coder->decode($workshop_json);
-        $workshop_image_id = $$workshop_ref[0]{'id'};
-        my $buildah_cmd = "buildah push localhost/workshop/$workshop_image $image_url 2>&1";
-        printf "Workshop complete.  Now pushing to container registry with this command:\n\n%s\n", $buildah_cmd;
-        print $buildah_cmd . "\n";
-        my $output = `$buildah_cmd`;
-        my $buildah_rc = $?;
-        if ($buildah_rc > 0) {
-            printf "Pushing workshop image failed:\n%s\n", $output;
-            exit 1;
-        }
-    }
+foreach my $userenv (keys %userenvs) {
+    $userenvs{$userenv}{'image'} = build_container_image($userenv);
 }
 
 # Create temporary ssh keys so endpoint clients/servers can pull/push data
@@ -932,6 +956,11 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
     my $type = $endpoints[$i]{'type'};
     my $opts = $endpoints[$i]{'opts'};
     my $label = $endpoints[$i]{'label'};
+    my $userenv = $endpoints[$i]{'userenv'};
+    my $endpoint_image_opt;
+    if (defined $endpoints[$i]{'userenv'}) {
+        $endpoint_image_opt = " --image=$userenvs{$endpoints[$i]{'userenv'}}{'image'}";
+    }
     my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $label;
     mkdir($this_endpoint_run_dir);
     die "Could not create $this_endpoint_run_dir" if ! -e $this_endpoint_run_dir;
