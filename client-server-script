@@ -41,12 +41,12 @@ function do_roadblock() {
         local rc=$?
         echo -e "$output"
         if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
-            rc=rb_exit_nonet
+            rc=$rb_exit_nonet
             exit_error "Roadblock error: $output"
         elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-            rc=rb_exit_abort
+            rc=$rb_exit_abort
         elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
-            rc=rb_exit_timeout
+            rc=$rb_exit_timeout
             exit_error "Roadblock error: $output"
         fi
         if [ $rc -gt 0 ]; then
