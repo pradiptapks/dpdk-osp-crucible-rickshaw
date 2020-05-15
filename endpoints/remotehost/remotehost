@@ -1,0 +1,207 @@
+#!/bin/bash
+
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+
+# This script implements the 'remotehost' endpoint for rickshaw.  It runs 1 or more
+# clients and servers for as many benchmark interations/samples as required
+# for a single invocation of rickshaw.
+# 
+#
+# Usage: (as called by rickshaw-run)
+#
+# remotehost
+# [--validate]
+# --endpoint-label
+# --run-id
+# --base-run-dir
+# --image
+# --roadblock-server
+# --roadblock-id
+# --roadblock-passwd
+# --endpoint-opts=client:n-m,o-p,server:n-m,o-p,host:<remote-host>,userenv:<distro>
+#
+# Note: When specifying a remotehost endpoint on an invocation of rickshaw-run
+# (or crucible run <benchmark>) the following format is used:
+#
+# --endpoint remotehost,client:<range>,server:<range>,host:<remote-hostname>
+#
+# and the remaining options are handled by rickshaw-run
+#
+# If --validate is used all options after client/server will be ignored
+
+this_endpoint_dir=$(dirname `readlink -e $0` | sed -e 'sX/binXX')
+endpoint_base_dir=$(cd $this_endpoint_dir >/dev/null && cd .. && /bin/pwd)
+if [ -e "$endpoint_base_dir/base" ]; then
+    . "$endpoint_base_dir/base"
+else
+    echo "Could not find endpoint source file "$endpoint_base_dir/base", exiting"
+    exit 1
+    exit
+fi
+
+endpoint_name="remotehost"
+osruntime="chroot"
+userenv="rhubi8"
+
+function ssh_cmd() {
+    local user_host=$1; shift
+    ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=no $user_host $@
+}
+
+function scp_cmd() {
+    scp -o StrictHostKeyChecking=no -o PasswordAuthentication=no "$1" "$2"
+}
+
+function cleanup_osruntime() {
+    echo "doing cleanup"
+    if [ "$osruntime" == "chroot" ]; then
+        for fs in dev proc sys; do
+            ssh_cmd root@$host umount $container_mount/$fs
+        done
+        echo "Removing mount $container_name for chroot osruntime"
+        ssh_cmd root@$host buildah unmount "$container_name"
+        echo "Removing container $container_name for chroot runtime"
+        ssh_cmd root@$host buildah rm "$container_name"
+    fi
+}
+
+function process_remotehost_opts() {
+    local endpoint_opts="$1"
+    local this_opt=""
+    for this_opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+        local arg=`echo $this_opt | awk -F: '{print $1}'`
+        local val=`echo $this_opt | awk -F: '{print $2}'`
+        case "$arg" in
+            client|server|clients|servers)
+                addto_clients_servers "$arg" "$val"
+                ;;
+            osruntime)
+                case "$val" in
+                    builtin|chroot|podman)
+                        osruntime=$val
+                        ;;
+                    *)
+                        exit_error "osruntime $val not supported"
+                        ;;
+                esac
+                ;;
+            userenv)
+                userenv=$val
+                ;;
+            host)
+                host=$val
+                ;;
+            *)
+                exit_error "endpoint options $arg not supported"
+                ;;
+        esac
+    done
+}
+
+function remotehost_req_check() {
+    ssh_cmd root@$host uptime >/dev/null || exit_error "Could not ssh to $host"
+    if [ "$osruntime" == "chroot" ]; then
+        ssh_cmd root@$host buildah --version >/dev/null 2>&1 ||\
+            ssh_cmd root@$host yum install -y buildah >/dev/null 2>&1 ||\
+              exit 1
+    elif [ "$osruntime" == "podman" ]; then
+        ssh_cmd root@$host podman --version >/dev/null 2>&1 ||\
+            ssh_cmd root@$host yum install -y podman >/dev/null 2>&1 ||\
+                exit 1
+    else # Unsupported osruntime
+        exit 1
+    fi
+    # Validation returns what clients and servers would be used and the userenv
+    if [ "$do_validate" == 1 ]; then
+        echo_clients_servers
+        echo "userenv $userenv"
+        exit
+    fi
+}
+
+function launch_osruntime() {
+    echo osruntime: $osruntime
+    if [ "$osruntime" == "chroot" ]; then
+        # Delete old container if there is one
+        existing_container=`ssh_cmd root@$host buildah containers --format "{{.ContainerName}}" | grep $endpoint_label`
+        if [ ! -z "$existing_container" ]; then
+            ssh_cmd root@$host buildah rm $endpoint_label
+        fi
+        echo "Adding mount for chroot osruntime"
+        container_name=`ssh_cmd root@$host buildah from --name $endpoint_label $image`
+        if [ "$container_name" == "$endpoint_label" ]; then
+            container_mount=`ssh_cmd root@$host buildah mount "$container_name"`
+            echo "container mount: $container_mount"
+            for fs in dev proc sys; do
+                ssh_cmd root@$host mount --verbose --options bind /$fs $container_mount/$fs
+            done
+            endpoint_run_dir=$container_mount/endpoint-run
+            # for chroot osruntime we can also simply copy the ssh key
+            scp_cmd "$config_dir/rickshaw_id.rsa" "root@$host:$container_mount/tmp/rickshaw_id.rsa"
+            scp_cmd /etc/hosts "root@$host:$container_mount/etc/"
+            scp_cmd /etc/resolv.conf "root@$host:$container_mount/etc/"
+        fi
+    elif [ "$osruntime" == "podman" ]; then
+        echo "Creating container for podman osruntime"
+        # Delete old container if there is one
+        #existing_container=`buildah containers --format "{{.ContainerName}}" | grep $endpoint_label`
+        #if [ ! -z "$existing_container" ]; then
+            #buildah rm $endpoint_label
+        #fi
+        # Need to add ssh key with volume mapping
+    fi
+
+    # For each client and server launch the actual script which will run it.
+    ssh_cmd root@$host /bin/mkdir -p $client_server_logs_dir
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        this_cs_log_file="$client_server_logs_dir/$this_cs_label.txt"
+        base_cmd="$client_server_run_script --rickshaw-host=$hostname"
+        base_cmd="$base_cmd --endpoint-run-dir=$endpoint_run_dir --cs-label=$this_cs_label $cs_rb_opts"
+        base_cmd="$base_cmd --base-run-dir=$base_run_dir"
+        if [ "$osruntime" == "chroot" ]; then
+            echo "using chroot"
+            # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
+            # Same will be true for running podman
+            cmd="chroot $container_mount $base_cmd"
+            echo -e "About to run using nohup:\n$cmd\n"
+            ssh_cmd root@$host "nohup $cmd >$this_cs_log_file &"
+        elif [ "$osruntime" == "podman"]; then
+            echo doing podman runtime
+        fi
+    done
+    echo "This endpiont deployed"
+}
+
+function get_remotehost_logs() {
+    mkdir -p "$client_server_logs_dir"
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        this_cs_log_file="$client_server_logs_dir/$this_cs_label.txt"
+        scp_cmd "root@$host:$this_cs_log_file" "$this_cs_log_file"
+    done
+}
+
+process_opts $@
+process_remotehost_opts $endpoint_opts
+init_common_dirs
+remotehost_req_check
+base_req_check
+launch_osruntime
+process_prebench_roadblocks
+process_bench_roadblocks
+process_postbench_roadblocks
+get_remotehost_logs
+cleanup_osruntime
+process_final_roadblocks
+
+process_opts $@
+process_remotehost_opts $endpoint_opts
+init_common_dirs
+remotehost_req_check
+base_req_check
+launch_osruntime
+process_prebench_roadblocks
+process_bench_roadblocks
+process_postbench_roadblocks
+get_remotehost_logs
+cleanup_osruntime
+process_final_roadblocks
