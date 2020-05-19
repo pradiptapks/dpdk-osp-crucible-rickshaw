@@ -7,6 +7,7 @@ test -e /etc/profile && . /etc/profile
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
+default_timeout=60
 
 function exit_error() {
     local message=$1; shift
@@ -31,10 +32,11 @@ function do_roadblock() {
     if [ -z "$timeout" ]; then
         exit_error "[ERROR]do_roadblock() timeout not provided"
     fi
+    local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd=""
     cmd="$cmd $roadblock_bin --role=follower --redis-server=$roadblock_server"
     cmd="$cmd --leader-id=$leader --timeout=$timeout --redis-password=$roadblock_passwd"
-    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label $extra"
+    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label --message-log=$msgs_file $extra"
     if [ "$use_roadblock" == "1" ]; then
         echo "going to run this roadblock command: $cmd"
         local output=`$cmd 2>&1`
@@ -53,6 +55,10 @@ function do_roadblock() {
             echo "Roadblock exit code is non-zero: $rc"
         fi
         return $rc
+    fi
+    if [ -f roadblock-messages ]; then
+        echo "messages from roadblock:"
+        cat roadblock-messages
     fi
     return 0
 }
@@ -224,8 +230,10 @@ cs_dir="`mktemp -d`"
 echo "cs_dir: $cs_dir"
 tool_start_cmds="$cs_dir/tool-start"
 tool_stop_cmds="$cs_dir/tool-stop"
+roadblock_msgs_dir="$cs_dir/roadblock-msgs"
 cs_type=`echo $cs_label | awk -F- '{print $1}'`
 cs_id=`echo $cs_label | awk -F- '{print $2}'`
+mkdir -p "$roadblock_msgs_dir"
 
 # Directories on the controller
 config_dir="$base_run_dir/config"
@@ -264,10 +272,10 @@ pushd "$cs_dir" >/dev/null || exit_error "Could not chdir to $cs_dir"
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-script-start
-    do_roadblock $label "controller" 300
+    do_roadblock $label "controller" $default_timeout
 else
     label=collector-script-start
-    do_roadblock $label "endpoint" 300
+    do_roadblock $label "endpoint" $default_timeout
 fi
 
 ssh_id_file="/tmp/rickshaw_id.rsa"
@@ -317,6 +325,9 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     if [ ! -e "bench-start-cmds" ]; then
         exit_error "bench cmds file bench-start-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`"
     fi
+    if [ "$cs_type" == "client" -a "$cs_id" == "1" ]; then
+        scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/runtime" "bench-runtime-cmds"
+    fi
     if [ "$cs_type" == "server" ]; then
         scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds"
         if [ ! -e "bench-stop-cmds" ]; then
@@ -334,13 +345,13 @@ fi
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     # Regular clients/servers sync with the controller before starting tools
     label=client-server-start-tools
-    do_roadblock $label "controller" 300
+    do_roadblock $label "controller" $default_timeout
 else
     # Non client/servers, "collectors", sync with the endpoint that created them
     # because the controller does not know how many collectors there are, but
     # the endpoint does.
     label=collector-start-tools
-    do_roadblock $label "endpoint" 300
+    do_roadblock $label "endpoint" $default_timeout
 fi
 
 for this_tool_cmds in "$tool_start_cmds" "$tool_stop_cmds"; do
@@ -360,6 +371,7 @@ while read line; do
 done <"$tool_start_cmds"
 popd >/dev/null
 
+declare -A bench_runtime_cmds
 declare -A bench_start_cmds
 declare -A bench_stop_cmds
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
@@ -371,6 +383,13 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         done < bench-start-cmds
     else
         exit_error "bench-start-cmds not found"
+    fi
+    count=0
+    if [ -e bench-runtime-cmds -a "$cs_id" == 1 ]; then
+        while read line; do
+            bench_runtime_cmds[$count]="$line"
+            let count=$count+1
+        done < bench-runtime-cmds
     fi
 fi
 if [ "$cs_type" == "server" ]; then
@@ -385,12 +404,15 @@ if [ "$cs_type" == "server" ]; then
     fi
 fi
     
+abort_opt=""
 # Run the actual tests by processing the commands array
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
+    timeout=$default_timeout
     len=${#bench_start_cmds[@]}
     for (( i=0; i<$len; i++ )); do
         iter_samp=`echo ${bench_start_cmds[$i]} | awk '{print $1}'`
         start_cmd=`echo ${bench_start_cmds[$i]} | sed -e s/^$iter_samp//`
+        runtime_cmd=`echo ${bench_runtime_cmds[$i]} | sed -e s/^$iter_samp//`
         if [ "$cs_type" == "server" ]; then
             stop_cmd=`echo ${bench_stop_cmds[$i]} | sed -e s/^$iter_samp//`
         fi
@@ -410,7 +432,25 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         echo PWD: `/bin/pwd`
         for sync in server-start client-start client-stop server-stop; do
             label="test-${iter}-${samp}:$sync"
-            do_roadblock "$label" "controller" 300 "$abort_opt"
+            msgs_file="$roadblock_msgs_dir/$label.json"
+            this_timeout=$default_timeout
+            if [ ! -z "$runtime_cmd" -a "$sync" == "client-start" -a "$cs_id" == "1" -a "$abort_opt" == "" ]; then
+                user_message_opt=""
+                # Get estimated runtime if possible and send to everyone else
+                echo "going to run this command to get the runtime: $runtime_cmd"
+                runtime=`$runtime_cmd`
+                if [ $? -eq 0  -a ! -z "$runtime" ]; then
+                    # Add 30 seconds to benchmark runtime to give
+                    # enough time for everyone to call roadblock
+                    let this_timeout=$runtime+30
+                    user_json_file="`mktemp`"
+                    echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}]' >"$user_json_file"
+                    user_message_opt=" --user-messages=$user_json_file"
+                fi
+                do_roadblock "$label" "controller" $timeout "$user_message_opt"
+            else
+                do_roadblock "$label" "controller" $timeout "$abort_opt"
+            fi
             rb_rc=$?
             cmd_rc=0
             echo roadblock $label exit code: $rb_rc
@@ -426,6 +466,21 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             fi
             if [ $rb_rc -eq 2 ]; then
                 exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
+            fi
+            timeout=$default_timeout
+            if [ -f $msgs_file ]; then
+                echo "FOUND message file: $msgs_file"
+                next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
+                echo "messages-json:"
+                cat $msgs_file
+                echo "output from filtered jq:"
+                echo "$next_timeout"
+                echo "output from jq:"
+                jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file
+                if [ ! -z "$next_timeout" ]; then
+                    echo "Applying timeout value of $next_timeout to next roadblock sync"
+                    timeout=$next_timeout
+                fi
             fi
             # These combinations don't run a command:
             #  sync=server-start & cs_type=client
@@ -463,13 +518,13 @@ fi
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-stop-tools
-    do_roadblock $label "controller" 300
+    do_roadblock $label "controller" $default_timeout
     echo -e "\nClients/servers stopping tools"
 else
     # Sync with your *endpoint* for collector tools because the contoller
     # does not determine and does not know what tool collectors there may be
     label=collector-stop-tools
-    do_roadblock $label "endpoint" 300
+    do_roadblock $label "endpoint" $default_timeout
     echo -e "\nCollectors stopping tools"
 fi
 pushd tool-data >/dev/null
@@ -484,27 +539,27 @@ popd >/dev/null
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-send-data
-    do_roadblock $label "controller" 300
+    do_roadblock $label "controller" $default_timeout
     echo -e "\nClients/servers copying data back to controller"
 else
     # Same as collector-stop-tools, sync with endpoint
     label=collector-send-data
-    do_roadblock $label "endpoint" 300
+    do_roadblock $label "endpoint" $default_timeout
     echo -e "\nCollectors copying data back to controller"
 fi
 
 # Send all of the test data to the controller and remove local data
 archive_to_controller "$ssh_id_file" "$cs_dir" "$archives_dir/$cs_label-data.tgz"
-/bin/rm -rf $cs_dir
 
 popd >/dev/null
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-script-finish
-    do_roadblock $label "controller" 300
+    do_roadblock $label "controller" $default_timeout
     echo -e "\nAll client/server scripts are finished"
 else
     # Same as collector-stop-tools, sync with endpoint
     label=collector-script-finish
-    do_roadblock $label "endpoint" 300
+    do_roadblock $label "endpoint" $default_timeout
     echo -e "\nAll collector scripts are finished"
 fi
+/bin/rm -rf $cs_dir

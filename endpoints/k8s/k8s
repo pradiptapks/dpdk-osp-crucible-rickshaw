@@ -103,6 +103,8 @@ function process_k8s_opts() {
             securityContext)
                 if [ -e $val ]; then
                     securityContext=`cat $val`
+                else
+                    exit_error "Could not find securityContext file $securityContext"
                 fi
                 ;;
             resources)
@@ -196,8 +198,8 @@ function build_pod_spec() {
         echo "          \"privileged\": true" >>$json
         echo "        }" >>$json 
     else
-        if [ ! -z "$securityConext" ]; then
-            echo -e ",$securityConext" >>$json
+        if [ ! -z "$securityContext" ]; then
+            echo -e ",$securityContext" >>$json
         fi
         if [ ! -z "$resources" ]; then
             echo -e ",$resources" >>$json
@@ -223,7 +225,8 @@ function create_pods() {
         delete_pods "$name"
         build_pod_spec "$name" "$type" "$dir"
         if [ -e "$dir/$name.json" ]; then
-            local create_output=`cat "$dir/$name.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1"`
+            # TODO: the exit code does not work here, need to find a way to have it work
+            cat "$dir/$name.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$name.txt"
             if [ $? -gt 0 ]; then
                 exit_error "Failed to create pod $name"
             fi
@@ -232,6 +235,7 @@ function create_pods() {
             exit_error "Could not find $dir/$name.json to create pod: $create_output"
         fi
     done
+    ssh $k8s_user@$k8s_host kubectl get pods 2>&1 >"$endpoint_run_dir/post-create-get-pods.txt"
     echo "$pods"
 }
 
@@ -254,14 +258,24 @@ function verify_pods_running() {
     until [ ${#unverified_pods[@]} -eq 0 -o $count -gt $max_attempts -o $abort -gt 0 ]; do
         sleep 5
         ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep $pod_prefix >$kubectl_get_pods
+        rc=$?
+        if [ $rc -gt 0 ]; then
+            exit_error "kubectl get pods returns non-zero, exiting"
+        fi
+        echo "kubectl get pods:"
+        cat $kubectl_get_pods
         while read line; do
+            echo "got this line: $line"
             local this_status=`echo $line | awk '{print $3}'`
             local this_pod=`echo $line | awk '{print $1}' | sed -e s/^$pod_prefix-//`
             local node=`echo $line | awk '{print $7}'`
-            if [ "$this_status" == "Error" -a ! -z "${unverified_pods[$this_pod]}" ]; then
+            #if [ "$this_status" == "Error" -a ! -z "${unverified_pods[$this_pod]}" ]; then
+            if echo "$this_status" | grep -q -i error; then
                 # If just 1 pod is in error bail immediately
                 abort=1
-                ssh $k8s_user@$k8s_host kubectl describe pod $pod_name >"$endpoint_run_dir/$pod_name.txt"
+                echo "Pod $this_pod has this error: $this_status"
+                echo "Getting 'describe pod' for $pod_prefix-$this_pod"
+                ssh $k8s_user@$k8s_host kubectl describe pod $pod_prefix-$this_pod >"$endpoint_run_dir/kubectl-describe-pod-$this_pod.txt"
                 break
             fi
             if [ "$this_status" == "Running" -a -z "${verified_pods[$this_pod]}" ]; then
@@ -272,6 +286,8 @@ function verify_pods_running() {
         let count=$count+1
     done
     if [ $abort -eq 1 -o $count -gt $max_attempts ]; then
+        #TODO: send abort signal for endpoint-deploy roadblock
+        echo "abort: $abort count: $count"
         exit_error "Failed to verify pods are running"
     fi
     declare -A nodes

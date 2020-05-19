@@ -34,10 +34,12 @@ my %run; # A multi-dimensional, nested hash, schema TBD
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
+my $messages_ref;
+my $default_rb_timeout = 60;
 chomp (my $hostname = `hostname`);
-my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost --timeout=300" .
+my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
-my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost --timeout=300" .
+my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
 my $config_dir;
 my $client_server_config_dir;
@@ -51,6 +53,7 @@ my $client_server_archives_dir;
 my $client_server_run_script;
 my $iterations_dir;
 my $rickshaw_project_dir;
+my $roadblock_msgs_dir;
 my $endpoint_roadblock_opt = "";
 my $workshop_roadblock_opt = "";
 my @tools_params;
@@ -62,8 +65,9 @@ my @tools_params;
 my $bench_schema_file = $rickshaw_project_dir . "/schema/benchmark.json";
 my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
-#my $json_validator = 'json-validator';
+my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
+my $roadblock_exit_nofile = 5;
 
 sub usage {
     print "\nusage:\n\n";
@@ -81,14 +85,24 @@ sub usage {
 
 sub roadblock_leader {
     if ($use_roadblock) {
-        my $uuid = shift;
-        my $uuid_param = " --leader-id=controller --uuid=" . $run{'run-id'} . ":" . $uuid;
+        my $label = shift;
+        my $timeout = shift;
+        #my $msgs_json_ref = shift;
+        # save $_[0] for by ref later to store json ref
         my $follower_param = "";
-        while (scalar @_ > 0) {
-            $follower_param .= " --followers=" . shift;
+        for (my $i=1; $i < scalar @_; $i++) {
+        #while (scalar @_ > 0) {
+            #$follower_param .= " --followers=" . shift;
+            $follower_param .= " --followers=" . $_[$i];
         }
-        printf "Running roadblock for: %s\n", $uuid;
-        my $cmd = $base_rb_leader_cmd . $uuid_param . $follower_param;
+        my $msgs_file = $roadblock_msgs_dir . "/" . $label . ".json";
+        printf "Running roadblock for: %s\n", $label;
+        my $cmd = $base_rb_leader_cmd .
+                  " --leader-id=controller" .
+                  " --uuid=" . $run{'run-id'} . ":" . $label .
+                  " --timeout=" . $timeout .
+                  " --message-log=" . $msgs_file .
+                  $follower_param;
         debug_log(sprintf "roadblock leader command:%s\n", $cmd);
         my $output = `$cmd`;
         my $rc = $? & 127;
@@ -103,9 +117,18 @@ sub roadblock_leader {
         if ( my $g_output = grep(/(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)/, $output) ) {
             printf "Found:\n%s\n", $g_output;
             printf "%s\n", $output;
-            $rc = 3;
+            $rc = $roadblock_exit_timeout;
         }
-        printf "Completed roadblock for: %s, return code %d\n", $uuid, $rc;
+        if ( my $g_output = grep(/(Could\snot\sopen\smessage\slog)/, $output) ) {
+            printf "Found:\n%s\n", $g_output;
+            printf "%s\n", $output;
+            $rc = $roadblock_exit_nofile;
+        }
+        printf "Completed roadblock for: %s, return code %d\n", $label, $rc;
+        #$msgs_json_ref = get_json_file($msgs_file);
+        $_[0] = get_json_file($msgs_file);
+        #my $coder = JSON::XS->new->canonical->pretty;
+        #debug_log($coder->encode($msgs_json_ref));
         return $rc;
     } else {
         return 0;
@@ -291,7 +314,7 @@ sub build_container_image {
                         'userenvs' => [
                             {
                                 'name' => 'default',
-                                'requirements' => [ 'endpoint-run' ]
+                                'requirements' => [ 'endpoint-run', 'jq' ]
                             }
                         ],
                         'requirements' => [
@@ -301,11 +324,17 @@ sub build_container_image {
                                 'files_info' => {
                                     'files' => [
                                         {
-                                            #'src' => $client_server_run_script,
                                             'src' => $rickshaw_project_dir . "/client-server-script",
                                             'dst' => '/usr/local/bin'
                                         }
                                     ]
+                                }
+                            },
+                            {
+                                'name' => 'jq',
+                                'type' => 'distro',
+                                'distro_info' => {
+                                    'packages' => [ "jq" ]
                                 }
                             }
                         ] 
@@ -358,11 +387,11 @@ sub build_container_image {
         my $rc = $?;
         if ($rc ==  0) {
             printf "Image was found at %s:\n", $image_url;
-            debug_log(sprintf "%s\n", $output);
+            debug_log(sprintf "%s\n", $output) if defined $output;
             $image_found = 1;
         } else {
             printf "Image was not found at %s\n", $image_url;
-            debug_log(sprintf "%s\n", $output);
+            debug_log(sprintf "%s\n", $output) if defined $output;
             printf "Checking for local workhop image\n";
             # TODO: get json from buildah and search properly instead of this:
             my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$workshop_image"`;
@@ -594,6 +623,8 @@ mkdir($client_server_archives_dir);
 $client_server_run_script = $client_server_config_dir . "/client-server-script";
 $iterations_dir = $run_dir . "/iterations";
 mkdir($iterations_dir);
+$roadblock_msgs_dir = $run_dir . "/roadblock-msgs";
+mkdir($roadblock_msgs_dir);
 
 # If there are no endpoints, assume 1 endpoint using the 'local' extension
 if (scalar @endpoints == 0) {
@@ -857,7 +888,7 @@ foreach my $cs_type (keys %clients_servers) {
 # Build the client and server bench-cmd files
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
-        my @cmd_type_files = ("start");
+        my @cmd_type_files = ("start", "runtime");
         if ($cs_type eq "server") {
             push(@cmd_type_files, "stop");
         }
@@ -865,6 +896,7 @@ foreach my $cs_type (keys %clients_servers) {
         my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
         make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
         foreach my $cmd_type (@cmd_type_files) {
+            next if ($cmd_type eq "runtime" and $cs_id > 1); # runtime cmds only for client-1
             my $this_cmd_file = $this_cmds_dir . "/" . $cmd_type;
             open(FH, ">" . $this_cmd_file) ||
                 die "[ERROR]Open bench-cmds file for writing failed: [" . $this_cmd_file . "]\n";
@@ -953,7 +985,7 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
     my $opts = $endpoints[$i]{'opts'};
     my $label = $endpoints[$i]{'label'};
     my $userenv = $endpoints[$i]{'userenv'};
-    my $endpoint_image_opt;
+    my $endpoint_image_opt = "";
     if (defined $endpoints[$i]{'userenv'}) {
         $endpoint_image_opt = " --image=$userenvs{$endpoints[$i]{'userenv'}}{'image'}";
     }
@@ -993,14 +1025,15 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
         exit 1;
     }
 }
-if (roadblock_leader("endpoint-deploy", dump_endpoint_labels(\@endpoints)) > 0) {
+
+if (roadblock_leader("endpoint-deploy", $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
     printf "[ERROR]roadblock failed\n";
     exit 1;
 }
 
 # Cycle through the list of tests using roadblock to kick them off
 for my $sync (qw(client-server-script-start client-server-start-tools)) {
-    if (roadblock_leader($sync, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
+    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
@@ -1011,8 +1044,11 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $samp_id = $tests[$tid]{'sample-id'};
     my $iter_array_idx = $iter_id - 1;
     my $test_id = $iter_id . "-" . $samp_id;
+    my $timeout = $default_rb_timeout;
     for my $sync_point (qw(server-start client-start client-stop server-stop)) {
-        my $rc = roadblock_leader("test-" . $test_id . ":" . $sync_point, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+        my $messages_ref;
+        my $label = "test-" . $test_id . ":" . $sync_point;
+        my $rc = roadblock_leader($label, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         if ($rc > 0) {
             if ($rc == $roadblock_exit_abort) {
                 printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
@@ -1023,17 +1059,29 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
                 printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
                 exit 1;
             }
+        } else {
+            $timeout = $default_rb_timeout;
+            my %messages = %{ $messages_ref };
+            if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
+                for my $message (@{ $messages{'received'} }) {
+                    if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
+                        printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                        $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                        printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                    }
+                }
+            }
         }
     }
 }
 for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
-    if (roadblock_leader($sync, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
+    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
 }
 for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
-    if (roadblock_leader($sync, dump_endpoint_labels(\@endpoints)) > 0) {
+    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;
     }
