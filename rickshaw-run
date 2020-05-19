@@ -36,6 +36,7 @@ my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 60;
+my $endpoint_deploy_timeout = 180;
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
@@ -1026,7 +1027,7 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
     }
 }
 
-if (roadblock_leader("endpoint-deploy", $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
+if (roadblock_leader("endpoint-deploy", $endpoint_deploy_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
     printf "[ERROR]roadblock failed\n";
     exit 1;
 }
@@ -1048,7 +1049,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     for my $sync_point (qw(server-start client-start client-stop server-stop)) {
         my $messages_ref;
         my $label = "test-" . $test_id . ":" . $sync_point;
-        my $rc = roadblock_leader($label, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+        my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         if ($rc > 0) {
             if ($rc == $roadblock_exit_abort) {
                 printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
