@@ -316,7 +316,7 @@ sub build_container_image {
                         'userenvs' => [
                             {
                                 'name' => 'default',
-                                'requirements' => [ 'endpoint-run', 'jq' ]
+                                'requirements' => [ 'endpoint-run', 'jq_src' ]
                             }
                         ],
                         'requirements' => [
@@ -334,9 +334,19 @@ sub build_container_image {
                             },
                             {
                                 'name' => 'jq',
-                                'type' => 'distro',
-                                'distro_info' => {
-                                    'packages' => [ "jq" ]
+                                'type' => 'source',
+                                'source_info' => {
+                                    'url' => 'https://github.com/stedolan/jq/releases/download/jq-1.6/jq-1.6.tar.gz',
+                                    'filename' => 'jq-1.6.tar.gz',
+                                    'commands' => {
+                                        'unpack' => 'tar -xzf jq-1.6.tar.gz',
+                                        'get_dir' => 'tar -tzf jq-1.6.tar.gz | head -n 1',
+                                        'commands' => [
+                                            './configure',
+                                            'make',
+                                            'make install'
+                                        ]
+                                    }
                                 }
                             }
                         ] 
