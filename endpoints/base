@@ -8,7 +8,9 @@ echo "#params: $@"
 hostname=`hostname`
 rb_exit_timeout=3
 rb_exit_abort=4
-default_timeout=60
+default_timeout=180
+endpoint_deploy_timeout=180
+client_server_start_timeout=300
 declare -A clients
 declare -A servers
 
@@ -233,13 +235,17 @@ function do_roadblock() {
 }
 
 function process_prebench_roadblocks() {
-    do_roadblock "endpoint-deploy" "follower" $default_timeout
-    for sub_label in script-start start-tools; do
-        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" $default_timeout $@
-        fi
-        do_roadblock "client-server-$sub_label" "follower" $default_timeout
-    done
+    do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout
+
+    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+        do_roadblock "collector-script-start" "leader" $client_server_start_timeout $@
+    fi
+    do_roadblock "client-server-script-start" "follower" $client_server_start_timeout
+
+    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+        do_roadblock "collector-start-tools" "leader" $default_timeout $@
+    fi
+    do_roadblock "client-server-start-tools" "follower" $default_timeout
 }
 
 function process_bench_roadblocks() {
@@ -277,7 +283,7 @@ function process_bench_roadblocks() {
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
         if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" $default_timeout $@
+            do_roadblock "collector-$sub_label" "leader" 86400 $@
         fi
         do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done

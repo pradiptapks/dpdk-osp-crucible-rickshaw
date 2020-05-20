@@ -1,13 +1,14 @@
 #!/bin/bash
-# -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 exec 2>&1
 test -e /etc/profile && . /etc/profile
 
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
-default_timeout=60
+default_timeout=180
+client_server_script_timeout=300
 
 function exit_error() {
     local message=$1; shift
@@ -272,10 +273,10 @@ pushd "$cs_dir" >/dev/null || exit_error "Could not chdir to $cs_dir"
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-script-start
-    do_roadblock $label "controller" $default_timeout
+    do_roadblock $label "controller" $client_server_script_timeout
 else
     label=collector-script-start
-    do_roadblock $label "endpoint" $default_timeout
+    do_roadblock $label "endpoint" $client_server_script_timeout
 fi
 
 ssh_id_file="/tmp/rickshaw_id.rsa"
@@ -524,7 +525,7 @@ else
     # Sync with your *endpoint* for collector tools because the contoller
     # does not determine and does not know what tool collectors there may be
     label=collector-stop-tools
-    do_roadblock $label "endpoint" $default_timeout
+    do_roadblock $label "endpoint" 86400
     echo -e "\nCollectors stopping tools"
 fi
 pushd tool-data >/dev/null

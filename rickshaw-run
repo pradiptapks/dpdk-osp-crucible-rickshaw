@@ -35,8 +35,9 @@ my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
-my $default_rb_timeout = 60;
+my $default_rb_timeout = 120;
 my $endpoint_deploy_timeout = 180;
+my $client_server_script_timeout = 300;
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
@@ -1033,12 +1034,15 @@ if (roadblock_leader("endpoint-deploy", $endpoint_deploy_timeout, $messages_ref,
 }
 
 # Cycle through the list of tests using roadblock to kick them off
-for my $sync (qw(client-server-script-start client-server-start-tools)) {
-    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
-        printf "[ERROR]roadblock failed, exiting\n";
-        exit 1;
-    }
+if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
+    printf "[ERROR]roadblock failed, exiting\n";
+    exit 1;
 }
+if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
+    printf "[ERROR]roadblock failed, exiting\n";
+    exit 1;
+}
+
 my $abort_test_id;
 for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $iter_id = $tests[$tid]{'iteration-id'};
