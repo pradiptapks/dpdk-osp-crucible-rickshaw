@@ -85,7 +85,9 @@ function localhost_req_check() {
     # Validation returns what clients and servers would be used and the userenv
     if [ "$do_validate" == 1 ]; then
         echo_clients_servers
-        echo "userenv $userenv"
+        if [ "$osruntime" != "builtin" ]; then
+            echo "userenv $userenv"
+        fi
         exit
     fi
 }

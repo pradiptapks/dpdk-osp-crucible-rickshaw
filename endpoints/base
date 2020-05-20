@@ -8,11 +8,15 @@ echo "#params: $@"
 hostname=`hostname`
 rb_exit_timeout=3
 rb_exit_abort=4
+default_timeout=180
+endpoint_deploy_timeout=180
+client_server_start_timeout=300
 declare -A clients
 declare -A servers
 
 function exit_error() {
     echo "$1"
+    echo "going to exit now..."
     exit 1
 }
 
@@ -127,8 +131,10 @@ function init_common_dirs() {
     client_server_logs_dir="$run_dir/client-server/logs"
     endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
     client_server_run_script="/usr/local/bin/client-server-script"
-    mkdir -p $endpoint_run_dir
-    mkdir -p $client_server_logs_dir
+    roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
+    mkdir -p "$endpoint_run_dir"
+    mkdir -p "$client_server_logs_dir"
+    mkdir -p "$roadblock_msgs_dir"
 }
 
 function base_req_check() {
@@ -171,6 +177,7 @@ function base_req_check() {
 function do_roadblock() {
     local label=$1; shift
     local role=$1; shift
+    local timeout=$1; shift
     ###  followers or members remain in $@  ###
     if [ -z "$role" ]; then
         exit_error "do_roadblock(): role not defined"
@@ -183,8 +190,10 @@ function do_roadblock() {
     echo "role: $role"
     local uuid="$rb_id:$label"
     echo "uuid: $uuid"
+    echo "timeout: $timeout"
+    local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server $rb_server --timeout 300 --redis-password $rb_passwd --uuid $uuid --role=$role"
+    cmd+=" --redis-server $rb_server --timeout $timeout --redis-password $rb_passwd --uuid $uuid --role=$role --message-log=$msgs_file"
     if [ "$role" == "follower" ]; then
         cmd+=" --leader-id controller --follower-id $endpoint_label"
     elif [ "$role" == "leader" ]; then
@@ -218,33 +227,51 @@ function do_roadblock() {
     echo `date` "Completed roadblock for $uuid"
     echo "output:"
     echo "$output"
+    if [ -f $msgs_file ]; then
+        echo "roadblock messages:"
+        cat $msgs_file
+    fi
     return $rc
 }
 
 function process_prebench_roadblocks() {
-    do_roadblock "endpoint-deploy" "follower"
-    for sub_label in script-start start-tools; do
-        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" $@
-        fi
-        do_roadblock "client-server-$sub_label" "follower"
-    done
+    do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout
+
+    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+        do_roadblock "collector-script-start" "leader" $client_server_start_timeout $@
+    fi
+    do_roadblock "client-server-script-start" "follower" $client_server_start_timeout
+
+    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
+        do_roadblock "collector-start-tools" "leader" $default_timeout $@
+    fi
+    do_roadblock "client-server-start-tools" "follower" $default_timeout
 }
 
 function process_bench_roadblocks() {
+    local timeout=$default_timeout
     while read line; do
         iter_samp=`echo $line | awk '{print $1}'`
         iter=`echo $iter_samp | awk -F- '{print $1}'`
         samp=`echo $iter_samp | awk -F- '{print $2}'`
         for sync in server-start client-start client-stop server-stop; do
-            label="test-${iter}-${samp}:$sync"
-            do_roadblock "$label" "follower"
+            local label="test-${iter}-${samp}:$sync"
+            local msgs_file="$roadblock_msgs_dir/$label.json"
+            do_roadblock "$label" "follower" $timeout
             rb_rc=$?
             echo "roadblock $label exit code: $rb_rc"
             if [ $rb_rc -eq $rb_exit_abort ]; then
                 echo -e "\nAbort exit code from iteration $iter, sample $samp"
                 echo -e "\nWill not run remaining tests\n"
                 break 2
+            fi
+            timeout=$default_timeout
+            if [ -f $msgs_file ]; then
+                next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
+                if [ ! -z "$next_timeout" ]; then
+                    echo "Applying timeout value of $next_timeout to next roadblock sync"
+                    timeout=$next_timeout
+                fi
             fi
         done
     done < "$client_server_bench_cmds_dir/client/1/start"
@@ -256,14 +283,14 @@ function process_bench_roadblocks() {
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
         if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" $@
+            do_roadblock "collector-$sub_label" "leader" 86400 $@
         fi
-        do_roadblock "client-server-$sub_label" "follower"
+        do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done
 }
 
 function process_final_roadblocks() {
     for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
-        do_roadblock "$label" "follower"
+        do_roadblock "$label" "follower" $default_timeout
     done
 }
