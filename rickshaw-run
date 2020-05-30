@@ -36,8 +36,9 @@ my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 120;
-my $endpoint_deploy_timeout = 180;
+my $endpoint_deploy_timeout = 360;
 my $client_server_script_timeout = 300;
+my $endpoint_move_data_rb_timeout = 300;
 chomp (my $hostname = `hostname`);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
@@ -333,14 +334,14 @@ sub build_container_image {
                                 }
                             },
                             {
-                                'name' => 'jq',
+                                'name' => 'jq_src',
                                 'type' => 'source',
                                 'source_info' => {
-                                    'url' => 'https://github.com/stedolan/jq/releases/download/jq-1.6/jq-1.6.tar.gz',
-                                    'filename' => 'jq-1.6.tar.gz',
+                                    'url' => 'https://github.com/stedolan/jq/releases/download/jq-1.5/jq-1.5.tar.gz',
+                                    'filename' => 'jq-1.5.tar.gz',
                                     'commands' => {
-                                        'unpack' => 'tar -xzf jq-1.6.tar.gz',
-                                        'get_dir' => 'tar -tzf jq-1.6.tar.gz | head -n 1',
+                                        'unpack' => 'tar -xzf jq-1.5.tar.gz',
+                                        'get_dir' => 'tar -tzf jq-1.5.tar.gz | head -n 1',
                                         'commands' => [
                                             './configure',
                                             'make',
@@ -900,9 +901,12 @@ foreach my $cs_type (keys %clients_servers) {
 # Build the client and server bench-cmd files
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
-        my @cmd_type_files = ("start", "runtime");
+        my @cmd_type_files = ("start");
         if ($cs_type eq "server") {
             push(@cmd_type_files, "stop");
+        }
+        if ($cs_type eq "client") {
+            push(@cmd_type_files, "runtime");
         }
         my $cs_id = $$cs_ref{'id'};
         my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
@@ -1095,7 +1099,11 @@ for my $sync (qw(client-server-stop-tools client-server-send-data client-server-
         exit 1;
     }
 }
-for my $sync (qw(endpoint-move-data endpoint-finish endpoint-really-finish)) {
+if (roadblock_leader("endpoint-move-data", $endpoint_move_data_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
+    printf "[ERROR]roadblock failed, exiting\n";
+    exit 1;
+}
+for my $sync (qw(endpoint-finish endpoint-really-finish)) {
     if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
         printf "[ERROR]roadblock failed, exiting\n";
         exit 1;

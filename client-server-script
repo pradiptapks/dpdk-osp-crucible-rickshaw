@@ -8,7 +8,7 @@ rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
 default_timeout=180
-client_server_script_timeout=300
+client_server_script_timeout=500
 
 function exit_error() {
     local message=$1; shift

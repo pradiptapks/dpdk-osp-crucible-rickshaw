@@ -123,6 +123,7 @@ function build_pod_spec() {
     local name=$1; shift
     local type=$1; shift
     local dir=$1; shift
+    local host=$1; shift
     local json="$dir/$name.json"
 
     echo "{" >$json
@@ -136,7 +137,7 @@ function build_pod_spec() {
     if [ "$type" == "cs" -a ! -z "$nodeSelector" ]; then
         echo -e "$nodeSelector," >>$json
     fi
-    if [ "$type" == "master-tool" ]; then
+    if [ "$type" == "master" ]; then
         echo '    "tolerations": [' >>$json
         echo '        {' >>$json
         echo '            "key": "node-role.kubernetes.io/master",' >>$json
@@ -144,9 +145,9 @@ function build_pod_spec() {
         echo '        }' >>$json
         echo '    ],' >>$json
     fi
-    if [ "$type" == "worker-tool" -o "$type" == "master-tool" ]; then
+    if [ "$type" == "worker" -o "$type" == "master" ]; then
         echo "    \"nodeSelector\": {" >>$json
-        echo "        \"kubernetes.io/hostname\": \"$name\"" >>$json
+        echo "        \"kubernetes.io/hostname\": \"$host\"" >>$json
         echo "    }," >>$json
         echo "    \"hostPID\": true," >>$json
         echo "    \"hostNetwork\": true", >>$json
@@ -193,7 +194,7 @@ function build_pod_spec() {
     echo "\"" >>$json
     echo "          }" >>$json
     echo "        ]" >>$json
-    if [ "$type" == "worker-tool" -o "$type" == "master-tool" ]; then
+    if [ "$type" == "worker" -o "$type" == "master" ]; then
         echo "        ,\"securityContext\": {" >>$json
         echo "          \"privileged\": true" >>$json
         echo "        }" >>$json 
@@ -213,17 +214,30 @@ function build_pod_spec() {
 }
 
 function create_pods() {
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    ref1=""
     local type="$1"; shift
+    # remaining args are pod-names (for client-server pods) or worker/master node names
     local dir="$endpoint_run_dir/$type-pod-objects"
     local pods=""
     if [ -z "$*" ]; then
         exit_error "You must request one or more pods to create"
     fi
     mkdir -p "$dir"
+    count=1
     while [ ! -z "$1" ]; do
         local name="$1"; shift
+	echo "create_pods: working on [$name]"
+	local host=""
+	if [ "$type" == "master" -o "$type" == "worker" ]; then
+	    host="$name"
+	    echo "because this is a tool pod, changing name from $name to..."
+	    name="$type-$count"
+	    echo "$name"
+	fi
         delete_pods "$name"
-        build_pod_spec "$name" "$type" "$dir"
+        echo build_pod_spec "$name" "$type" "$dir" "$host"
+        build_pod_spec "$name" "$type" "$dir" "$host"
         if [ -e "$dir/$name.json" ]; then
             # TODO: the exit code does not work here, need to find a way to have it work
             cat "$dir/$name.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$name.txt"
@@ -236,7 +250,7 @@ function create_pods() {
         fi
     done
     ssh $k8s_user@$k8s_host kubectl get pods 2>&1 >"$endpoint_run_dir/post-create-get-pods.txt"
-    echo "$pods"
+    ref1="$pods"
 }
 
 function verify_pods_running() {
@@ -300,7 +314,7 @@ function verify_pods_running() {
         nodes[$i]=1
     done
     # var is assigned a space-separated list of nodes
-    ref1+=" ${!nodes[@]}"
+    ref1="${!nodes[@]}"
 }
 
 function get_pod_logs() {
@@ -372,12 +386,12 @@ base_req_check
 get_k8s_config
 delete_old_pods
 echo "This endpoint to run these clients: ${clients[@]}"
-cs_pods=`create_pods cs ${clients[@]}`
+create_pods cs_pods cs ${clients[@]}
 echo "These client pods were created: $cs_pods"
 verify_pods_running active_worker_nodes $cs_pods
 echo "These nodes are hosting the client-server pods: $active_worker_nodes"
 echo "Working on creating worker-tool pods"
-worker_tool_pods="`create_pods worker-tool $active_worker_nodes`"
+create_pods worker_tool_pods worker $active_worker_nodes
 echo "These worker-tool pods were created: $worker_tool_pods"
 verify_pods_running tool_worker_nodes $worker_tool_pods
 echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
@@ -385,7 +399,7 @@ if [ 1 -eq 1 ]; then
     master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
     echo "These nodes are masters: $master_nodes"
     echo "Working on creating these master-tool pods"
-    master_tool_pods="`create_pods master-tool $master_nodes`"
+    create_pods master_tool_pods master $master_nodes
     echo "These master-tool pods were created: $master_tool_pods"
     verify_pods_running tool_master_nodes $master_tool_pods
     echo "These nodes are hosting the master-tool pods: $master_tool_nodes"

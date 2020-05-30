@@ -9,8 +9,9 @@ hostname=`hostname`
 rb_exit_timeout=3
 rb_exit_abort=4
 default_timeout=180
-endpoint_deploy_timeout=180
-client_server_start_timeout=300
+endpoint_deploy_timeout=360
+client_server_start_timeout=500
+endpoint_move_data_timeout=300
 declare -A clients
 declare -A servers
 
@@ -290,7 +291,8 @@ function process_postbench_roadblocks() {
 }
 
 function process_final_roadblocks() {
-    for label in endpoint-move-data endpoint-finish endpoint-really-finish; do
+    do_roadblock endpoint-move-data "follower" $endpoint_move_data_timeout
+    for label in endpoint-finish endpoint-really-finish; do
         do_roadblock "$label" "follower" $default_timeout
     done
 }
