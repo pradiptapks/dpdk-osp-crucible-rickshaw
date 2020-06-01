@@ -92,7 +92,11 @@ function process_remotehost_opts() {
                 host=$val
                 ;;
             *)
-                exit_error "endpoint options $arg not supported"
+                if echo $arg | grep -q -- "="; then
+                    echo "You can't use a \"=\" for assignment in endpoint options"
+                    echo "You must use \":\", like `echo $arg | sed -e 's/=/:/'`"
+                fi
+                exit_error "remotehost endpoint option [$arg] not supported"
                 ;;
         esac
     done
@@ -179,19 +183,6 @@ function get_remotehost_logs() {
         scp_cmd "root@$host:$this_cs_log_file" "$this_cs_log_file"
     done
 }
-
-process_opts $@
-process_remotehost_opts $endpoint_opts
-init_common_dirs
-remotehost_req_check
-base_req_check
-launch_osruntime
-process_prebench_roadblocks
-process_bench_roadblocks
-process_postbench_roadblocks
-get_remotehost_logs
-cleanup_osruntime
-process_final_roadblocks
 
 process_opts $@
 process_remotehost_opts $endpoint_opts

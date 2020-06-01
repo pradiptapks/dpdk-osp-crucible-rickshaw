@@ -228,10 +228,6 @@ function do_roadblock() {
     echo `date` "Completed roadblock for $uuid"
     echo "output:"
     echo "$output"
-    if [ -f $msgs_file ]; then
-        echo "roadblock messages:"
-        cat $msgs_file
-    fi
     return $rc
 }
 

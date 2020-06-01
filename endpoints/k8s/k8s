@@ -64,11 +64,6 @@ function k8s_req_check() {
     if [ $? -gt 0 ]; then
         exit_error "Could not run kubectl on k8s host: $k8s_kubectl"
     fi
-    # Also exit if asking for servers even in not in --validate
-    if [ ${#servers[@]} -gt 0 ]; then
-        echo "[ERROR]This endpoint does not support servers yet"
-        exit 1
-    fi
     # Validation returns what clients and servers would be used and the userenv
     if [ "$do_validate" == 1 ]; then
         echo_clients_servers
@@ -113,7 +108,11 @@ function process_k8s_opts() {
                 fi
                 ;;
             *)
-                exit_error "endpoint options $arg not supported"
+                if echo $arg | grep -q -- "="; then
+                    echo "You can't use a \"=\" for assignment in endpoint options"
+                    echo "You must use \":\", like `echo $arg | sed -e 's/=/:/'`"
+                fi
+                exit_error "k8s endpoint option [$arg] not supported"
                 ;;
         esac
     done
@@ -386,7 +385,8 @@ base_req_check
 get_k8s_config
 delete_old_pods
 echo "This endpoint to run these clients: ${clients[@]}"
-create_pods cs_pods cs ${clients[@]}
+echo "This endpoint to run these servers: ${servers[@]}"
+create_pods cs_pods cs ${clients[@]} ${servers[@]}
 echo "These client pods were created: $cs_pods"
 verify_pods_running active_worker_nodes $cs_pods
 echo "These nodes are hosting the client-server pods: $active_worker_nodes"

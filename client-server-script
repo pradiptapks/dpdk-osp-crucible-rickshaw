@@ -232,9 +232,9 @@ echo "cs_dir: $cs_dir"
 tool_start_cmds="$cs_dir/tool-start"
 tool_stop_cmds="$cs_dir/tool-stop"
 roadblock_msgs_dir="$cs_dir/roadblock-msgs"
+mkdir -p "$roadblock_msgs_dir"
 cs_type=`echo $cs_label | awk -F- '{print $1}'`
 cs_id=`echo $cs_label | awk -F- '{print $2}'`
-mkdir -p "$roadblock_msgs_dir"
 
 # Directories on the controller
 config_dir="$base_run_dir/config"
@@ -420,8 +420,13 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         iter=`echo $iter_samp | awk -F- '{print $1}'`
         samp=`echo $iter_samp | awk -F- '{print $2}'`
         iter_samp_dir="$cs_dir/iteration-$iter/sample-$samp"
-        mkdir -p $iter_samp_dir ||
-            exit_error "Could not mkdir iteration-$iter/sample-$samp"
+        cs_msgs_dir="$iter_samp_dir/msgs"
+        cs_tx_msgs_dir="$cs_msgs_dir/tx" # Messages a client or server wants to transmit
+        cs_rx_msgs_dir="$cs_msgs_dir/rx" # Messages a client or server has received
+        for this_dir in "$iter_samp_dir" "$cs_msgs_dir" "$cs_tx_msgs_dir" "$cs_rx_msgs_dir"; do
+            echo "mkdir -p $this_dir"
+            mkdir -p "$this_dir" || exit_error "Could not mkdir $this_dir"
+        done
         # The following should be replaced by creating hardlinks in each sample
         # dir for each file in $cs_file_list
         find . -mindepth 1 -maxdepth 1 -type f | grep -v -- "$cs_label-stderrout.txt" | \
@@ -445,13 +450,30 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                     # enough time for everyone to call roadblock
                     let this_timeout=$runtime+30
                     user_json_file="`mktemp`"
-                    echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}]' >"$user_json_file"
-                    user_message_opt=" --user-messages=$user_json_file"
+                    echo "adding timeout message to $cs_tx_msgs_dir"
+                    echo '{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}' >"$cs_tx_msgs_dir/timeout"
                 fi
-                do_roadblock "$label" "controller" $timeout "$user_message_opt"
-            else
-                do_roadblock "$label" "controller" $timeout "$abort_opt"
             fi
+            pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+            if [ ! -z "$pending_tx_msgs" -a "$abort_opt" == "" ]; then
+                echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
+                mkdir -p ${cs_tx_msgs_dir}-sent
+                msgs_json_file="$iter_samp_dir/rb-msgs-$sync"
+                echo "[" >"$msgs_json_file"
+                for msg in $pending_tx_msgs; do
+                    # TODO validate JSON schema
+                    echo "Adding $msg to $msgs_json_file"
+                    cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
+                    /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
+                    echo "," >>"$msgs_json_file"
+                done
+                echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$sync'"}}]' >>$msgs_json_file
+                echo "full message to send:"
+                cat "$msgs_json_file"
+                # TODO changing this to $extra_opt everywhere
+                abort_opt=" --user-messages=$msgs_json_file"
+            fi
+            do_roadblock "$label" "controller" $timeout "$abort_opt"
             rb_rc=$?
             cmd_rc=0
             echo roadblock $label exit code: $rb_rc
@@ -470,13 +492,23 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             fi
             timeout=$default_timeout
             if [ -f $msgs_file ]; then
-                echo "FOUND message file: $msgs_file"
+                count=1
+                if [ $cs_type == "client" ]; then
+                    cs_buddy="server-$cs_id"
+                else
+                    cs_buddy="client-$cs_id"
+                fi
+                echo "Found messages file: $msgs_file"
+                jq -cr '.received[] | select(.payload.sender.id == "'$cs_buddy'" and 
+                        .payload.message.command == "user-object") | .payload.message' $msgs_file\
+                | while read line; do
+                    msg="$sync:$count"
+                    echo "Found user-object message from $cs_buddy: $line"
+                    echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                    let count=$count+1
+                done
+                # TODO: process the newly created msg files above instead of scanning the entire messages array again
                 next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
-                echo "messages-json:"
-                cat $msgs_file
-                echo "output from filtered jq:"
-                echo "$next_timeout"
-                echo "output from jq:"
                 jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file
                 if [ ! -z "$next_timeout" ]; then
                     echo "Applying timeout value of $next_timeout to next roadblock sync"
