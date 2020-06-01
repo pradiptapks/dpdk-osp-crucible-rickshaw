@@ -75,7 +75,11 @@ function process_localhost_opts() {
                 userenv=$val
                 ;;
             *)
-                exit_error "endpoint options $arg not supported"
+                if echo $arg | grep -q -- "="; then
+                    echo "You can't use a \"=\" for assignment in endpoint options"
+                    echo "You must use \":\", like `echo $arg | sed -e 's/=/:/'`"
+                fi
+                exit_error "localhost endpoint option [$arg] not supported"
                 ;;
         esac
     done
