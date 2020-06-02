@@ -53,6 +53,8 @@ endpoint_name="k8s"
 # TODO: instead of using a prefix in the pods' names, use a unique k8s project
 pod_prefix="rickshaw"
 userenv="rhubi8"
+hostNetwork=""
+declare -A nodeSelector
 
 function k8s_req_check() {
     k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
@@ -76,7 +78,8 @@ function process_k8s_opts() {
     local endpoint_opts="$1"
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
         arg=`echo $opt| awk -F: '{print $1}'`
-        val=`echo $opt | awk -F: '{print $2}'`
+        # The $val may have : in it, so don't use awk to get only the second field
+        val=`echo $opt | sed -e s/^$arg://`
         case "$arg" in
             client|server|clients|servers)
                 addto_clients_servers "$arg" "$val"
@@ -90,9 +93,22 @@ function process_k8s_opts() {
             userenv)
                 userenv=$val
                 ;;
+            hostNetwork)
+                hostNetwork="$val"
+                ;;
             nodeSelector)
-                if [ -e $val ]; then
-                    nodeSelector=`cat $val`
+                # nodeSelector is per pod:
+                # option format::  nodeSelector:<pod-name>:<full-path-to-json-with-nodeSelector>
+                # json file example (note no outer {}'s)
+                # "nodeSelector": {
+                #    "kubernetes.io/hostname": "worker000"
+                # }
+                name=`echo $val | awk -F: '{print $1}'`
+                file=`echo $val | awk -F: '{print $2}'`
+                if [ -e $file ]; then
+                    nodeSelector[$name]=`cat $file`
+                else
+                    exit_error "Could not find file $file"
                 fi
                 ;;
             securityContext)
@@ -133,8 +149,11 @@ function build_pod_spec() {
     echo "  }," >>$json
     echo "  \"spec\": {" >>$json
     echo "    \"restartPolicy\": \"Never\"," >>$json
-    if [ "$type" == "cs" -a ! -z "$nodeSelector" ]; then
-        echo -e "$nodeSelector," >>$json
+    if [ "$type" == "cs" -a ! -z "${nodeSelector[$name]}" ]; then
+        echo -e "${nodeSelector[$name]}," >>$json
+    fi
+    if [ "$type" == "cs" -a ! -z "$hostNetwork" -a "$hostNetwork" == "1" ]; then
+        echo "    \"hostNetwork\": true," >>$json
     fi
     if [ "$type" == "master" ]; then
         echo '    "tolerations": [' >>$json
