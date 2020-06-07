@@ -35,7 +35,7 @@ my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_base_uuid = $run{'run-id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
-my $default_rb_timeout = 120;
+my $default_rb_timeout = 240;
 my $endpoint_deploy_timeout = 360;
 my $client_server_script_timeout = 300;
 my $endpoint_move_data_rb_timeout = 300;
@@ -90,12 +90,9 @@ sub roadblock_leader {
     if ($use_roadblock) {
         my $label = shift;
         my $timeout = shift;
-        #my $msgs_json_ref = shift;
         # save $_[0] for by ref later to store json ref
         my $follower_param = "";
         for (my $i=1; $i < scalar @_; $i++) {
-        #while (scalar @_ > 0) {
-            #$follower_param .= " --followers=" . shift;
             $follower_param .= " --followers=" . $_[$i];
         }
         my $msgs_file = $roadblock_msgs_dir . "/" . $label . ".json";
@@ -128,10 +125,7 @@ sub roadblock_leader {
             $rc = $roadblock_exit_nofile;
         }
         printf "Completed roadblock for: %s, return code %d\n", $label, $rc;
-        #$msgs_json_ref = get_json_file($msgs_file);
         $_[0] = get_json_file($msgs_file);
-        #my $coder = JSON::XS->new->canonical->pretty;
-        #debug_log($coder->encode($msgs_json_ref));
         return $rc;
     } else {
         return 0;
@@ -584,12 +578,22 @@ exists $run{'tools-dir'} || die "[ERROR]You must use " .
 if (not exists $run{'tool-params'} ) {
     $run{'tool-params'} = $rickshaw_project_dir . "/config/tool-params.json";
 }
+# TODO: need schema for tool-params
 @tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
 my %tools_configs;
 # Load a tool configuration for every tool the user is asking for
 foreach my $tool_entry (@tools_params) {
-    my $this_tool_config = $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/rickshaw.json";
+    my $tool_name = $$tool_entry{'tool'};
+    my $this_tool_config = $run{'tools-dir'} . "/" . $tool_name . "/rickshaw.json";
     my $json_ref = get_json_file($this_tool_config, $tool_schema_file);
+    if (! exists $$json_ref{'tool'} or $$json_ref{'tool'} ne $tool_name) {
+        printf "In the following tool config, found in %s, the value for 'tool'";
+        printf "does not match the tool name, '%s'\n", $this_tool_config, $tool_name;
+        printf "Either correct the tool config, or remove this tool from your test\n";
+        my $coder = JSON::XS->new->canonical->pretty;
+        printf "%s", $coder->encode($json_ref);
+        exit 1;
+    }
     $tools_configs{$$json_ref{'tool'}} = $json_ref;
 }
 

@@ -4,10 +4,14 @@
 exec 2>&1
 test -e /etc/profile && . /etc/profile
 
+# Depending on how client-server-script is started, "/usr/local/bin" is not
+# always in the $PATH
+PATH="/usr/local/bin:$PATH"
+
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
-default_timeout=180
+default_timeout=240
 client_server_script_timeout=500
 
 function exit_error() {
