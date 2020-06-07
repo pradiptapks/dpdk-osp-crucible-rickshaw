@@ -5,16 +5,6 @@
 # clients and servers for as many benchmark interations/samples as required
 # for a single invocation of rickshaw.
 # 
-# Things that work:
-# -validation
-# -launching the client/server script in a tmux
-#
-# Things that don't work or are missing:
-# -not using a filesystenm image from workshop
-#  -not using a workshop-provided filesystem-image or container-image to either:
-#   -use podman to run a container, or
-#   -mount the filesystem image (plus /proc & /sys) then chroot to it
-#
 # Usage:
 # local [--validate] --endpoint-opts=client:n-m,o-p,server:n-m,o-p --run-dir --script-dir
 #
@@ -63,7 +53,7 @@ function process_localhost_opts() {
                 ;;
             osruntime)
                 case "$val" in
-                    builtin|chroot|podman)
+                    builtin|chroot)
                         osruntime=$val
                         ;;
                     *)
@@ -124,14 +114,6 @@ function launch_osruntime() {
             /bin/cp -f /etc/hosts "$container_mount/etc/"
             /bin/cp -f /etc/resolv.conf "$container_mount/etc/"
         fi
-    elif [ "$osruntime" == "podman" ]; then
-        echo "Creating container for podman osruntime"
-        # Delete old container if there is one
-        #existing_container=`buildah containers --format "{{.ContainerName}}" | grep $endpoint_label`
-        #if [ ! -z "$existing_container" ]; then
-            #buildah rm $endpoint_label
-        #fi
-        # Need to add ssh key with volume mapping
     fi
 
     # For each client and server launch the actual script which will run it.
@@ -157,7 +139,6 @@ function launch_osruntime() {
         elif [ "$osruntime" == "chroot" ]; then
             echo "using chroot"
             # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
-            # Same will be true for running podman
             cmd="chroot $container_mount $base_cmd"
             if [ -z "$cs_rb_opts" ]; then
                 # Only when not using roadblock run the client in the foreground
@@ -166,8 +147,6 @@ function launch_osruntime() {
                 echo -e "About to run using nohup:\n$cmd\n"
                 nohup $cmd >"$this_cs_log_file" &
             fi
-        elif [ "$osruntime" == "podman"]; then
-            echo doing podman runtime
         fi
     done
     echo "This endpiont deployed"

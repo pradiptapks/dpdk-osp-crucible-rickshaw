@@ -53,7 +53,7 @@ endpoint_name="k8s"
 # TODO: instead of using a prefix in the pods' names, use a unique k8s project
 pod_prefix="rickshaw"
 userenv="rhubi8"
-hostNetwork=""
+hostNetwork="0"
 declare -A nodeSelector
 
 function k8s_req_check() {
@@ -150,7 +150,7 @@ function build_pod_spec() {
     echo "  \"spec\": {" >>$json
     echo "    \"restartPolicy\": \"Never\"," >>$json
     if [ "$type" == "cs" -a ! -z "${nodeSelector[$name]}" ]; then
-        echo -e "${nodeSelector[$name]}," >>$json
+        echo -e "    ${nodeSelector[$name]}," >>$json
     fi
     if [ "$type" == "cs" -a ! -z "$hostNetwork" -a "$hostNetwork" == "1" ]; then
         echo "    \"hostNetwork\": true," >>$json
@@ -210,8 +210,16 @@ function build_pod_spec() {
     printf "            \"value\": \"" >>$json
     sed -z 's/\n/\\n/g' $config_dir/rickshaw_id.rsa >>$json
     echo "\"" >>$json
-    echo "          }" >>$json
-    echo "        ]" >>$json
+    echo "      }" >>$json
+    let count=$count+1
+    echo "    ]" >>$json
+    if [ "$type" == "worker" -o "$type" == "master" ]; then
+        echo '       ,"volumeMounts": [' >>$json
+        echo '          { "mountPath": "/var/run",' >>$json
+        echo '            "name": "hostfs-run"' >>$json
+        echo '          }' >>$json
+        echo "        ]" >>$json
+    fi
     if [ "$type" == "worker" -o "$type" == "master" ]; then
         echo "        ,\"securityContext\": {" >>$json
         echo "          \"privileged\": true" >>$json
@@ -225,8 +233,17 @@ function build_pod_spec() {
         fi
     fi
     echo "      }" >>$json
-    let count=$count+1
     echo "    ]" >>$json
+    if [ "$type" == "worker" -o "$type" == "master" ]; then
+        echo '       ,"volumes": [' >>$json
+        echo '          { "name": "hostfs-run",' >>$json
+        echo '            "hostPath": {' >>$json
+        echo '              "path": "/var/run",' >>$json
+        echo '              "type": "Directory"' >>$json
+        echo '            }' >>$json
+        echo '          }' >>$json
+        echo '        ]' >>$json
+    fi
     echo "  }" >>$json
     echo "}" >>$json
 }

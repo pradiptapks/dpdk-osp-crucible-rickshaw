@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+set -u
 
 # Shared init and functions for endpoints
 
@@ -8,10 +9,14 @@ echo "#params: $@"
 hostname=`hostname`
 rb_exit_timeout=3
 rb_exit_abort=4
-default_timeout=180
+default_timeout=240
 endpoint_deploy_timeout=360
 client_server_start_timeout=500
 endpoint_move_data_timeout=300
+cs_rb_opts=""
+do_validate="0"
+num_clients=0
+num_servers=0
 declare -A clients
 declare -A servers
 
@@ -33,7 +38,7 @@ function process_opts() {
     while true; do
         case "$1" in
             --validate)
-                do_validate=1
+                do_validate="1"
                 shift;
                 ;;
             --endpoint-opts)
@@ -101,41 +106,49 @@ function addto_clients_servers() {
             for j in `seq $range`; do
                 if [ "$arg" == "clients" -o "$arg" == "client" ]; then
                     clients[$j]="client-$j"
+                    let num_clients=$num_clients+1
                 elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                     servers[$j]="server-$j"
+                    let num_servers=$num_servers+1
                 fi
             done
         else
             if [ "$arg" == "clients" -o "$arg" == "client" ]; then
                 clients[$ids]="client-$ids"
+                let num_clients=$num_clients+1
             elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                 servers[$ids]="server-$ids"
+                let num_servers=$num_servers+1
             fi
         fi
     done
 }
 
 function echo_clients_servers() {
-    if [ ${#clients[@]} -gt 0 ]; then
+    #if [ ${#clients[@]} -gt 0 ]; then
+    if [ $num_clients -gt 0 ]; then
         echo "client ${!clients[@]}"
     fi
-    if [ ${#servers[@]} -gt 0 ]; then
+    #if [ ${#servers[@]} -gt 0 ]; then
+    if [ $num_servers -gt 0 ]; then
         echo "server ${!servers[@]}"
     fi
 }
 
 function init_common_dirs() {
-    config_dir="$base_run_dir/config"
-    client_server_config_dir="$config_dir/client-server"
-    client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
-    run_dir="$base_run_dir/run"
-    client_server_logs_dir="$run_dir/client-server/logs"
-    endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
-    client_server_run_script="/usr/local/bin/client-server-script"
-    roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
-    mkdir -p "$endpoint_run_dir"
-    mkdir -p "$client_server_logs_dir"
-    mkdir -p "$roadblock_msgs_dir"
+    if [ "$do_validate" != 1 ]; then
+        config_dir="$base_run_dir/config"
+        client_server_config_dir="$config_dir/client-server"
+        client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
+        run_dir="$base_run_dir/run"
+        client_server_logs_dir="$run_dir/client-server/logs"
+        endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
+        client_server_run_script="/usr/local/bin/client-server-script"
+        roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
+        mkdir -p "$endpoint_run_dir"
+        mkdir -p "$client_server_logs_dir"
+        mkdir -p "$roadblock_msgs_dir"
+    fi
 }
 
 function base_req_check() {
