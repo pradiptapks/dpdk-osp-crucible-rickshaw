@@ -19,6 +19,12 @@
             "required": [ "schema" ],
             "additionalProperties": false
         },
+        "primary-metric": {
+            "type": "string"
+        },
+        "primary-period": {
+            "type": "string"
+        },
         "periods": {
             "type": "array",
             "items": { 

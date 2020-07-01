@@ -25,6 +25,9 @@
             "items": {
                 "type": "object",
                 "properties": {
+                    "primary-metric": {
+                        "type": "string"
+                    },
                     "params": {
                         "type": "array",
                         "items": {
@@ -56,6 +59,12 @@
                                             "name": {
                                                 "type": "string",
                                                 "pattern": "^.+$"
+                                            },
+                                            "begin": {
+                                                "type": "number"
+                                            },
+                                            "end": {
+                                                "type": "number"
                                             },
                                             "metrics": {
                                                 "type": "array",
@@ -96,6 +105,9 @@
                                                             "items": {
                                                                 "type": "object",
                                                                 "properties": {
+                                                                    "duration": {
+                                                                        "type": "number"
+                                                                    },
                                                                     "value": {
                                                                         "type": "number"
                                                                     },

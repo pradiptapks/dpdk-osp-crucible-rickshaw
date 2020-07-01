@@ -1,0 +1,233 @@
+#!/usr/bin/perl
+# -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=perl
+#
+# Author: Andrew Theurer
+#
+# Rickshaw will run a benhcmark for you.  Please see README.md for instructions.
+
+use strict;
+use warnings;
+use Cwd;
+use Data::UUID;
+use File::pushd;
+use File::Basename;
+use File::Temp qw(tempdir);
+use File::Copy;
+use File::Path qw(make_path);
+use JSON::XS;
+use JSON::Validator;
+use Data::Dumper;
+
+my $ug = Data::UUID->new;
+my $debug = 0;
+my %result;
+my $base_run_dir;
+
+sub usage {
+    print "\nusage:\n\n";
+    print "--base-run-dir <dir>  (this is a result-file in json that rickshaw-post-process generates)\n";
+}
+
+sub debug_log {
+    if ($debug) {
+        print "[DEBUG]" . shift;
+    }
+}
+
+sub put_json_file {
+    my $filename = shift;
+    my $json_ref = shift;
+    my $schema_filename = shift;
+    my $coder = JSON::XS->new->canonical->pretty;
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            printf "Validation errors for file %s with schema %s:\n" . Dumper \@errors,
+                   $filename, $schema_filename;
+            exit 1;
+        }
+    }
+    debug_log(sprintf "trying to write [%s]\n", $filename);
+    my $json_text = $coder->encode($json_ref);
+    open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
+    printf JSON_FH "%s", $json_text;
+    close JSON_FH;
+}
+
+sub get_json_file {
+    my $filename = shift;
+    my $schema_filename = shift;
+    my $coder = JSON::XS->new;
+    debug_log(sprintf "trying to open [%s]\n", $filename);
+    open(FH, $filename) || die("Could not open file $filename\n");
+    my $json_text = "";
+    while ( <FH> ) {
+        $json_text .= $_;
+    }
+    close FH;
+    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
+    if (defined $schema_filename and -e $schema_filename) {
+        my $jv = JSON::Validator->new;
+        open(FH, $schema_filename) or die "Could not open $schema_filename";
+        my $json_text;
+        while ( <FH> ) {
+            $json_text .= $_;
+        }
+        close FH;
+        $jv->schema($json_text);
+        my @errors = $jv->validate($json_ref);
+        if (scalar @errors >  0) {
+            printf "Validaton errors for file %s with schema %s:\n" . Dumper \@errors,
+                   $filename, $schema_filename;
+            exit 1;
+        }
+    }
+    return $json_ref;
+}
+
+# Process the cmdline params
+while (scalar @ARGV > 0) {
+    my $p = shift @ARGV;
+    debug_log(sprintf "processing \@ARGV, param: [%s]\n", $p);
+    my $arg;
+    my $val;
+
+    if ( $p =~ /^\-\-(\S+)/ ) {
+        $arg = $1;
+        if ( $arg =~ /^(\S+)=(.*)/ ) { # '--arg=val'
+            $arg = $1;
+            $val = $2;
+        } else { # '--arg val'
+            $val = shift @ARGV;
+        }
+    } else {
+        print "[ERROR]malformed cmdline parameter: %s\n";
+        usage;
+        exit 1;
+    }
+    debug_log(sprintf "processing \@ARGV, arg is: [%s], val is: [%s]\n", $arg, $val);
+    if ($arg =~ /^help$/) {
+        usage;
+        exit 0;
+    } elsif ($arg =~ /^base-run-dir$/) {
+        debug_log(sprintf "argument: [%s]\n", $arg);
+        $base_run_dir = $val;
+    } else {
+        printf "[ERROR]argument not valid: [%s]\n", $arg;
+        usage;
+        exit 1;
+    }
+}
+
+# Ensure the run-dir hase absolute path
+{
+    my $dir = pushd($base_run_dir);
+    debug_log(sprintf "pushd to [%s]\n", $base_run_dir);
+    my $cwd = getcwd();
+    debug_log(sprintf "cwd [%s]\n", $cwd);
+    $base_run_dir = $cwd;
+}
+my $rickshaw_project_dir; # We need the project dir to load schemas to validate json
+{
+    # Get the absolute path of the rickshaw project directory
+    my $dir = pushd(dirname($0));
+    $rickshaw_project_dir = getcwd();
+}
+my $config_dir = $base_run_dir . "/config";
+my $run_dir = $base_run_dir . "/run";
+my $iter_dir = $run_dir . "/iterations";
+my $result_schema_file = $rickshaw_project_dir . "/schema/result.json";
+
+my $result_file = $run_dir . "/rickshaw-result.json";
+if (-e $result_file) {
+    printf "Opening %s\n", $result_file;
+    my $result_ref = get_json_file($result_file, $result_schema_file);
+    %result = %{ $result_ref };
+    # TODO checks for minimum fileds for valid run
+} else {
+    printf "Could not find rickshaw-result.json in %s, exiting\n", $run_dir;
+    exit 1;
+}
+
+my $coder = JSON::XS->new->canonical;
+my %cdm = ( 'ver' => 'v5dev' );
+
+# Start by creating what will be the CDM run document for elasticsearch
+my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
+            'host' => 'localhost', 'name' => $result{'name'}, 'email' => $result{'email'} );
+            #'host' => $result{'host'}, 'desc' => $result{'description'}, 'name' => $result{'name'},
+            #'email' => $result{'email'}, 'tags' => $result{'tags'} );
+my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
+my $run_doc_json = $coder->encode(\%run_doc);
+my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
+printf "%s -X POST localhost:9200/cdmv5dev-run/_doc/ -d '%s'\n", $curl_cmd, $run_doc_json;
+if (exists $result{'iterations'}) {
+    for my $iter (@{ $result{'iterations'} }) {
+        my $iter_doc_ref = $coder->decode($run_doc_json);
+        my %iter_doc = %$iter_doc_ref;
+        $iter_doc{'iteration'}{'id'} = $ug->create_str();
+        $iter_doc{'iteration'}{'primary-metric'} = $$iter{'primary-metric'};
+        $iter_doc{'iteration'}{'primary-period'} = $$iter{'primary-period'};
+        my $iter_doc_json = $coder->encode(\%iter_doc);
+        printf "%s -X POST localhost:9200/cdmv5dev-iteration/_doc/ -d '%s'\n", $curl_cmd, $iter_doc_json;
+        for my $param (@{ $$iter{'params'} }) {
+            my $param_doc_ref = $coder->decode($iter_doc_json);
+            my %param_doc = %$param_doc_ref;
+            $param_doc{'param'}{'id'} = $ug->create_str();
+            $param_doc{'param'}{'arg'} = $$param{'arg'};
+            $param_doc{'param'}{'val'} = $$param{'val'};
+            my $param_doc_json = $coder->encode(\%param_doc);
+            printf "%s -X POST localhost:9200/cdmv5dev-param/_doc/ -d '%s'\n", $curl_cmd, $param_doc_json;
+        }
+        my $sample_num = 1;
+        for my $samp (@{ $$iter{'samples'} }) {
+            my $samp_doc_ref = $coder->decode($iter_doc_json);
+            my %samp_doc = %$samp_doc_ref;
+            $samp_doc{'sample'}{'id'} = $ug->create_str();
+            $samp_doc{'sample'}{'num'} = $sample_num;
+            my $samp_doc_json = $coder->encode(\%samp_doc);
+            printf "%s -X POST localhost:9200/cdmv5dev-sample/_doc/ -d '%s'\n", $curl_cmd, $samp_doc_json;
+            $sample_num++;
+            for my $per (@{ $$samp{'periods'} }) {
+                my $per_doc_ref = $coder->decode($samp_doc_json);
+                my %per_doc = %$per_doc_ref;
+                $per_doc{'period'}{'id'} = $ug->create_str();
+                $per_doc{'period'}{'name'} = $$per{'name'};
+                $per_doc{'period'}{'begin'} = $$per{'begin'};
+                $per_doc{'period'}{'end'} = $$per{'end'};
+                my $per_doc_json = $coder->encode(\%per_doc);
+                printf "%s -X POST localhost:9200/cdmv5dev-period/_doc/ -d '%s'\n", $curl_cmd, $per_doc_json;
+                for my $metr (@{ $$per{'metrics'} }) {
+                    my $metr_desc_doc_ref = $coder->decode($per_doc_json);
+                    my %metr_desc_doc = %$metr_desc_doc_ref;
+                    $metr_desc_doc{'metric_desc'} = $$metr{'desc'};
+                    $metr_desc_doc{'metric_desc'}{'id'} = $ug->create_str();
+                    $metr_desc_doc{'metric_desc'}{'names'} = $$metr{'names'};
+                    my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
+                    printf "%s -X POST localhost:9200/cdmv5dev-metric_desc/_doc/ -d '%s'\n",
+                           $curl_cmd, $metr_desc_doc_json;
+                    for my $metr_data (@{ $$metr{'data'} }) {
+                        # The metric_data docs do not include the other docs' info
+                        # because there are potentially millions and millions of these.
+                        # The metric_data 'id' is the same id as the metric_desc doc
+                        # so anyone who has the metric_desc information can query the data docs.
+                        my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
+                        my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
+                        printf "%s -X POST localhost:9200/cdmv5dev-metric_data/_doc/ -d '%s'\n",
+                               $curl_cmd, $metr_data_doc_json;
+                    }
+                }
+            }
+        }
+    }
+}

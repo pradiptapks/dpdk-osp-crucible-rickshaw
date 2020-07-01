@@ -58,8 +58,8 @@ sub put_json_file {
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            printf "Validation errors for file %s with schema %s:\n" . Dumper \@errors,
-                   $filename, $schema_filename;
+            printf "Validation errors for file %s with schema %s:\n", $filename, $schema_filename;
+            print Dumper \@errors;
             exit 1;
         }
     }
@@ -93,8 +93,8 @@ sub get_json_file {
         $jv->schema($json_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            printf "Validaton errors for file %s with schema %s:\n" . Dumper \@errors,
-                   $filename, $schema_filename;
+            printf "Validaton errors for file %s with schema %s:\n", $filename, $schema_filename;
+            print Dumper \@errors;
             exit 1;
         }
     }
@@ -107,6 +107,8 @@ sub dedup_metric {
     my $metric_ref = shift;
     my $count = 0;
     my $num_samples = scalar @{ $$metric_ref{'data'} };
+    my $first_begin;
+    my $last_end;
     return if ($num_samples == 0);
     my $native_interval = $$metric_ref{'data'}[1]{'end'} - $$metric_ref{'data'}[0]{'end'};
     for (my $i = scalar @{ $$metric_ref{'data'} } - 1; $i >= 0; $i--) {
@@ -133,7 +135,16 @@ sub dedup_metric {
                 $i -= $look_back + 1; # Adjust the loop variable since the array is shortened
             }
         }
+        $$metric_ref{'data'}[$i]{'duration'} = int $$metric_ref{'data'}[$i]{'end'} -
+                                                   $$metric_ref{'data'}[$i]{'begin'} + 1;
+        if (! defined $first_begin or $$metric_ref{'data'}[$i]{'begin'} < $first_begin) {
+            $first_begin = $$metric_ref{'data'}[$i]{'begin'};
+        }
+        if (! defined $last_end or $$metric_ref{'data'}[$i]{'end'} > $last_end) {
+            $last_end = $$metric_ref{'data'}[$i]{'end'};
+        }
     }
+    return ($first_begin, $last_end);
 }
 
 
@@ -199,6 +210,9 @@ if (-e $run_file) {
     my $run_ref = get_json_file($run_file, $run_schema_file);
     %run = %{ $run_ref };
     # TODO checks for minimum fileds for valid run
+} else {
+    printf "Could not find rickshaw-run.json in %s, exiting\n", $run_dir;
+    exit 1;
 }
 
 # Benchmark-specific post-processors convert benchmark-native data into a common JSON
@@ -214,6 +228,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
     my $iter_array_idx = $i -1;
     my @samples;
+    my $primary_metric;
+    my $primary_period;
     for my $samp_dir (@samp_dirs) {
         my %sample; # sample data from all clients/servers
         my @cons_periods; # consolidated periods across clients/servers get merged here
@@ -231,6 +247,12 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                 if (-e $data_file) {
                     my $data_ref = get_json_file($data_file, $bench_metric_schema_file);
                     my %data = %$data_ref;
+                    if (! defined $primary_metric and exists $data{'primary-metric'}) {
+                        $primary_metric = $data{'primary-metric'};
+                    }
+                    if (! defined $primary_period and exists $data{'primary-period'}) {
+                        $primary_period = $data{'primary-period'};
+                    }
                     if (defined $data{'periods'}) {
                         for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
                             my $period_name = $data{'periods'}[$k]{'name'};
@@ -252,7 +274,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                     push(@cons_periods, \%period);
                                     $cons_period_id = scalar @cons_periods - 1;
                                 }
-                                dedup_metric($metric);
+                                ($cons_periods[$cons_period_id]{'begin'},
+                                 $cons_periods[$cons_period_id]{'end'}) = dedup_metric($metric);
                                 push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
                             }
                         }
@@ -264,6 +287,16 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
         push(@samples, \%sample);
     }
     $run{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
+    if (defined $primary_metric) {
+        $run{'iterations'}[$iter_array_idx]{'primary-metric'} = $primary_metric;
+    } else {
+        printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
+    }
+    if (defined $primary_period) {
+        $run{'iterations'}[$iter_array_idx]{'primary-period'} = $primary_period;
+    } else {
+        printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
+    }
 }
 print "Consolidation complete\n";
 delete $run{'rickshaw-run'};
