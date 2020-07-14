@@ -19,7 +19,6 @@ use JSON::XS;
 use JSON::Validator;
 use Data::Dumper;
 
-my $ug = Data::UUID->new;
 my $debug = 0;
 my %result;
 my $base_run_dir;
@@ -165,25 +164,56 @@ my %cdm = ( 'ver' => 'v5dev' );
 # Start by creating what will be the CDM run document for elasticsearch
 my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
             'host' => 'localhost', 'name' => $result{'name'}, 'email' => $result{'email'} );
+for my $field (qw(host name email desc tags)) {
+    if (defined $result{$field}) {
+        $run{$field} = $result{$field};
+    }
+}
             #'host' => $result{'host'}, 'desc' => $result{'description'}, 'name' => $result{'name'},
             #'email' => $result{'email'}, 'tags' => $result{'tags'} );
 my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
 my $run_doc_json = $coder->encode(\%run_doc);
 my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
 printf "%s -X POST localhost:9200/cdmv5dev-run/_doc/ -d '%s'\n", $curl_cmd, $run_doc_json;
+if (exists $result{'tool-data'}) {
+    for my $metr (@{ $result{'tool-data'} }) {
+        # Copy data from 'parent' doc so querying directly for metric_desc with
+        # run data is possible
+        my $metr_desc_doc_ref = $coder->decode($run_doc_json);
+        my %metr_desc_doc = %$metr_desc_doc_ref;
+        $metr_desc_doc{'metric_desc'} = $$metr{'desc'};
+        $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
+        $metr_desc_doc{'metric_desc'}{'names'} = $$metr{'names'};
+        my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
+        printf "%s -X POST localhost:9200/cdmv5dev-metric_desc/_doc/ -d '%s'\n",
+               $curl_cmd, $metr_desc_doc_json;
+        for my $metr_data (@{ $$metr{'data'} }) {
+            # The metric_data docs do not include the 'parent' doc info
+            # because there are potentially millions and millions of these.
+            # The only data copied from its parent (metric_desc) is the metric_desc.id
+            my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
+            $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
+            my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
+            printf "%s -X POST localhost:9200/cdmv5dev-metric_data/_doc/ -d '%s'\n",
+                   $curl_cmd, $metr_data_doc_json;
+        }
+    }
+}
 if (exists $result{'iterations'}) {
     for my $iter (@{ $result{'iterations'} }) {
         my $iter_doc_ref = $coder->decode($run_doc_json);
         my %iter_doc = %$iter_doc_ref;
-        $iter_doc{'iteration'}{'id'} = $ug->create_str();
+        $iter_doc{'iteration'}{'id'} = Data::UUID->new->create_str();
         $iter_doc{'iteration'}{'primary-metric'} = $$iter{'primary-metric'};
         $iter_doc{'iteration'}{'primary-period'} = $$iter{'primary-period'};
         my $iter_doc_json = $coder->encode(\%iter_doc);
         printf "%s -X POST localhost:9200/cdmv5dev-iteration/_doc/ -d '%s'\n", $curl_cmd, $iter_doc_json;
         for my $param (@{ $$iter{'params'} }) {
+            # Copy data from 'parent' doc so querying directly for params with
+            # run/iteration data is possible
             my $param_doc_ref = $coder->decode($iter_doc_json);
             my %param_doc = %$param_doc_ref;
-            $param_doc{'param'}{'id'} = $ug->create_str();
+            $param_doc{'param'}{'id'} = Data::UUID->new->create_str();
             $param_doc{'param'}{'arg'} = $$param{'arg'};
             $param_doc{'param'}{'val'} = $$param{'val'};
             my $param_doc_json = $coder->encode(\%param_doc);
@@ -191,37 +221,43 @@ if (exists $result{'iterations'}) {
         }
         my $sample_num = 1;
         for my $samp (@{ $$iter{'samples'} }) {
+            # Copy data from 'parent' doc so querying directly for samples with
+            # run/iteration data is possible
             my $samp_doc_ref = $coder->decode($iter_doc_json);
             my %samp_doc = %$samp_doc_ref;
-            $samp_doc{'sample'}{'id'} = $ug->create_str();
+            $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
             $samp_doc{'sample'}{'num'} = $sample_num;
             my $samp_doc_json = $coder->encode(\%samp_doc);
             printf "%s -X POST localhost:9200/cdmv5dev-sample/_doc/ -d '%s'\n", $curl_cmd, $samp_doc_json;
             $sample_num++;
             for my $per (@{ $$samp{'periods'} }) {
+                # Copy data from 'parent' doc so querying directly for samples with
+                # run/iteration/sample data is possible
                 my $per_doc_ref = $coder->decode($samp_doc_json);
                 my %per_doc = %$per_doc_ref;
-                $per_doc{'period'}{'id'} = $ug->create_str();
+                $per_doc{'period'}{'id'} = Data::UUID->new->create_str();
                 $per_doc{'period'}{'name'} = $$per{'name'};
                 $per_doc{'period'}{'begin'} = $$per{'begin'};
                 $per_doc{'period'}{'end'} = $$per{'end'};
                 my $per_doc_json = $coder->encode(\%per_doc);
                 printf "%s -X POST localhost:9200/cdmv5dev-period/_doc/ -d '%s'\n", $curl_cmd, $per_doc_json;
                 for my $metr (@{ $$per{'metrics'} }) {
+                    # Copy data from 'parent' doc so querying directly for metric_desc with
+                    # run/iteration/sample/period data is possible
                     my $metr_desc_doc_ref = $coder->decode($per_doc_json);
                     my %metr_desc_doc = %$metr_desc_doc_ref;
                     $metr_desc_doc{'metric_desc'} = $$metr{'desc'};
-                    $metr_desc_doc{'metric_desc'}{'id'} = $ug->create_str();
+                    $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
                     $metr_desc_doc{'metric_desc'}{'names'} = $$metr{'names'};
                     my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
                     printf "%s -X POST localhost:9200/cdmv5dev-metric_desc/_doc/ -d '%s'\n",
                            $curl_cmd, $metr_desc_doc_json;
                     for my $metr_data (@{ $$metr{'data'} }) {
-                        # The metric_data docs do not include the other docs' info
+                        # The metric_data docs do not include the 'parent' doc info
                         # because there are potentially millions and millions of these.
-                        # The metric_data 'id' is the same id as the metric_desc doc
-                        # so anyone who has the metric_desc information can query the data docs.
+                        # The only data copied from its parent (metric_desc) is the metric_desc.id
                         my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
+                        $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
                         my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
                         printf "%s -X POST localhost:9200/cdmv5dev-metric_data/_doc/ -d '%s'\n",
                                $curl_cmd, $metr_data_doc_json;
