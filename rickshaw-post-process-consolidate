@@ -132,16 +132,23 @@ sub dedup_metric {
             }
             if ($look_back > 1) { # deduping 1 or more samples
                 splice @{ $$metric_ref{'data'} }, $i - $look_back + 1, $look_back - 1;
-                $i -= $look_back + 1; # Adjust the loop variable since the array is shortened
+                $i -= ($look_back - 1); # Adjust the loop variable since the array is shortened
             }
         }
-        $$metric_ref{'data'}[$i]{'duration'} = int $$metric_ref{'data'}[$i]{'end'} -
-                                                   $$metric_ref{'data'}[$i]{'begin'} + 1;
-        if (! defined $first_begin or $$metric_ref{'data'}[$i]{'begin'} < $first_begin) {
-            $first_begin = $$metric_ref{'data'}[$i]{'begin'};
-        }
-        if (! defined $last_end or $$metric_ref{'data'}[$i]{'end'} > $last_end) {
-            $last_end = $$metric_ref{'data'}[$i]{'end'};
+        if (! exists $$metric_ref{'data'}[$i]{'begin'}) {
+            printf "ERROR: 'begin' for sample %d is missing\n", $i;
+            printf "i: %d\n", $i;
+            print Dumper $metric_ref;
+            exit;
+        } else {
+            $$metric_ref{'data'}[$i]{'duration'} = int $$metric_ref{'data'}[$i]{'end'} -
+                                                    $$metric_ref{'data'}[$i]{'begin'} + 1;
+            if (! defined $first_begin or $$metric_ref{'data'}[$i]{'begin'} < $first_begin) {
+                $first_begin = $$metric_ref{'data'}[$i]{'begin'};
+            }
+            if (! defined $last_end or $$metric_ref{'data'}[$i]{'end'} > $last_end) {
+                $last_end = $$metric_ref{'data'}[$i]{'end'};
+            }
         }
     }
     return ($first_begin, $last_end);
@@ -236,7 +243,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
         debug_log("Working on " . $this_samp_dir . "\n");
         opendir(my $samp_dh, $this_samp_dir);
-        my @cs_names = grep(/^(clients|servers)$/, readdir($samp_dh));
+        my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
         for my $cs_name (@cs_names) { 
             my $cs_name_dir = $this_samp_dir . "/" . $cs_name;
             opendir(my $cs_name_dh, $cs_name_dir);
@@ -264,10 +271,14 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                 }
                             }
                             for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
-                                # Add the client info to the metric desc
-                                $$metric{'names'}{'cs-id'} = $cs_id;
-                                $$metric{'desc'}{'name-format'} = '%cs-id%' . "-" .
-                                                                 $$metric{'desc'}{'name-format'};
+                                # Add the client/server info to the metric desc
+                                $$metric{'names'}{'cstype'} = $cs_name;
+                                $$metric{'names'}{'csid'} = $cs_id;
+                                if ($$metric{'desc'}{'name-format'} eq "") {
+                                    $$metric{'desc'}{'name-format'} = '%cstype%-%csid%';
+                                } else {
+                                    $$metric{'desc'}{'name-format'} = '%cstype%-%csid%-' . $$metric{'desc'}{'name-format'};
+                                }
                                 if (! defined $cons_period_id) {
                                     my @metrics;
                                     my %period = ('name' => $period_name, 'metrics' => \@metrics);
@@ -298,6 +309,41 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
         printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
     }
 }
+
+# Next, any tool data found is added
+my $tool_dir = $run_dir . "/tool-data";
+opendir(TOOLDIR, $tool_dir);
+my @collectors = grep(/\w+/, readdir(TOOLDIR));
+for my $collector (@collectors) {
+    my $collector_dir = $tool_dir . "/" . $collector;  # $run_dir/tool-data/[client|server|worker|master]
+    opendir(COLLECTORDIR, $collector_dir);
+    my @numbers = grep (/\d+/, readdir(COLLECTORDIR));
+    for my $num (@numbers) {
+        my $cd_id = $collector . "-" . $num;
+        my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
+        opendir(NUMDIR, $num_dir);
+        my @tools = grep(/\w+/, readdir(NUMDIR));
+        for my $tool (@tools) {
+            my $metric_data_file = $num_dir . "/" . $tool . "/metric-data.json";
+            if (-e $metric_data_file) {
+                my $metrics_ref = get_json_file($metric_data_file);
+                for my $metric_ref (@{ $metrics_ref }) {
+                    # Add the client/server info to the metric desc
+                    $$metric_ref{'names'}{'cstype'} = $collector;
+                    $$metric_ref{'names'}{'csid'} = $num;
+                    if ($$metric_ref{'desc'}{'name-format'} eq "") {
+                        $$metric_ref{'desc'}{'name-format'} = '%cstype%-%csid%';
+                    } else {
+                        $$metric_ref{'desc'}{'name-format'} = '%cstype%-%csid%-' . $$metric_ref{'desc'}{'name-format'};
+                    }
+                    dedup_metric($metric_ref);
+                    push(@{ $run{'tool-data'} }, $metric_ref);
+                }
+            }
+        }
+    }
+}
+
 print "Consolidation complete\n";
 delete $run{'rickshaw-run'};
 $run{'rickshaw-result'}{'schema'}{'version'} = "2020.03.18";
