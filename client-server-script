@@ -4,15 +4,18 @@
 exec 2>&1
 test -e /etc/profile && . /etc/profile
 
+
 # Depending on how client-server-script is started, "/usr/local/bin" is not
 # always in the $PATH
 PATH="/usr/local/bin:$PATH"
 
+max_rb_attempts=5
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
 default_timeout=240
-client_server_script_timeout=500
+client_server_script_timeout=720
+runtime_padding=120
 
 function exit_error() {
     local message=$1; shift
@@ -39,33 +42,65 @@ function do_roadblock() {
     fi
     local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd=""
+    local role="follower"
     cmd="$cmd $roadblock_bin --role=follower --redis-server=$roadblock_server"
     cmd="$cmd --leader-id=$leader --timeout=$timeout --redis-password=$roadblock_passwd"
-    cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label --message-log=$msgs_file $extra"
+    #cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label --message-log=$msgs_file $extra"
+    cmd="$cmd --follower-id=$cs_label --message-log=$msgs_file $extra"
+    local uuid="$roadblock_id:$label"
+    printf "\n\n"
+    echo "Starting roadblock [`date`]"
+    echo "role: $role"
+    echo "uuid (without attempt ID embedded): $uuid"
+    echo "timeout: $timeout"
+
+    local attempts=0
+    local rc=99
     if [ "$use_roadblock" == "1" ]; then
-        echo "going to run this roadblock command: $cmd"
-        local output=`$cmd 2>&1`
-        local rc=$?
-        echo -e "$output"
-        if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
-            rc=$rb_exit_nonet
-            exit_error "Roadblock error: $output"
-        elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-            rc=$rb_exit_abort
-        elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
-            rc=$rb_exit_timeout
-            exit_error "Roadblock error: $output"
-        fi
-        if [ $rc -gt 0 ]; then
-            echo "Roadblock exit code is non-zero: $rc"
-        fi
+        while [ $attempts -lt $max_rb_attempts -a $rc -ne 0 -a $rc -ne $rb_exit_abort ]; do
+	        let attempts=$attempts+1
+            echo "attempt number: $attempts"
+            echo "uuid: $attempts:$uuid"
+            #echo "going to run this roadblock command: $cmd"
+            local output=`$cmd --uuid=$attempts:$uuid 2>&1`
+            rc=$?
+            echo "roadblock output BEGIN"
+            printf "%s" "$output"
+            echo "roadblock output END"
+            echo "roadblock exit code: $rc"
+            if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
+                rc=$rb_exit_nonet
+                #rb_exit_msg="Roadblock error: $output"
+            elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+                rc=$rb_exit_abort
+                #rb_exit_msg="Roadblock error: $output"
+            elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+                rc=$rb_exit_timeout
+                #rb_exit_msg="Roadblock error: $output"
+            fi
+            #if [ $rc -gt 0 ]; then
+                #echo "Roadblock exit code is non-zero: $rc"
+	            #echo "$rb_exit_msg"
+            #fi
+            if [ -f roadblock-messages ]; then
+                echo "messages from roadblock:"
+                cat roadblock-messages
+            fi
+        done
+
+        echo "total attempts: $attempts"
+        echo "Completed roadblock [`date`]"
+        printf "\n\n"
+
+    else
+        return 0
+    fi
+
+    if [ $rc -eq 0 -o $rc -eq $rb_exit_abort ]; then
         return $rc
+    else
+        exit_error "$rb_exit_msg"
     fi
-    if [ -f roadblock-messages ]; then
-        echo "messages from roadblock:"
-        cat roadblock-messages
-    fi
-    return 0
 }
 
 function scp_from_controller() {
@@ -210,10 +245,10 @@ while true; do
             break;
            ;;
         *)
-           exit_error "Unexpected argument [$1]"
-           shift;
-           break;
-           ;;
+            exit_error "Unexpected argument [$1]"
+            shift;
+            break;
+            ;;
     esac
 done
 
@@ -302,7 +337,7 @@ fi
 dest_file=""
 src_file=""
 # Now we know what files to get
-while read line; do
+while read -u 9 line; do
     # $cs_files_list has line like:
     # src=<file>
     # dest=<file>
@@ -321,7 +356,7 @@ while read line; do
         dest_file=""
         src_file=""
     fi
-done < "$cs_files_list"
+done 9< "$cs_files_list"
 
 # Get the benchmark and tool commands
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
@@ -366,14 +401,14 @@ for this_tool_cmds in "$tool_start_cmds" "$tool_stop_cmds"; do
 done
 mkdir -p tool-data
 pushd tool-data >/dev/null
-while read line; do
+while read -u 9 line; do
     tool_name=`echo $line | awk -F: '{print $1}'`
     tool_cmd=`echo $line | sed -e s/^$tool_name://`
     /bin/mkdir -p $tool_name
     pushd $tool_name >/dev/null
     $tool_cmd
     popd >/dev/null
-done <"$tool_start_cmds"
+done 9<"$tool_start_cmds"
 popd >/dev/null
 
 declare -A bench_runtime_cmds
@@ -382,28 +417,28 @@ declare -A bench_stop_cmds
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     count=0
     if [ -e bench-start-cmds ]; then
-        while read line; do
+        while read -u 9 line; do
             bench_start_cmds[$count]="$line"
             let count=$count+1
-        done < bench-start-cmds
+        done 9< bench-start-cmds
     else
         exit_error "bench-start-cmds not found"
     fi
     count=0
     if [ -e bench-runtime-cmds -a "$cs_id" == 1 ]; then
-        while read line; do
+        while read -u 9 line; do
             bench_runtime_cmds[$count]="$line"
             let count=$count+1
-        done < bench-runtime-cmds
+        done 9< bench-runtime-cmds
     fi
 fi
 if [ "$cs_type" == "server" ]; then
     if [ -e bench-stop-cmds ]; then
         count=0
-        while read line; do
+        while read -u 9 line; do
             bench_stop_cmds[$count]="$line"
             let count=$count+1
-        done < bench-stop-cmds
+        done 9< bench-stop-cmds
     else
         exit_error "bench-stop-cmds not found"
     fi
@@ -414,7 +449,11 @@ abort_opt=""
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     timeout=$default_timeout
     len=${#bench_start_cmds[@]}
+    quit=0
     for (( i=0; i<$len; i++ )); do
+        if [ $quit -gt 0 ]; then
+            break
+        fi
         iter_samp=`echo ${bench_start_cmds[$i]} | awk '{print $1}'`
         start_cmd=`echo ${bench_start_cmds[$i]} | sed -e s/^$iter_samp//`
         runtime_cmd=`echo ${bench_runtime_cmds[$i]} | sed -e s/^$iter_samp//`
@@ -440,7 +479,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             exit_error "Could not copy files from $cs_dir to $iter_samp_dir with find & cpio"
         pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
         echo PWD: `/bin/pwd`
-        for sync in server-start client-start client-stop server-stop; do
+        for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
             label="test-${iter}-${samp}:$sync"
             msgs_file="$roadblock_msgs_dir/$label.json"
             this_timeout=$default_timeout
@@ -450,9 +489,9 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                 echo "going to run this command to get the runtime: $runtime_cmd"
                 runtime=`$runtime_cmd`
                 if [ $? -eq 0  -a ! -z "$runtime" ]; then
-                    # Add 30 seconds to benchmark runtime to give
+                    # Add padding to benchmark runtime to give
                     # enough time for everyone to call roadblock
-                    let this_timeout=$runtime+30
+                    let this_timeout=$runtime+$runtime_padding
                     user_json_file="`mktemp`"
                     echo "adding timeout message to $cs_tx_msgs_dir"
                     echo '{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}' >"$cs_tx_msgs_dir/timeout"
@@ -480,6 +519,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             do_roadblock "$label" "controller" $timeout "$abort_opt"
             rb_rc=$?
             cmd_rc=0
+            abort_opt=""
             echo roadblock $label exit code: $rb_rc
             if [ $rb_rc -eq $rb_exit_abort ]; then
                 echo -e "\nReceived abort exit code from iteration $iter, sample $samp roadblock"
@@ -489,7 +529,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                     echo -e "\nAttempting to stop server\n"
                     $stop_cmd
                 fi
-                break 2 # break out of the outer loop
+                quit=1 # don't run any more tests
             fi
             if [ $rb_rc -eq 2 ]; then
                 exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
@@ -503,7 +543,18 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                     cs_buddy="client-$cs_id"
                 fi
                 echo "Found messages file: $msgs_file"
+		# First look for a message to "all" but sent by client-server buddy
+		# (to be deprecated)
                 jq -cr '.received[] | select(.payload.sender.id == "'$cs_buddy'" and 
+                        .payload.message.command == "user-object") | .payload.message' $msgs_file\
+                | while read line; do
+                    msg="$sync:$count"
+                    echo "Found user-object message from $cs_buddy: $line"
+                    echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                    let count=$count+1
+                done
+		# Next look for a message sent specifically to this client/server
+                jq -cr '.received[] | select(.payload.recipient.id == "'$cs_label'" and 
                         .payload.message.command == "user-object") | .payload.message' $msgs_file\
                 | while read line; do
                     msg="$sync:$count"
@@ -565,13 +616,13 @@ else
     echo -e "\nCollectors stopping tools"
 fi
 pushd tool-data >/dev/null
-while read line; do
+while read -u 9 line; do
     tool_name=`echo $line | awk -F: '{print $1}'`
     tool_cmd=`echo $line | sed -e s/^$tool_name://`
     pushd $tool_name >/dev/null
     $tool_cmd
     popd >/dev/null
-done <"$tool_stop_cmds"
+done 9<"$tool_stop_cmds"
 popd >/dev/null
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then

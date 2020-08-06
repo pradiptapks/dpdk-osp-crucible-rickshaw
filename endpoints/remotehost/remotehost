@@ -191,8 +191,11 @@ function launch_osruntime() {
         container_mount=`do_ssh $user@$host podman mount "$container_id"`
         if [ ! -z "$container_mount" ]; then
             echo "Container mount: $container_mount"
-            echo "Adding /dev /proc /sys to container mount"
+            echo "Adding host directories to container mount"
+            #for fs in dev proc sys lib/modules usr/src boot; do
             for fs in dev proc sys; do
+                echo "Adding $fs"
+                do_ssh $user@$host mkdir -p $container_mount/$fs
                 do_ssh $user@$host mount --verbose --options bind /$fs $container_mount/$fs
             done
             # for chroot osruntime we can also simply copy the ssh key

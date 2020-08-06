@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
-set -u
+#set -u
 
 # Shared init and functions for endpoints
 
@@ -9,9 +9,11 @@ echo "#params: $@"
 hostname=`hostname`
 rb_exit_timeout=3
 rb_exit_abort=4
+rb_exit_nonet=5
 default_timeout=240
+max_rb_attempts=5
 endpoint_deploy_timeout=360
-client_server_start_timeout=500
+client_server_start_timeout=720
 endpoint_move_data_timeout=300
 cs_rb_opts=""
 do_validate="0"
@@ -189,9 +191,17 @@ function base_req_check() {
 }
 
 function do_roadblock() {
+    echo "do_roadblock() ARGC: $#"
     local label=$1; shift
     local role=$1; shift
     local timeout=$1; shift
+    if [ $# -gt 0 ]; then
+        local message="$1"; shift # A file for user-messages or "" if none
+        echo "Going to send this user message file: $message"
+    else
+        local message=""
+        echo "Not going to send user message file"
+    fi
     ###  followers or members remain in $@  ###
     if [ -z "$role" ]; then
         exit_error "do_roadblock(): role not defined"
@@ -200,14 +210,19 @@ function do_roadblock() {
         echo "Not running roadblock"
         return 0
     fi
-    echo `date` "Starting roadblock"
+
+    printf "\n\n"
+    echo "Starting roadblock [`date`]"
     echo "role: $role"
     local uuid="$rb_id:$label"
-    echo "uuid: $uuid"
+    echo "uuid (without attempt ID embedded): $uuid"
     echo "timeout: $timeout"
     local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server $rb_server --timeout $timeout --redis-password $rb_passwd --uuid $uuid --role=$role --message-log=$msgs_file"
+    cmd+=" --redis-server $rb_server --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_file"
+    if [ ! -z "$message" ]; then
+        cmd+=" --user-message $message"
+    fi
     if [ "$role" == "follower" ]; then
         cmd+=" --leader-id controller --follower-id $endpoint_label"
     elif [ "$role" == "leader" ]; then
@@ -216,7 +231,7 @@ function do_roadblock() {
         fi
         cmd+=" --leader-id endpoint"
         local followers=""
-        while [ ! -z $1 ]; do
+        while [ $# -gt 0 ]; do
             cmd+=" --followers $1"
             followers+=" $1"
             shift
@@ -225,56 +240,92 @@ function do_roadblock() {
     else
         exit_error "Roadblock role \"$role\" invalid"
     fi
-    local output=`$cmd 2>&1`
-    local rc=$?
 
-    if echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-        rc=$rb_exit_abort
+    local attempts=0
+    local rc=99
+    local output=""
+    while [ $attempts -lt $max_rb_attempts -a $rc -ne 0 -a $rc -ne $rb_exit_abort ]; do
+        echo "attempt number: $attempts"
+        echo "uuid: $attempts:$uuid"
+        let attempts=$attempts+1
+        output=`$cmd --uuid $attempts:$uuid 2>&1`
+        rc=$?
+        echo "roadblock output BEGIN"
+        printf "%s" "$output"
+        echo "roadblock output END"
+        echo "roadblock exit code: $rc"
+
+        if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
+            rc=$rb_exit_nonet
+        elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
+            rc=$rb_exit_abort
+        elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+            rc=$rb_exit_timeout
+        fi
+    done
+    echo "total attempts: $attempts"
+    echo "Completed roadblock [`date`]"
+    printf "\n\n"
+    if [ $rc -ne 0 -a $rc -ne $rb_exit_abort ]; then
+        exit_error "roadblock failed"
+    else
+        return $rc
     fi
-    if echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
-        exit_error "$output"
-    fi
-    if [ $rc -gt 0 ]; then
-        echo "Roadblock exit code is non-zero: $rc"
-        echo $output
-    fi
-    echo `date` "Completed roadblock for $uuid"
-    echo "output:"
-    echo "$output"
-    return $rc
 }
 
 function process_prebench_roadblocks() {
     do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout
 
     if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-script-start" "leader" $client_server_start_timeout $@
+        do_roadblock "collector-script-start" "leader" $client_server_start_timeout "" $@
     fi
     do_roadblock "client-server-script-start" "follower" $client_server_start_timeout
 
     if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-start-tools" "leader" $default_timeout $@
+        do_roadblock "collector-start-tools" "leader" $default_timeout "" $@
     fi
     do_roadblock "client-server-start-tools" "follower" $default_timeout
 }
 
 function process_bench_roadblocks() {
+    local endpoint_type=""
+    if [ $# -eq 1 ]; then
+        endpoint_type=$1; shift
+    fi
     local timeout=$default_timeout
-    while read line; do
+    local quit=0
+    while read -u 9 line; do
+        if [ $quit -gt 0 ]; then
+            break
+	fi
         iter_samp=`echo $line | awk '{print $1}'`
         iter=`echo $iter_samp | awk -F- '{print $1}'`
         samp=`echo $iter_samp | awk -F- '{print $2}'`
-        for sync in server-start client-start client-stop server-stop; do
-            local label="test-${iter}-${samp}:$sync"
+        iter_samp_dir="$endpoint_run_dir/iteration-$iter/sample-$samp"
+        cs_msgs_dir="$iter_samp_dir/msgs"
+        cs_tx_msgs_dir="$cs_msgs_dir/tx" # Messages a client, server, or endpoint wants to transmit
+        cs_rx_msgs_dir="$cs_msgs_dir/rx" # Messages a client, server, or endpoint has received
+        for this_dir in "$iter_samp_dir" "$cs_msgs_dir" "$cs_tx_msgs_dir" "$cs_rx_msgs_dir"; do
+            echo "mkdir -p $this_dir"
+            mkdir -p "$this_dir" || exit_error "Could not mkdir $this_dir"
+        done
+
+        msgs_json_file=""
+        for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
+            local test_id="test-${iter}-${samp}"
+            local label="$test_id:$sync"
             local msgs_file="$roadblock_msgs_dir/$label.json"
-            do_roadblock "$label" "follower" $timeout
+            do_roadblock "$label" "follower" $timeout "$msgs_json_file"
             rb_rc=$?
             echo "roadblock $label exit code: $rb_rc"
             if [ $rb_rc -eq $rb_exit_abort ]; then
                 echo -e "\nAbort exit code from iteration $iter, sample $samp"
                 echo -e "\nWill not run remaining tests\n"
-                break 2
+                #break 2
+                quit=1
             fi
+	    # Below checks for a specific timeout message from the benchmark client, and all endpoints
+	    # process this the same way
             timeout=$default_timeout
             if [ -f $msgs_file ]; then
                 next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
@@ -283,8 +334,53 @@ function process_bench_roadblocks() {
                     timeout=$next_timeout
                 fi
             fi
+	    # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
+	    # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
+	    if [ -f $msgs_file ]; then
+                count=1
+                echo "Found messages file: $msgs_file"
+                jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' $msgs_file\
+                | while read line; do
+                    msg="$sync:$count"
+                    echo "Found user-object message: $line"
+                    echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                    let count=$count+1
+                done
+            fi
+	    # This is the opportunity for the endpoints to make any changes
+	    # before the actual test starts (client-start).  For example, this
+	    # may be used to provide a route to a benchmark-server.  The endpoint
+	    # may also create a message to be sent to other participants on
+	    # on the next roadblock.
+            if [ ! -z "$endpoint_type" -a "$sync" == "endpoint-start" ]; then
+		    endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
+            fi
+            if [ ! -z "$endpoint_type" -a "$sync" == "endpoint-stop" ]; then
+		    echo "Attempting to call endpoint_${endpoint_type}_test_stop"
+		    endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
+            fi
+	    # Check for any messages to send
+	    pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+            if [ ! -z "$pending_tx_msgs" ]; then
+                echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
+                mkdir -p ${cs_tx_msgs_dir}-sent
+                msgs_json_file="$iter_samp_dir/rb-msgs-$sync"
+                echo "[" >"$msgs_json_file"
+                for msg in $pending_tx_msgs; do
+                    # TODO validate JSON schema
+                    echo "Adding $msg to $msgs_json_file"
+                    cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
+                    /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
+                    echo "," >>"$msgs_json_file"
+                done
+                echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$sync'"}}]' >>$msgs_json_file
+                echo "full message to send:"
+                cat "$msgs_json_file"
+	    else
+                msgs_json_file=""
+            fi
         done
-    done < "$client_server_bench_cmds_dir/client/1/start"
+    done 9< "$client_server_bench_cmds_dir/client/1/start"
     # Process the first client's bench-commands to participate in the roadblocks
     # What the start or stop command is not important; we just need to know
     # the number of tests in the right order
@@ -293,7 +389,7 @@ function process_bench_roadblocks() {
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
         if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" 86400 $@
+            do_roadblock "collector-$sub_label" "leader" 86400 "" $@
         fi
         do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done
