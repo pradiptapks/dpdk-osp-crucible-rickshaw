@@ -54,7 +54,157 @@ endpoint_name="k8s"
 pod_prefix="rickshaw"
 userenv="rhubi8"
 hostNetwork="0"
+securityContext=""
 declare -A nodeSelector
+
+function endpoint_k8s_test_stop() {
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    echo "Running endpoint_k8s_test_stop"
+
+    echo "Endpoints:"
+    ssh $k8s_user@$k8s_host kubectl get endpoints -o yaml
+    endpoints=`ssh $k8s_user@$k8s_host kubectl get endpoints | grep rickshaw | awk '{print $1}'`
+    echo "Endpoints to delete:"
+    echo $endpoints
+    ssh $k8s_user@$k8s_host kubectl delete endpoints $endpoints
+
+    echo "Services:"
+    ssh $k8s_user@$k8s_host kubectl get svc -o yaml
+    services=`ssh $k8s_user@$k8s_host kubectl get svc | grep rickshaw | awk '{print $1}'`
+    echo "Services to delete:"
+    echo $services
+    ssh $k8s_user@$k8s_host kubectl delete svc $services
+}
+
+function endpoint_k8s_test_start() {
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    local tx_msgs_dir="$1"; shift
+    echo "Running endpoint_k8s_test_start"
+    local this_msg_file="$msgs_dir/$test_id:endpoint-start.json"
+    if [ -e $this_msg_file ]; then
+        echo "Found $this_msg_file"
+        # Extract the cs-label (server-n, client-y) and the ports this benchmark is using
+        # server-1 30002 30003
+        cat $this_msg_file | jq -r '.received[] | if .payload.message.command == "user-object" and .payload.message."user-object".ports then [ .payload.sender.id, .payload.message."user-object".ports ] | flatten | tostring   else null end' | grep -v null | sed -e 's/"//g' -e 's/\[//' -e 's/\]//' -e 's/,/ /g' >"$endpoint_run_dir/ports.txt"
+	    while read -u 9 line; do
+            echo "line: $line"
+	        local name=`echo $line | awk '{print $1}'`
+	        local ports=`echo $line | sed -e s/^$name//`
+	        local svc_json=$endpoint_run_dir/$name-svc.json
+	        local nodep_json=$endpoint_run_dir/$name-nodep.json
+	        echo name: $name
+	        echo ports: $ports
+	        echo '{' >$svc_json
+	        echo '{' >$nodep_json
+            echo '    "apiVersion": "v1",' >>$svc_json
+            echo '    "apiVersion": "v1",' >>$nodep_json
+            echo '    "kind": "Service",' >>$svc_json
+            echo '    "kind": "Service",' >>$nodep_json
+            echo '    "metadata": {' >>$svc_json
+            echo '    "metadata": {' >>$nodep_json
+            echo '        "name": "rickshaw-'$name'"' >>$svc_json
+            echo '        "name": "rickshaw-'$name'-nodeport"' >>$nodep_json
+            echo '    },' >>$svc_json
+            echo '    },' >>$nodep_json
+            echo '    "spec": {' >>$svc_json
+            echo '    "spec": {' >>$nodep_json
+            echo '        "type": "NodePort",' >>$nodep_json
+            echo '        "ports": [' >>$svc_json
+            echo '        "ports": [' >>$nodep_json
+	        local count=1
+	        local port_list=""
+	        for port in $ports; do
+		        if [ $count -gt 1 ]; then
+                    port_list+=", $port"
+                    echo '            ,{' >>$svc_json
+                    echo '            ,{' >>$nodep_json
+		        else
+                    port_list="$port"
+                    echo '            {' >>$svc_json
+                    echo '            {' >>$nodep_json
+		        fi
+                echo '                "name": "port-'$port'",' >>$svc_json
+                echo '                "name": "port-'$port'",' >>$nodep_json
+                echo '                "nodePort": '$port',' >>$nodep_json
+                echo '                "port": '$port',' >>$svc_json
+                echo '                "port": '$port',' >>$nodep_json
+                echo '                "protocol": "TCP",' >>$svc_json
+                echo '                "protocol": "TCP",' >>$nodep_json
+                echo '                "targetPort": '$port >>$svc_json
+                echo '                "targetPort": '$port >>$nodep_json
+                echo '            }' >>$svc_json
+                echo '            }' >>$nodep_json
+		        let count=$count+1
+            done
+            echo '        ]' >>$svc_json
+            echo '        ]' >>$nodep_json
+            echo '    }' >>$svc_json
+            echo '    }' >>$nodep_json
+            echo '}' >>$svc_json
+            echo '}' >>$nodep_json
+            cat "$svc_json" | ssh $k8s_user@$k8s_host "kubectl create -f -" >"$endpoint_run_dir/create-svc-$name.txt"
+            cat "$nodep_json" | ssh $k8s_user@$k8s_host "kubectl create -f -" >"$endpoint_run_dir/create-svc-nodeport-$name.txt"
+            echo -n '{"recipient":{"type":"follower","id":"client-' >"$tx_msgs_dir/service-ip-$name.json"
+	        echo $name | awk -F- '{print $2}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
+	        echo -n '"},"user-object":{"ip": "' >>"$tx_msgs_dir/service-ip-$name.json"
+            ssh $k8s_user@$k8s_host "oc get nodes/worker000 -o wide" | grep worker000 | awk '{print $6}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
+	        echo '", "ports": ['$port_list']}}' >>"$tx_msgs_dir/service-ip-$name.json"
+	        local pod_ip=`ssh $k8s_user@$k8s_host "oc get pod/rickshaw-$name -o wide" | grep rickshaw | awk '{print $6}'`
+	        local endp_json=$endpoint_run_dir/$name-endpoint.json
+	        local endp_nodep_json=$endpoint_run_dir/$name-nodeport-endpoint.json
+	        echo '{' >$endp_json
+	        echo '{' >$endp_nodep_json
+            echo '    "apiVersion": "v1",' >>$endp_json
+            echo '    "apiVersion": "v1",' >>$endp_nodep_json
+            echo '    "kind": "Endpoints",' >>$endp_json
+            echo '    "kind": "Endpoints",' >>$endp_nodep_json
+            echo '    "metadata": {' >>$endp_json
+            echo '    "metadata": {' >>$endp_nodep_json
+            echo '        "name": "rickshaw-'$name'"' >>$endp_json
+            echo '        "name": "rickshaw-'$name'-nodeport"' >>$endp_nodep_json
+            echo '    },' >>$endp_json
+	        echo '    },' >>$endp_nodep_json
+            echo '    "subsets": [{' >>$endp_json
+            echo '    "subsets": [{' >>$endp_nodep_json
+            echo '        "addresses": [ { "ip": "'$pod_ip'" } ],' >>$endp_json
+            echo '        "addresses": [ { "ip": "'$pod_ip'" } ],' >>$endp_nodep_json
+            echo '        "ports": [' >>$endp_json
+            echo '        "ports": [' >>$endp_nodep_json
+	        count=1
+	        for port in $ports; do
+		        if [ $count -gt 1 ]; then
+                    echo '            ,{' >>$endp_json
+                    echo '            ,{' >>$endp_nodep_json
+		        else
+                    echo '            {' >>$endp_json
+                    echo '            {' >>$endp_nodep_json
+		        fi
+                    echo '                "name": "port-'$port'", "port": '$port'}' >>$endp_json
+                    echo '                "name": "port-'$port'", "port": '$port'}' >>$endp_nodep_json
+                    #echo '                "port": '$port'}' >>$endp_nodep_json
+		        let count=$count+1
+	        done
+            echo '        ]' >>$endp_json
+            echo '        ]' >>$endp_nodep_json
+            echo '    }]' >>$endp_json
+            echo '    }]' >>$endp_nodep_json
+            echo '}' >>$endp_json
+            echo '}' >>$endp_nodep_json
+            cat "$endp_json" | ssh $k8s_user@$k8s_host "kubectl create -f -" >"$endpoint_run_dir/create-endp-$name.txt"
+            cat "$endp_nodep_json" | ssh $k8s_user@$k8s_host "kubectl create -f -" >"$endpoint_run_dir/create-endp-nodeport-$name.txt"
+	        echo "end of loop iteration"
+	    done 9< "$endpoint_run_dir/ports.txt"
+    fi
+    sleep 10
+    echo "services:"
+    ssh $k8s_user@$k8s_host "kubectl get svc"
+    ssh $k8s_user@$k8s_host kubectl get svc -o yaml
+    echo "endpoints:"
+    ssh $k8s_user@$k8s_host "kubectl get endpoints"
+    ssh $k8s_user@$k8s_host kubectl get endpoints -o yaml
+}
 
 function k8s_req_check() {
     k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $k8s_user@$k8s_host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
@@ -103,24 +253,27 @@ function process_k8s_opts() {
                 # "nodeSelector": {
                 #    "kubernetes.io/hostname": "worker000"
                 # }
+                #TODO: validate correct format of <client-server-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
-                if [ -e $file ]; then
+                if [ ! -z "$file" -o -e $file ]; then
                     nodeSelector[$name]=`cat $file`
                 else
                     exit_error "Could not find file $file"
                 fi
                 ;;
             securityContext)
-                if [ -e $val ]; then
+                if [ ! -z "$val" -a -e $val ]; then
                     securityContext=`cat $val`
                 else
-                    exit_error "Could not find securityContext file $securityContext"
+                    exit_error "Could not find securityContext file '$val'"
                 fi
                 ;;
             resources)
-                if [ -e $val ]; then
+                if [ ! -z "$val" -a -e "$val" ]; then
                     resources=`cat $val`
+                else
+                    exit_error "Could not find resources file '$val'"
                 fi
                 ;;
             *)
@@ -149,9 +302,11 @@ function build_pod_spec() {
     echo "  }," >>$json
     echo "  \"spec\": {" >>$json
     echo "    \"restartPolicy\": \"Never\"," >>$json
+    set +u
     if [ "$type" == "cs" -a ! -z "${nodeSelector[$name]}" ]; then
         echo -e "    ${nodeSelector[$name]}," >>$json
     fi
+    set -u
     if [ "$type" == "cs" -a ! -z "$hostNetwork" -a "$hostNetwork" == "1" ]; then
         echo "    \"hostNetwork\": true," >>$json
     fi
@@ -259,29 +414,37 @@ function create_pods() {
         exit_error "You must request one or more pods to create"
     fi
     mkdir -p "$dir"
-    count=1
-    while [ ! -z "$1" ]; do
+    local count=1
+    local pods_to_create=""
+    while [ $# -gt 0 ]; do
         local name="$1"; shift
-	echo "create_pods: working on [$name]"
-	local host=""
-	if [ "$type" == "master" -o "$type" == "worker" ]; then
-	    host="$name"
-	    echo "because this is a tool pod, changing name from $name to..."
-	    name="$type-$count"
-	    echo "$name"
-	fi
-        delete_pods "$name"
-        echo build_pod_spec "$name" "$type" "$dir" "$host"
-        build_pod_spec "$name" "$type" "$dir" "$host"
-        if [ -e "$dir/$name.json" ]; then
+	    echo "create_pods: working on [$name]"
+	    local host=""
+	    if [ "$type" == "master" -o "$type" == "worker" ]; then
+	        host="$name"
+	        echo "because this is a tool pod, changing name from $name to..."
+	        name="$type-$count"
+	        echo "$name"
+            let count=$count+1
+	    fi
+        pods_to_create+=" $name"
+    done
+    delete_pods $pods_to_create
+    local this_pod
+    for this_pod in $pods_to_create; do
+        #echo "about to delete $name"
+        #delete_pods "$name"
+        echo build_pod_spec "$this_pod" "$type" "$dir" "$host"
+        build_pod_spec "$this_pod" "$type" "$dir" "$host"
+        if [ -e "$dir/$this_pod.json" ]; then
             # TODO: the exit code does not work here, need to find a way to have it work
-            cat "$dir/$name.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$name.txt"
+            cat "$dir/$this_pod.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$this_pod.txt"
             if [ $? -gt 0 ]; then
-                exit_error "Failed to create pod $name"
+                exit_error "Failed to create pod $this_pod"
             fi
-            pods+=" $name"
+            pods+=" $this_pod"
         else
-            exit_error "Could not find $dir/$name.json to create pod: $create_output"
+            exit_error "Could not find $dir/$this_pod.json to create pod: $create_output"
         fi
     done
     ssh $k8s_user@$k8s_host kubectl get pods 2>&1 >"$endpoint_run_dir/post-create-get-pods.txt"
@@ -292,17 +455,17 @@ function verify_pods_running() {
     typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
     ref1=""
     local kubectl_get_pods="$endpoint_run_dir/kubectl-get-pods.txt"
-    declare -A unverified_pods
-    declare -A verified_pods
+    declare -A unverified_pods=()
+    declare -A verified_pods=()
     if [ -z "$1" ]; then
         exit_error "You must provide at least 1 pod to verify"
     fi
-    while [ ! -z "$1" ]; do
+    while [ $# -gt 0 ]; do
         unverified_pods[$1]=1; shift
     done
     local num_pods=${#unverified_pods[@]}
     local count=0
-    local max_attempts=12
+    local max_attempts=18
     local abort=0
     local num_nonzero_exit=0
     local max_nonzero_exit=3
@@ -323,7 +486,6 @@ function verify_pods_running() {
             local this_status=`echo $line | awk '{print $3}'`
             local this_pod=`echo $line | awk '{print $1}' | sed -e s/^$pod_prefix-//`
             local node=`echo $line | awk '{print $7}'`
-            #if [ "$this_status" == "Error" -a ! -z "${unverified_pods[$this_pod]}" ]; then
             if echo "$this_status" | grep -q -i error; then
                 # If just 1 pod is in error bail immediately
                 abort=1
@@ -332,7 +494,7 @@ function verify_pods_running() {
                 ssh $k8s_user@$k8s_host kubectl describe pod $pod_prefix-$this_pod >"$endpoint_run_dir/kubectl-describe-pod-$this_pod.txt"
                 break
             fi
-            if [ "$this_status" == "Running" -a -z "${verified_pods[$this_pod]}" ]; then
+            if [ "$this_status" == "Running" ]; then
                 verified_pods[$this_pod]="$node"
                 unset unverified_pods[$this_pod]
             fi
@@ -356,7 +518,7 @@ function get_pod_logs() {
     if [ -z "$1" ]; then
         exit_error "get_pod_logs(): at least 1 pod must be provided"
     fi
-    while [ ! -z "$1" ]; do
+    while [ $# -gt 0 ]; do
         local name="$1"; shift
         echo "Getting logs from pod $name"
         pod_name="rickshaw-$name"
@@ -368,20 +530,27 @@ function delete_pods() {
     if [ -z "$1" ]; then
         exit_error "delete_pods(): at least 1 pod must be provided"
     fi
-    while [ ! -z "$1" ]; do
+    local pods_to_delete=""
+    while [ $# -gt 0 ]; do
         local name="$1"; shift
+        echo "checking for existing pod $name with prefix $pod_prefix-"
         local existing_pod="`ssh $k8s_user@$k8s_host kubectl get pods | grep "^$pod_prefix-$name " | awk '{print $1}'`"
         if [ ! -z "$existing_pod" ]; then
-            local delete_output=`ssh $k8s_user@$k8s_host "kubectl delete pod $existing_pod 2>&1"`
-            if [ $? -gt 0 ]; then
-                exit_error "Error deleting pod $existing_pod: $delete_output"
-            fi
+            echo "delete_pods(): found $name"
+            pods_to_delete+=" $pod_prefix-$name"
         fi
     done
+    if [ ! -z "$pods_to_delete" ]; then
+        echo "going to bulk-delete these pods: $pods_to_delete"
+        local delete_output=`ssh $k8s_user@$k8s_host "kubectl delete pod $pods_to_delete 2>&1"`
+        if [ $? -gt 0 ]; then
+            exit_error "Error deleting pod $existing_pod: $delete_output"
+        fi
+    fi
 }
 
 function delete_old_pods() {
-    local pods=`ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep $pod_prefix | awk '{print $1}' | sed -e s/$pod_prefix-//`
+    local pods=`ssh $k8s_user@$k8s_host kubectl get pods -o wide | grep $pod_prefix | awk '{print $1}' | sed -e s/$pod_prefix-// | tr '\n' ' '`
     if [ ! -z "$pods" ]; then
         echo "Going to delete these old pods: $pods"
         delete_pods $pods
@@ -438,10 +607,10 @@ if [ 1 -eq 1 ]; then
     create_pods master_tool_pods master $master_nodes
     echo "These master-tool pods were created: $master_tool_pods"
     verify_pods_running tool_master_nodes $master_tool_pods
-    echo "These nodes are hosting the master-tool pods: $master_tool_nodes"
+    echo "These nodes are hosting the master-tool pods: $master_nodes"
 fi
 process_prebench_roadblocks $worker_tool_pods $master_tool_pods
-process_bench_roadblocks
+process_bench_roadblocks k8s
 process_postbench_roadblocks $worker_tool_pods $master_tool_pods
 get_pod_logs $worker_tool_pods $master_tool_pods $cs_pods
 delete_pods $worker_tool_pods $master_tool_pods $cs_pods

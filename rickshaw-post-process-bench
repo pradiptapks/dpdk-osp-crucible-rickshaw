@@ -241,7 +241,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
         debug_log("Working on " . $this_samp_dir . "\n");
         opendir(my $samp_dh, $this_samp_dir);
-        my @cs_names = grep(/^(clients|servers)$/, readdir($samp_dh));
+        my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
         for my $cs_name (@cs_names) { 
             my $cs_name_dir = $this_samp_dir . "/" . $cs_name;
             opendir(my $cs_name_dh, $cs_name_dir);
