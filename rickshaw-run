@@ -322,7 +322,8 @@ sub build_container_image {
                             }
                         },
                         'config' => {
-                            'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
+                            #'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
+                            'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ]
                         }
                     );
         my $cs_req_file = $config_dir . "/cs-req.json";
@@ -335,17 +336,19 @@ sub build_container_image {
                         'userenvs' => [
                             {
                                 'name' => 'default',
-                                'requirements' => [ 'endpoint-run', 'jq_src' ]
+                                'requirements' => [ 'bootstrap', 'jq_src' ]
                             }
                         ],
                         'requirements' => [
                             {
-                                'name' => 'endpoint-run',
+                                #'name' => 'endpoint-run',
+                                'name' => 'bootstrap',
                                 'type' => 'files',
                                 'files_info' => {
                                     'files' => [
                                         {
-                                            'src' => $rickshaw_project_dir . "/client-server-script",
+                                            #'src' => $rickshaw_project_dir . "/client-server-script",
+                                            'src' => $rickshaw_project_dir . "/bootstrap",
                                             'dst' => '/usr/local/bin'
                                         }
                                     ]
@@ -393,7 +396,8 @@ sub build_container_image {
         my @files = ($run{'bench-dir'} . "/workshop.json",
                     $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
                     $cs_req_file, $cs_conf_file,
-                    $rickshaw_project_dir . "/client-server-script");
+                    #$rickshaw_project_dir . "/client-server-script");
+                    $rickshaw_project_dir . "/bootstrap");  # replaces ^^^
         foreach my $tool_entry (@tools_params) {
             push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
         }

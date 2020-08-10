@@ -215,7 +215,7 @@ function launch_osruntime() {
     do_ssh $user@$host /bin/mkdir -p $remote_logs_dir
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         this_cs_log_file="$this_cs_label.txt"
-        base_cmd="$client_server_run_script --rickshaw-host=$hostname"
+        base_cmd="/usr/local/bin/bootstrap --rickshaw-host=$hostname"
         base_cmd+=" --endpoint-run-dir=$endpoint_run_dir --cs-label=$this_cs_label $cs_rb_opts"
         base_cmd+=" --base-run-dir=$base_run_dir"
         if [ "$osruntime" == "chroot" ]; then

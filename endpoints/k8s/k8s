@@ -55,6 +55,7 @@ pod_prefix="rickshaw"
 userenv="rhubi8"
 hostNetwork="0"
 securityContext=""
+resources=""
 declare -A nodeSelector
 
 function endpoint_k8s_test_stop() {

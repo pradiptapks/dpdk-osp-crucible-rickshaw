@@ -89,9 +89,9 @@ function localhost_req_check() {
 function launch_osruntime() {
     echo osruntime: $osruntime
     if [ "$osruntime" == "builtin" ]; then
-        # Only the container images already have the client-server-script,
+        # Only the container images already have the bootstrap,
         # so we must copy ourselves
-        /bin/cp $client_server_config_dir/client-server-script $client_server_run_script
+        /bin/cp $client_server_config_dir/bootstrap $bootstrap_script
         # All osruntimes need an ssh-key, but for osruntime "builtin" it can simply be copied here
         /bin/cp -f "$config_dir/rickshaw_id.rsa" /tmp/rickshaw_id.rsa
     elif [ "$osruntime" == "chroot" ]; then
@@ -119,12 +119,12 @@ function launch_osruntime() {
     # For each client and server launch the actual script which will run it.
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         this_cs_log_file="$client_server_logs_dir/$this_cs_label.txt"
-        base_cmd="$client_server_run_script --rickshaw-host=localhost"
+        base_cmd="$bootstrap_script --rickshaw-host=localhost"
         base_cmd="$base_cmd --endpoint-run-dir=$endpoint_run_dir --cs-label=$this_cs_label $cs_rb_opts"
         base_cmd="$base_cmd --base-run-dir=$base_run_dir"
         if [ "$osruntime" == "builtin" ]; then
             cmd="$base_cmd"
-            if [ -e "$client_server_run_script" ]; then
+            if [ -e "$bootstrap_script" ]; then
                 if [ -z "$cs_rb_opts" ]; then
                     # Only when not using roadblock run the client in the foreground
                     echo -e "About to run in foreground:\n$cmd\n"
@@ -134,7 +134,7 @@ function launch_osruntime() {
                     nohup $cmd 2>&1 >"$this_cs_log_file" &
                 fi
             else
-                exit_error "[ERROR]could not find script $client_server_run_script"
+                exit_error "[ERROR]could not find script $bootstrap_script"
             fi
         elif [ "$osruntime" == "chroot" ]; then
             echo "using chroot"
