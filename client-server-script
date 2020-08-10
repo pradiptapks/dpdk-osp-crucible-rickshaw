@@ -103,47 +103,6 @@ function do_roadblock() {
     fi
 }
 
-function scp_from_controller() {
-    local ssh_id_file=$1; shift
-    local src=$1; shift
-    local dest=$1; shift
-    if [ -z "$ssh_id_file" ]; then
-        exit_error "scp_from_controller(): ssh_id_file not defined"
-    fi
-    if [ -z "$src" ]; then
-        exit_error "scp_from_controller(): src not defined"
-    fi
-    if [ -z "$dest" ]; then
-        exit_error "scp_from_controller(): dest not defined"
-    fi
-    local scp_attempts=1
-    local scp_rc=1
-    local max_attempts=10
-    scp_cmd="scp -o StrictHostKeyChecking=no"
-    scp_cmd+=" -o BatchMode=yes"
-    scp_cmd+=" -v"
-    scp_cmd+=" -o ConnectionAttempts=10"
-    scp_cmd+=" -i $ssh_id_file"
-    scp_cmd+=" -r $rickshaw_host:$src $dest"
-    while [ $scp_rc -gt 0 -a $scp_attempts -lt $max_attempts ]; do
-        echo "Trying to scp $rickshaw_host:$src $dest"
-        scp_output=`$scp_cmd 2>&1`
-        scp_rc=$?
-        if [ $scp_rc -gt 0 ]; then
-            echo "scp failed, trying again"
-            echo "scp exit code: $scp_rc"
-            echo "scp command: $scp_cmd"
-            echo "scp output:"
-            echo "$scp_output"
-            sleep $scp_attempts
-        fi
-        let scp_attempts=$scp_attempts+1
-    done
-    if [ $scp_attempts -ge $max_attempts ]; then
-        exit_error "Could not copy $src from $rickshaw_host"
-    fi
-}
-
 function archive_to_controller() {
     local ssh_id_file=$1; shift
     local src=$1; shift # a directory to archive from
@@ -316,15 +275,6 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
 else
     label=collector-script-start
     do_roadblock $label "endpoint" $client_server_script_timeout
-fi
-
-ssh_id_file="/tmp/rickshaw_id.rsa"
-if [ ! -z "$ssh_id" ]; then
-   echo -e "$ssh_id" > $ssh_id_file
-   chmod 600 $ssh_id_file
-fi
-if [ ! -e $ssh_id_file ]; then
-    exit_error "ssh key $ssh_id_file was not found"
 fi
 
 # Get files required to run benchmark and tools

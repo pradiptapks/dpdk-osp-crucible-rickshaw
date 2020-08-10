@@ -145,6 +145,7 @@ function init_common_dirs() {
         run_dir="$base_run_dir/run"
         client_server_logs_dir="$run_dir/client-server/logs"
         endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
+        bootstrap_script="/usr/local/bin/bootstrap"
         client_server_run_script="/usr/local/bin/client-server-script"
         roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
         mkdir -p "$endpoint_run_dir"
