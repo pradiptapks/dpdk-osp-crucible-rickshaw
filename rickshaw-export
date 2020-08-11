@@ -190,9 +190,9 @@ printf "Exporting from %s to elasticsearch documents and POSTing to localhost:92
 printf "Run ID: %s\n", $result{'run-id'};
 my $response = http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
 
-printf("response:\n%s\n", $response);
+#printf("response:\n%s\n", $response);
 my $response_ref = $coder->decode($response);
-print "response" . Dumper $response_ref;
+#print "response" . Dumper $response_ref;
 if ($$response_ref{'hits'}{'total'}{'value'} > 0) {
     print "Run ID already exists, so will not POST to elasticsearch\n";
     print "Either delete existing run from ES or regenerate rickshaw-result.json\n";
@@ -202,7 +202,6 @@ my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
 my $run_doc_json = $coder->encode(\%run_doc);
 my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
 http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/", $run_doc_json);
-exit;
 if (exists $result{'tool-data'}) {
     print "Working on tool data\n";
     for my $metr (@{ $result{'tool-data'} }) {
