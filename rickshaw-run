@@ -449,6 +449,7 @@ sub build_container_image {
             my $workshop_image_id;
             my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
                             #" --label " . $run{'benchmark'} .
+                            " --skip-update=true " .
                             " --config " . $cs_conf_file .
                             " --label " . $image_md5 .
                             " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
