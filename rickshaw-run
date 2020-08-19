@@ -1177,9 +1177,11 @@ my $tmp_data_dir = $run_dir . "/tmp-data-dir";
                     my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
                                 "/" . $cs_type . "/" . $cs_id;
                     make_path($cs_dest_sampl_path);
-                    my $iter_sampl_dir = pushd($iter_sampl_subpath);
-                    my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
-                    my $mv_output = `$mv_cmd`;
+                    if (-e $iter_sampl_subpath) {
+                        my $iter_sampl_dir = pushd($iter_sampl_subpath);
+                        my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
+                        my $mv_output = `$mv_cmd`;
+                    }
                 }
             }
         }
