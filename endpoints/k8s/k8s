@@ -471,7 +471,12 @@ function create_pods() {
     local dir="$endpoint_run_dir/$type-pod-objects"
     local pods=""
     if [ -z "$*" ]; then
-        exit_error "You must request one or more pods to create"
+	    if [ "$type" == "master" -o "$type" == "worker" ]; then
+            echo "The list of nodes for tool-pods for type $type is empty"
+            echo "Something may be wrong in detecting these nodes"
+        else
+            exit_error "You must request one or more pods to create"
+        fi
     fi
     mkdir -p "$dir"
     local count=1
@@ -630,14 +635,13 @@ function get_k8s_config() {
     local node=""
     for node in `seq 0 $(expr $nr_nodes - 1)`; do
         local name=`jq -r '.items['$node'] | .metadata.name' $kubectl_nodes_json`
-        #if [ "$(jq -r '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
-            #masters="$masters $name"
-        #fi
         if [ "$(jq -r '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/worker")' $kubectl_nodes_json)" == "true" ]; then
             workers="$workers $name"
         fi
+        if [ "$(jq -r '.items['$node'] | .metadata.labels | has("node-role.kubernetes.io/master")' $kubectl_nodes_json)" == "true" ]; then
+            masters="$masters $name"
+        fi
     done
-    masters=`ssh $k8s_user@$k8s_host kubectl get nodes | grep " master " | grep " Ready " | grep -v "SchedulingDisabled" | awk '{print $1}'`
     echo "$workers" >"$endpoint_run_dir/worker-nodes.txt"
     echo "$masters" >"$endpoint_run_dir/master-nodes.txt"
 }
@@ -660,15 +664,13 @@ create_pods worker_tool_pods worker $active_worker_nodes
 echo "These worker-tool pods were created: $worker_tool_pods"
 verify_pods_running tool_worker_nodes $worker_tool_pods
 echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
-if [ 1 -eq 1 ]; then
-    master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
-    echo "These nodes are masters: $master_nodes"
-    echo "Working on creating these master-tool pods"
-    create_pods master_tool_pods master $master_nodes
-    echo "These master-tool pods were created: $master_tool_pods"
-    verify_pods_running tool_master_nodes $master_tool_pods
-    echo "These nodes are hosting the master-tool pods: $master_nodes"
-fi
+master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
+echo "These nodes are masters: $master_nodes"
+echo "Working on creating these master-tool pods"
+create_pods master_tool_pods master $master_nodes
+echo "These master-tool pods were created: $master_tool_pods"
+verify_pods_running tool_master_nodes $master_tool_pods
+echo "These nodes are hosting the master-tool pods: $master_nodes"
 process_prebench_roadblocks $worker_tool_pods $master_tool_pods
 process_bench_roadblocks k8s
 process_postbench_roadblocks $worker_tool_pods $master_tool_pods
