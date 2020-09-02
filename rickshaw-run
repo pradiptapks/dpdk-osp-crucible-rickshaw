@@ -1208,4 +1208,5 @@ put_json_file($run_file, \%run, $run_schema_file);
 if (defined $abort_test_id) {
     printf "WARNING: test %s was aborted. and all subsequent tests were not attempted.  " .
            "Run is incomplete\n", $abort_test_id;
+    exit 1;
 }
