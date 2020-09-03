@@ -46,6 +46,57 @@ userenv="rhubi8"
 user="root"
 ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 
+function endpoint_remotehost_test_stop() {
+    echo "Running endpoint_remotehost_test_stop"
+}
+
+function endpoint_remotehost_test_start() {
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    local tx_msgs_dir="$1"; shift
+    echo "Running endpoint_remotehost_test_start"
+
+    local this_msg_file="$msgs_dir/$test_id:endpoint-start.json"
+    if [ -e $this_msg_file ]; then
+        echo "Found $this_msg_file"
+        # Extract the cs-label (server-n, client-y) and the ports this benchmark is using
+        # server-1 30002 30003
+        cat $this_msg_file | jq -r '.received[] | if .payload.message.command == "user-object" and .payload.message."user-object".svc.ports then [ .payload.sender.id, .payload.message."user-object".svc.ip, .payload.message."user-object".svc.ports ] | flatten | tostring   else null end' | grep -v null | sed -e 's/"//g' -e 's/\[//' -e 's/\]//' -e 's/,/ /g' >"$endpoint_run_dir/ip-ports.txt"
+	    while read -u 9 line; do
+            # For a benchmark server in a remotehost endpoint, the only
+            # thing that might be necessary to allow access from a
+            # client is to punch a hole in the firewall, if one exists.
+            # The current implementation of this endpoint does not do
+            # that yet.  The only function here is to relay the IP/port
+            # information found in the received message to the client.
+            echo "line: $line"
+	        local name=`echo $line | awk '{print $1}'`
+	        line=`echo $line | sed -e s/^$name//`
+	        local ip=`echo $line | awk '{print $2}'`
+	        line=`echo $line | sed -e s/^$ip//`
+	        local ports="$line"
+            local port_list=""
+            for port in $ports; do
+		        if [ $count -gt 1 ]; then
+                    port_list+=", $port"
+		        else
+                    port_list="$port"
+		        fi
+            done
+            # TODO: determine if client is outside this remotehost
+            local client_outside_endpoint="false"
+            if [ "$client_outside_endpoint" == "true" ]; then
+                echo "Going to punch hole through fireall (some day...)"
+            fi # client is outside endpoint
+            # Now we can consruct a message to be sent to the client about the IP and ports for the server
+            echo -n '{"recipient":{"type":"follower","id":"client-' >"$tx_msgs_dir/service-ip-$name.json"
+	        echo $name | awk -F- '{print $2}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
+	        echo -n '"},"user-object":{"svc":{"ip": "'$ip'", ' >>"$tx_msgs_dir/service-ip-$name.json"
+	        echo '"ports": ['$port_list']}}}' >>"$tx_msgs_dir/service-ip-$name.json"
+	    done 9< "$endpoint_run_dir/ip-ports.txt"
+    fi
+}
+
 function do_ssh() {
     local user_host user host ssh_cmd
     user_host=$1; shift
