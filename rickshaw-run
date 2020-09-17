@@ -22,7 +22,8 @@ use Data::Dumper;
 
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
-                 "base-run-dir" => tempdir(), "run-id" => $ug->create_str());
+                 "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
+                 "max-sample-failures" => 20);
 
 my $debug = 0;
 my $use_roadblock = 0;
@@ -104,14 +105,17 @@ sub roadblock_leader {
         my $msgs_file = $roadblock_msgs_dir . "/" . $label . ".json";
         my $date = `date`;
         chomp $date;
-        printf "\n\nStarting roadblock [%s]\n", $date;
-        printf "role: %s\n", $role;
-        printf "uuid (without attempt ID embedded): %s\n", $uuid;
-        printf "timeout: %s\n", $timeout;
+        printf "Roadblock: %s ", $date;
+        #printf "\n\nStarting roadblock [%s]\n", $date;
+        #printf "role: %s ", $role;
+        #printf "uuid: %s ", $uuid;
+        #printf "followers: %s ", $follower_param;
+        #printf "timeout: %s\n", $timeout;
         while ($attempts < $max_rb_attempts and $rc != 0 and $rc != $roadblock_exit_abort) {
             $attempts++;
             my $this_uuid = $attempts . ":" . $uuid;
-            printf "attempt number: %d\n", $attempts;
+            printf "role: %s ", $role;
+            printf "attempt number: %d ", $attempts;
             printf "uuid: %s\n", $this_uuid;
             my $cmd = $base_rb_leader_cmd .
                     " --leader-id=controller" .
@@ -122,32 +126,38 @@ sub roadblock_leader {
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
             my $output = `$cmd`;
             $rc = $? & 127;
-            printf "roadblock output BEGIN\n";
-            printf "%s", $output;
-            printf "roadblock output END\n";
-            printf "roadblock exit code: %d\n", $rc;
+            #printf "roadblock exit code: %d\n", $rc;
             # Becasue roadblock leader does not exit with right code
             if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
                 #printf "%s", $output;
                 $rc = $roadblock_exit_abort;
+                printf "roadblock output BEGIN\n";
+                printf "%s", $output;
+                printf "roadblock output END\n";
             }
             if ( my $g_output = grep(/(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
                 #printf "%s", $output;
                 $rc = $roadblock_exit_timeout;
+                printf "roadblock output BEGIN\n";
+                printf "%s", $output;
+                printf "roadblock output END\n";
             }
             if ( my $g_output = grep(/(Could\snot\sopen\smessage\slog)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
                 #printf "%s", $output;
                 $rc = $roadblock_exit_nofile;
+                printf "roadblock output BEGIN\n";
+                printf "%s", $output;
+                printf "roadblock output END\n";
             }
         }
-        printf "total attempts: %d\n", $attempts;
+        #printf "total attempts: %d\n", $attempts;
 
-        $date = `date`;
+        #$date = `date`;
         chomp $date;
-        printf "Completed roadblock [%s]\n\n\n", $date;
+        #printf "Completed roadblock [%s]\n\n\n", $date;
         $_[0] = get_json_file($msgs_file);
         return $rc;
     } else {
@@ -1092,6 +1102,8 @@ if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages
 
 my $abort_test_id;
 my $quit = 0;
+my $abort_run_on_iter_fail = 0;
+my @sample_failures;
 for (my $tid = 0; $tid < scalar @tests; $tid++) {
     last if ($quit > 0);
     my $iter_id = $tests[$tid]{'iteration-id'};
@@ -1099,34 +1111,60 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     my $iter_array_idx = $iter_id - 1;
     my $test_id = $iter_id . "-" . $samp_id;
     my $timeout = $default_rb_timeout;
-    for my $sync_point (qw(server-start endpoint-start client-start client-stop endpoint-stop server-stop)) {
-        my $messages_ref;
-        my $label = "test-" . $test_id . ":" . $sync_point;
-        my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
-        if ($rc > 0) {
-            if ($rc == $roadblock_exit_abort) {
-                printf "[ERROR]Abort from %s so breaking out of test-loop\n", $sync_point;
-                $abort_test_id = $tid;
-                $tid = scalar @tests; # Force break from outer loop
-		$quit = 1;
-		#last;
+    my $this_attempt_num = 1;
+    my $sample_complete = 0;
+    if (! defined $sample_failures[$iter_array_idx]) {
+        $sample_failures[$iter_array_idx] = 0;
+    }
+    while ($sample_complete == 0 and $sample_failures[$iter_array_idx] <= $run{'max-sample-failures'}) {
+        my $this_attempt_fail = 0;
+        printf "Iteration %d sample %d attempt number %d\n", $iter_id, $samp_id, $this_attempt_num;
+        for my $sync_point (qw(server-start endpoint-start client-start client-stop endpoint-stop server-stop)) {
+            my $messages_ref;
+            my $label = $test_id . "-" . $this_attempt_num . ":" . $sync_point;
+            my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+            if ($rc > 0) {
+                if ($rc == $roadblock_exit_abort) {
+                    printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
+                    $this_attempt_fail = 1;
+                    $sample_failures[$iter_array_idx]++;
+                    if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
+                        $sample_complete = 1;
+                        printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
+                               "reached, failing this iteration\n", $run{'max-sample-failures'},
+                               $iter_id;
+                    }
+                    if ($abort_run_on_iter_fail == 1) {
+                        $abort_test_id = $tid;
+                        $tid = scalar @tests; # Force break from outer loop
+		                $quit = 1;
+                    }
+                } else {
+                    # If a roadblock fails, this is fatal and the run cannot continue
+                    printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
+                    exit 1;
+                }
             } else {
-                printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
-                exit 1;
-            }
-        } else {
-            $timeout = $default_rb_timeout;
-            my %messages = %{ $messages_ref };
-            if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
-                for my $message (@{ $messages{'received'} }) {
-                    if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
-                        printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                        $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                        printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                if ($this_attempt_fail == 0 and $sync_point eq "server-stop") {
+                    $sample_complete = 1;
+                    printf "Sample %d completed successfully with %d failed attempts " .
+                           "(%d total sample failures for this iteration)\n",
+                           $samp_id, $this_attempt_num - 1, $sample_failures[$iter_array_idx];
+                }
+                $timeout = $default_rb_timeout;
+                my %messages = %{ $messages_ref };
+                if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
+                    for my $message (@{ $messages{'received'} }) {
+                        if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
+                            printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                            $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                            printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                        }
                     }
                 }
             }
         }
+        $this_attempt_num++;
     }
 }
 for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
@@ -1171,16 +1209,22 @@ my $tmp_data_dir = $run_dir . "/tmp-data-dir";
         my $tar_output = `$tar_cmd`;
         if ($1 =~ /^(client|server)$/) {
             for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
-                my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
-                for (my $s = 1; $s <= $run{'num-samples'}; $s++) {
-                    my $iter_sampl_subpath = "iteration-" . $i . "/sample-" . $s;
-                    my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
-                                "/" . $cs_type . "/" . $cs_id;
-                    make_path($cs_dest_sampl_path);
-                    if (-e $iter_sampl_subpath) {
-                        my $iter_sampl_dir = pushd($iter_sampl_subpath);
-                        my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
-                        my $mv_output = `$mv_cmd`;
+                my $iter_dir = "iteration-" . $i;
+                if (-d $iter_dir) {
+                    my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
+                    opendir(DH, $iter_dir);
+                    my @entries =  readdir(DH);
+                    foreach my $samp_dir (grep(/^sample/, @entries)) {
+                        #printf "samp_dir: [%s]\n", $samp_dir;
+                        my $iter_sampl_subpath = $iter_dir . "/" . $samp_dir;
+                        my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
+                                    "/" . $cs_type . "/" . $cs_id;
+                        make_path($cs_dest_sampl_path);
+                        if (-e $iter_sampl_subpath) {
+                            my $iter_sampl_dir = pushd($iter_sampl_subpath);
+                            my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
+                            my $mv_output = `$mv_cmd`;
+                        }
                     }
                 }
             }

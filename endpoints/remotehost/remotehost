@@ -225,7 +225,7 @@ function launch_osruntime() {
             cs_cmd="nohup chroot $container_mount $base_cmd >$remote_logs_dir/$this_cs_log_file &"
             echo -e "About to run:\n$cs_cmd\n"
             do_ssh $user@$host "$cs_cmd"
-        elif [ "$osruntime" == "podman"]; then
+        elif [ "$osruntime" == "podman" ]; then
             echo doing podman runtime
             cs_rb_env=`echo "$cs_rb_opts" | sed -e 's/ --/,/g'`
             env_opts="--env rickshaw-host=localhost,endpoint-run-dir=$endpoint_run_dir"

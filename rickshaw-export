@@ -255,6 +255,7 @@ if (exists $result{'iterations'}) {
             my %samp_doc = %$samp_doc_ref;
             $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
             $samp_doc{'sample'}{'num'} = $sample_num;
+            $samp_doc{'sample'}{'status'} = $$samp{'status'};
             my $samp_doc_json = $coder->encode(\%samp_doc);
             http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
             $sample_num++;
