@@ -398,7 +398,7 @@ abort_opt=""
 # Run the actual tests by processing the commands array
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     abort_run_on_iter_fail=0
-    max_sample_failures=20
+    max_sample_failures=5
     timeout=$default_timeout
     len=${#bench_start_cmds[@]}
     quit=0

@@ -23,7 +23,7 @@ use Data::Dumper;
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
-                 "max-sample-failures" => 20);
+                 "max-sample-failures" => 5);
 
 my $debug = 0;
 my $use_roadblock = 0;

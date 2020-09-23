@@ -296,7 +296,7 @@ function process_bench_roadblocks() {
     local timeout=$default_timeout
     local quit=0
     abort_run_on_iter_fail=0
-    max_sample_failures=20
+    max_sample_failures=5
     while read -u 9 line; do
         iter_samp=`echo $line | awk '{print $1}'`
         iter=`echo $iter_samp | awk -F- '{print $1}'`
