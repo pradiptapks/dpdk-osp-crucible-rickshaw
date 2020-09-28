@@ -23,6 +23,8 @@ use REST::Client;
 my $debug = 0;
 my %result;
 my $base_run_dir;
+my %cdm = ( 'ver' => 'v5dev' );
+my $coder = JSON::XS->new->canonical;
 
 sub usage {
     print "\nusage:\n\n";
@@ -93,6 +95,29 @@ sub get_json_file {
         }
     }
     return $json_ref;
+}
+
+sub export_metric {
+    my $metr_ref = shift; # the rickshaw metric object
+    my $base_doc_ref = shift; # metric_desc doc gets populated with this, usually a run doc or period doc
+    my $coder = JSON::XS->new->canonical;
+    # Copy data from 'parent' doc so querying directly for metric_desc with
+    # run data is possible
+    my %metr_desc_doc = %$base_doc_ref;
+    $metr_desc_doc{'metric_desc'} = $$metr_ref{'desc'};
+    $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
+    $metr_desc_doc{'metric_desc'}{'names'} = $$metr_ref{'names'};
+    my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
+    http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
+    for my $metr_data (@{ $$metr_ref{'data'} }) {
+        # The metric_data docs do not include the 'parent' doc info
+        # because there are potentially millions and millions of these.
+        # The only data copied from its parent (metric_desc) is the metric_desc.id
+        my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
+        $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
+        my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
+        http_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/", $metr_data_doc_json);
+    }
 }
 
 sub http_request {
@@ -174,8 +199,6 @@ if (-e $result_file) {
     exit 1;
 }
 
-my $coder = JSON::XS->new->canonical;
-my %cdm = ( 'ver' => 'v5dev' );
 
 # Start by creating what will be the CDM run document for elasticsearch
 my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
@@ -255,6 +278,7 @@ if (exists $result{'iterations'}) {
             my %samp_doc = %$samp_doc_ref;
             $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
             $samp_doc{'sample'}{'num'} = $sample_num;
+            $samp_doc{'sample'}{'status'} = $$samp{'status'};
             my $samp_doc_json = $coder->encode(\%samp_doc);
             http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
             $sample_num++;

@@ -109,7 +109,13 @@ sub dedup_metric {
     my $num_samples = scalar @{ $$metric_ref{'data'} };
     my $first_begin;
     my $last_end;
-    return if ($num_samples == 0);
+    return (-1, -1) if ($num_samples == 0);
+    if (! defined $$metric_ref{'data'}[1]{'end'}) {
+        print "[ERROR]could not find second sample for metric\n";
+        print Dumper $$metric_ref{'desc'};
+        print Dumper $$metric_ref{'names'};
+        return (-1, -1);
+    }
     my $native_interval = $$metric_ref{'data'}[1]{'end'} - $$metric_ref{'data'}[0]{'end'};
     for (my $i = scalar @{ $$metric_ref{'data'} } - 1; $i >= 0; $i--) {
         my $this_value = $$metric_ref{'data'}[$i]{'value'};
@@ -238,7 +244,12 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my $primary_metric;
     my $primary_period;
     for my $samp_dir (@samp_dirs) {
+        my $samp_status = "pass";
+        if ($samp_dir =~ /fail\d+/) {
+            $samp_status = "fail"
+        }
         my %sample; # sample data from all clients/servers
+        $sample{'status'} = $samp_status;
         my @cons_periods; # consolidated periods across clients/servers get merged here
         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
         debug_log("Working on " . $this_samp_dir . "\n");
@@ -287,7 +298,10 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                 }
                                 ($cons_periods[$cons_period_id]{'begin'},
                                  $cons_periods[$cons_period_id]{'end'}) = dedup_metric($metric);
-                                push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
+                                if ($cons_periods[$cons_period_id]{'begin'} > 0 and
+                                    $cons_periods[$cons_period_id]{'end'} > 0) {
+                                    push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
+                                }
                             }
                         }
                     }
@@ -336,8 +350,10 @@ for my $collector (@collectors) {
                     } else {
                         $$metric_ref{'desc'}{'name-format'} = '%cstype%-%csid%-' . $$metric_ref{'desc'}{'name-format'};
                     }
-                    dedup_metric($metric_ref);
-                    push(@{ $run{'tool-data'} }, $metric_ref);
+                    (my $begin, my $end) = dedup_metric($metric_ref);
+                    if ($begin > 0 and $end > 0) {
+                        push(@{ $run{'tool-data'} }, $metric_ref);
+                    }
                 }
             }
         }
