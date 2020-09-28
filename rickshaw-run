@@ -1119,46 +1119,66 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     while ($sample_complete == 0 and $sample_failures[$iter_array_idx] <= $run{'max-sample-failures'}) {
         my $this_attempt_fail = 0;
         printf "Iteration %d sample %d attempt number %d\n", $iter_id, $samp_id, $this_attempt_num;
-        for my $sync_point (qw(server-start endpoint-start client-start client-stop endpoint-stop server-stop)) {
-            my $messages_ref;
-            my $label = $test_id . "-" . $this_attempt_num . ":" . $sync_point;
-            my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
-            if ($rc > 0) {
-                if ($rc == $roadblock_exit_abort) {
-                    printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
-                    $this_attempt_fail = 1;
-                    $sample_failures[$iter_array_idx]++;
-                    if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
-                        $sample_complete = 1;
-                        printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
-                               "reached, failing this iteration\n", $run{'max-sample-failures'},
-                               $iter_id;
-                    }
-                    if ($abort_run_on_iter_fail == 1) {
-                        $abort_test_id = $tid;
-                        $tid = scalar @tests; # Force break from outer loop
-		                $quit = 1;
+        my @syncs;
+        my @stop_syncs;
+        for my $start_stop (qw(start stop)) {
+        #for my $sync_point (qw(server-start endpoint-start client-start client-stop endpoint-stop server-stop)) {
+            if ($start_stop eq "start") {
+                @syncs = (qw(server endpoint client));
+            } else {
+                @syncs = @stop_syncs;
+            }
+            for my $sync (@syncs) {
+                my $sync_point = $sync . "-" . $start_stop;
+                if ($start_stop eq "start") {
+                    # Build the stop syncs as we go.  If during the start syncs we abort early,
+                    # we will only have to do a portion of stop syncs.
+                    unshift(@stop_syncs, $sync);
+                }
+                my $messages_ref;
+                my $label = $test_id . "-" . $this_attempt_num . ":" . $sync_point;
+                my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+                if ($rc > 0) {
+                    if ($rc == $roadblock_exit_abort) {
+                        printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
+                        $this_attempt_fail = 1;
+                        $sample_failures[$iter_array_idx]++;
+                        if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
+                            $sample_complete = 1;
+                            printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
+                                "reached, failing this iteration\n", $run{'max-sample-failures'},
+                                $iter_id;
+                        }
+                        if ($abort_run_on_iter_fail == 1) {
+                            $abort_test_id = $tid;
+                            $tid = scalar @tests; # Force break from outer loop
+		                    $quit = 1;
+                        }
+                        # Don't continue with remaining syncs if this is start.
+                        # Stop syncs are automatically reduced because that array is built
+                        # as progression is made with start syncs.
+                        last if ($start_stop eq "start");
+                    } else {
+                        # If a roadblock fails, this is fatal and the run cannot continue
+                        printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
+                        exit 1;
                     }
                 } else {
-                    # If a roadblock fails, this is fatal and the run cannot continue
-                    printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
-                    exit 1;
-                }
-            } else {
-                if ($this_attempt_fail == 0 and $sync_point eq "server-stop") {
-                    $sample_complete = 1;
-                    printf "Sample %d completed successfully with %d failed attempts " .
-                           "(%d total sample failures for this iteration)\n",
-                           $samp_id, $this_attempt_num - 1, $sample_failures[$iter_array_idx];
-                }
-                $timeout = $default_rb_timeout;
-                my %messages = %{ $messages_ref };
-                if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
-                    for my $message (@{ $messages{'received'} }) {
-                        if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
-                            printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                            $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                            printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                    if ($this_attempt_fail == 0 and $sync_point eq "server-stop") {
+                        $sample_complete = 1;
+                        printf "Sample %d completed successfully with %d failed attempts " .
+                            "(%d total sample failures for this iteration)\n",
+                            $samp_id, $this_attempt_num - 1, $sample_failures[$iter_array_idx];
+                    }
+                    $timeout = $default_rb_timeout;
+                    my %messages = %{ $messages_ref };
+                    if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
+                        for my $message (@{ $messages{'received'} }) {
+                            if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
+                                printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                                $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                                printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                            }
                         }
                     }
                 }

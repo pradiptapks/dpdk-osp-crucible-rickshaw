@@ -326,92 +326,112 @@ function process_bench_roadblocks() {
             this_attempt_fail=0
             printf "Sample %d attempt number %d\n" $samp $this_attempt_num
             msgs_json_file=""
-            for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
-                local test_id="test-${iter}-${samp}"
-                local label="${iter}-${samp}-${this_attempt_num}:$sync"
-                local msgs_file="$roadblock_msgs_dir/$label.json"
-                do_roadblock "$label" "follower" $timeout "$msgs_json_file"
-                rb_rc=$?
-                echo "roadblock $label exit code: $rb_rc"
-                if [ $rb_rc -eq $rb_exit_abort ]; then
-                    this_attempt_fail=1
-                    let sample_failures[$iter_idx]=${sample_failures[$iter_idx]}+1
-                    echo -e "\nAbort exit code from iteration $iter, sample $samp"
-                    if [ ${sample_failures[$iter_idx]} -ge $max_sample_failures ]; then
-                        sample_complete=1
-                        printf "[ERROR]All A maximum of %d failures for iteration %d have been reached, failing this iteration\n" \
-                               $max_sample_failures $iter
-                    fi
-                    if [ $abort_run_on_iter_fail -eq 1 ]; then
-                        printf "[ERROR]Since this interation failed, skipping all other tests\n"
-                        quit=1
-                    fi
+            syncs=""
+            stop_syncs=""
+            for start_stop in "start" "stop"; do
+                #for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
+                if [ "$start_stop" == "start" ]; then
+                    syncs="server endpoint client"
                 else
-                    # Allow to break out of inner while loop if no aborts all the way to the last sync
-                    if [ $this_attempt_fail -eq 0 ]; then
-                        if [ "$sync" == "server-stop" ]; then 
+                    syncs="$stop_syncs"
+                fi
+                #for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
+                for sync in $syncs; do
+                    this_sync="$sync-$start_stop"
+                    if [ "$start_stop" == "start" ]; then
+                        # Build the syncs needed for stop, may end up being fewer than all syncs if start syncs abort early
+                        stop_syncs="$sync $stop_syncs"
+                    fi
+                    local test_id="test-${iter}-${samp}"
+                    local label="${iter}-${samp}-${this_attempt_num}:$this_sync"
+                    local msgs_file="$roadblock_msgs_dir/$label.json"
+                    do_roadblock "$label" "follower" $timeout "$msgs_json_file"
+                    rb_rc=$?
+                    echo "roadblock $label exit code: $rb_rc"
+                    if [ $rb_rc -eq $rb_exit_abort ]; then
+                        this_attempt_fail=1
+                        let sample_failures[$iter_idx]=${sample_failures[$iter_idx]}+1
+                        echo -e "\nAbort exit code from iteration $iter, sample $samp"
+                        if [ ${sample_failures[$iter_idx]} -ge $max_sample_failures ]; then
                             sample_complete=1
-                            let num_fail=$this_attempt_num-1
-                            printf "Sample %d completed successfully with %d failed attempts (%d total sample failures for this iteration)\n" \
-                                   $samp $num_fail ${sample_failures[$iter_idx]}
+                            printf "[ERROR]All A maximum of %d failures for iteration %d have been reached, failing this iteration\n" \
+                                $max_sample_failures $iter
+                        fi
+                        if [ $abort_run_on_iter_fail -eq 1 ]; then
+                            printf "[ERROR]Since this interation failed, skipping all other tests\n"
+                            quit=1
+                        fi
+                        if [ "$start_stop" == "start" ]; then
+                            # There is no reason to continue the rest of the start syncs
+                            break
+                        fi
+                    else
+                        # Allow to break out of inner while loop if no aborts all the way to the last sync
+                        if [ $this_attempt_fail -eq 0 ]; then
+                            if [ "$this_sync" == "server-stop" ]; then 
+                                sample_complete=1
+                                let num_fail=$this_attempt_num-1
+                                printf "Sample %d completed successfully with %d failed attempts (%d total sample failures for this iteration)\n" \
+                                    $samp $num_fail ${sample_failures[$iter_idx]}
+                            fi
                         fi
                     fi
-                fi
-	            # Below checks for a specific timeout message from the benchmark client, and all endpoints
-	            # process this the same way
-                timeout=$default_timeout
-                if [ -f $msgs_file ]; then
-                    next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
-                    if [ ! -z "$next_timeout" ]; then
-                        echo "Applying timeout value of $next_timeout to next roadblock sync"
-                        timeout=$next_timeout
+	                # Below checks for a specific timeout message from the benchmark client, and all endpoints
+	                # process this the same way
+                    timeout=$default_timeout
+                    if [ -f $msgs_file ]; then
+                        next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
+                        if [ ! -z "$next_timeout" ]; then
+                            echo "Applying timeout value of $next_timeout to next roadblock sync"
+                            timeout=$next_timeout
+                        fi
                     fi
-                fi
-	        # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
-	        # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
-	        if [ -f $msgs_file ]; then
-                    count=1
-                    echo "Found messages file: $msgs_file"
-                    jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' $msgs_file\
-                    | while read line; do
-                        msg="$sync:$count"
-                        echo "Found user-object message: $line"
-                        echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
-                        let count=$count+1
-                    done
-                fi
-	            # This is the opportunity for the endpoints to make any changes
-	            # before the actual test starts (client-start).  For example, this
-	            # may be used to provide a route to a benchmark-server.  The endpoint
-	            # may also create a message to be sent to other participants on
-	            # on the next roadblock.
-                if [ ! -z "$endpoint_type" -a "$sync" == "endpoint-start" ]; then
-		        endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
-                fi
-                if [ ! -z "$endpoint_type" -a "$sync" == "endpoint-stop" ]; then
-		        echo "Attempting to call endpoint_${endpoint_type}_test_stop"
-		        endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
-                fi
-	            # Check for any messages to send
-	            pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
-                if [ ! -z "$pending_tx_msgs" ]; then
-                    echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
-                    mkdir -p ${cs_tx_msgs_dir}-sent
-                    msgs_json_file="$iter_samp_dir/rb-msgs-$sync"
-                    echo "[" >"$msgs_json_file"
-                    for msg in $pending_tx_msgs; do
-                        # TODO validate JSON schema
-                        echo "Adding $msg to $msgs_json_file"
-                        cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
-                        /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
-                        echo "," >>"$msgs_json_file"
-                    done
-                    echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$sync'"}}]' >>$msgs_json_file
-                    echo "full message to send:"
-                    cat "$msgs_json_file"
-	            else
-                    msgs_json_file=""
-                fi
+	            # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
+	            # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
+	            if [ -f $msgs_file ]; then
+                        count=1
+                        echo "Found messages file: $msgs_file"
+                        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' $msgs_file\
+                        | while read line; do
+                            msg="$this_sync:$count"
+                            echo "Found user-object message: $line"
+                            echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                            let count=$count+1
+                        done
+                    fi
+	                # This is the opportunity for the endpoints to make any changes
+	                # before the actual test starts (client-start).  For example, this
+	                # may be used to provide a route to a benchmark-server.  The endpoint
+	                # may also create a message to be sent to other participants on
+	                # on the next roadblock.
+                    if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-start" ]; then
+		            endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
+                    fi
+                    if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-stop" ]; then
+		            echo "Attempting to call endpoint_${endpoint_type}_test_stop"
+		            endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
+                    fi
+	                # Check for any messages to send
+	                pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+                    if [ ! -z "$pending_tx_msgs" ]; then
+                        echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
+                        mkdir -p ${cs_tx_msgs_dir}-sent
+                        msgs_json_file="$iter_samp_dir/rb-msgs-$this_sync"
+                        echo "[" >"$msgs_json_file"
+                        for msg in $pending_tx_msgs; do
+                            # TODO validate JSON schema
+                            echo "Adding $msg to $msgs_json_file"
+                            cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
+                            /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
+                            echo "," >>"$msgs_json_file"
+                        done
+                        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$this_sync'"}}]' >>$msgs_json_file
+                        echo "full message to send:"
+                        cat "$msgs_json_file"
+	                else
+                        msgs_json_file=""
+                    fi
+                done #for
             done #for
             let this_attempt_num=$this_attempt_num+1
         done #while

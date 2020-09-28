@@ -156,7 +156,7 @@ version=20200509
 echo "version: $version"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts="${longopts},roadblock-passwd:,roadblock-id:"
+longopts="${longopts},roadblock-passwd:,roadblock-id:,disable-tools:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $@\n\n"
@@ -197,6 +197,11 @@ while true; do
         --roadblock-id)
             shift;
             roadblock_id="$1"
+            shift;
+            ;;
+        --disable-tools)
+            shift;
+            disable_tools="$1"
             shift;
             ;;
         --)
@@ -350,16 +355,20 @@ for this_tool_cmds in "$tool_start_cmds" "$tool_stop_cmds"; do
     fi
 done
 mkdir -p tool-data
-pushd tool-data >/dev/null
-while read -u 9 line; do
-    tool_name=`echo $line | awk -F: '{print $1}'`
-    tool_cmd=`echo $line | sed -e s/^$tool_name://`
-    /bin/mkdir -p $tool_name
-    pushd $tool_name >/dev/null
-    $tool_cmd
+if [ "$disable_tools" == "1" ]; then
+    echo "Not running tools because --disable-tools=1 was used"
+else
+    pushd tool-data >/dev/null
+    while read -u 9 line; do
+        tool_name=`echo $line | awk -F: '{print $1}'`
+        tool_cmd=`echo $line | sed -e s/^$tool_name://`
+        /bin/mkdir -p $tool_name
+        pushd $tool_name >/dev/null
+        $tool_cmd
+        popd >/dev/null
+    done 9<"$tool_start_cmds"
     popd >/dev/null
-done 9<"$tool_start_cmds"
-popd >/dev/null
+fi
 
 declare -A bench_runtime_cmds
 declare -A bench_start_cmds
@@ -444,147 +453,163 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
             pushd $iter_samp_dir || exit_error "Could not chdir to $iter_samp_dir"
             echo PWD: `/bin/pwd`
             printf "Sample %d attempt number %d\n" $samp $this_attempt_num
-            for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
-                label="${iter}-${samp}-${this_attempt_num}:$sync"
-                msgs_file="$roadblock_msgs_dir/$label.json"
-                this_timeout=$default_timeout
-                if [ ! -z "$runtime_cmd" -a "$sync" == "client-start" -a "$cs_id" == "1" -a "$abort_opt" == "" ]; then
-                    user_message_opt=""
-                    # Get estimated runtime if possible and send to everyone else
-                    echo "going to run this command to get the runtime: $runtime_cmd"
-                    runtime=`$runtime_cmd`
-                    if [ $? -eq 0  -a ! -z "$runtime" ]; then
-                        # Add padding to benchmark runtime to give
-                        # enough time for everyone to call roadblock
-                        let this_timeout=$runtime+$runtime_padding
-                        user_json_file="`mktemp`"
-                        echo "adding timeout message to $cs_tx_msgs_dir"
-                        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}' >"$cs_tx_msgs_dir/timeout"
-                    fi
-                fi
-                pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
-                if [ ! -z "$pending_tx_msgs" -a "$abort_opt" == "" ]; then
-                    echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
-                    mkdir -p ${cs_tx_msgs_dir}-sent
-                    msgs_json_file="$iter_samp_dir/rb-msgs-$sync"
-                    echo "[" >"$msgs_json_file"
-                    for msg in $pending_tx_msgs; do
-                        # TODO validate JSON schema
-                        echo "Adding $msg to $msgs_json_file"
-                        cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
-                        /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
-                        echo "," >>"$msgs_json_file"
-                    done
-                    echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$sync'"}}]' >>$msgs_json_file
-                    echo "full message to send:"
-                    cat "$msgs_json_file"
-                    # TODO changing this to $extra_opt everywhere
-                    abort_opt=" --user-messages=$msgs_json_file"
-                fi
-                do_roadblock "$label" "controller" $timeout "$abort_opt"
-                rb_rc=$?
-                cmd_rc=0
-                abort_opt=""
-                echo roadblock $label exit code: $rb_rc
-                if [ $rb_rc -eq $rb_exit_abort ]; then
-                    this_attempt_fail=1
-                    let sample_failures[$iter_idx]=${sample_failures[$iter_idx]}+1
-                    echo -e "\nReceived abort exit code from iteration $iter, sample $samp roadblock"
-                    if [ ${sample_failures[$iter_idx]} -ge $max_sample_failures ]; then
-                        sample_complete=1
-                        printf "[ERROR]All A maximum of %d failures for iteration %d have been reached, failing this iteration\n" \
-                               $max_sample_failures $iter
-                    fi
-                    if [ $abort_run_on_iter_fail -eq 1 ]; then
-                        printf "[ERROR]Since this interation failed, skipping all other tests\n"
-                        quit=1
-                    fi
-                    #TODO: Below should not be necessary because the server-stop sync is still run
-                    #if [ "$cs_type" == "server" ]; then
-                        ## Since this is bailing out early, this is our only chance to stop the server
-                        #echo -e "\nAttempting to stop server\n"
-                        #$stop_cmd
-                    #fi
+            syncs=""
+            stop_syncs=""
+            abort_opt=""
+            for start_stop in "start" "stop"; do
+                if [ "$start_stop" == "start" ]; then
+                    syncs="server endpoint client"
                 else
-                    # Allow to break out of inner while loop if no aborts all the way to the last sync
-                    if [ $this_attempt_fail -eq 0 ]; then
-                        if [ "$sync" == "server-stop" ]; then
-                            sample_complete=1
-                            let num_fail=$this_attempt_num-1
-                            printf "Sample %d completed successfully with %d failed attempts (%d total sample failures for this iteration)\n" \
-                                   $samp $num_fail ${sample_failures[$iter_idx]}
+                    syncs="$stop_syncs"
+                fi
+                for sync in $syncs; do
+                    this_sync="$sync-$start_stop"
+                    if [ "$start_stop" == "start" ]; then
+                        # Build the syncs needed for stop, may end up being fewer than all syncs if start syncs abort early
+                        stop_syncs="$sync $stop_syncs"
+                    fi
+                    #for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
+                    label="${iter}-${samp}-${this_attempt_num}:$this_sync"
+                    msgs_file="$roadblock_msgs_dir/$label.json"
+                    this_timeout=$default_timeout
+                    if [ ! -z "$runtime_cmd" -a "$this_sync" == "client-start" -a "$cs_id" == "1" -a "$abort_opt" == "" ]; then
+                        user_message_opt=""
+                        # Get estimated runtime if possible and send to everyone else
+                        echo "going to run this command to get the runtime: $runtime_cmd"
+                        runtime=`$runtime_cmd`
+                        if [ $? -eq 0  -a ! -z "$runtime" ]; then
+                            # Add padding to benchmark runtime to give
+                            # enough time for everyone to call roadblock
+                            let this_timeout=$runtime+$runtime_padding
+                            user_json_file="`mktemp`"
+                            echo "adding timeout message to $cs_tx_msgs_dir"
+                            echo '{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'$this_timeout'"}}' >"$cs_tx_msgs_dir/timeout"
                         fi
                     fi
-                fi
-                if [ $rb_rc -eq 2 ]; then
-                    exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
-                fi
-                timeout=$default_timeout
-                if [ -f $msgs_file ]; then
-                    count=1
-                    if [ $cs_type == "client" ]; then
-                        cs_buddy="server-$cs_id"
+                    pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+                    if [ ! -z "$pending_tx_msgs" -a "$abort_opt" == "" ]; then
+                        echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
+                        mkdir -p ${cs_tx_msgs_dir}-sent
+                        msgs_json_file="$iter_samp_dir/rb-msgs-$this_sync"
+                        echo "[" >"$msgs_json_file"
+                        for msg in $pending_tx_msgs; do
+                            # TODO validate JSON schema
+                            echo "Adding $msg to $msgs_json_file"
+                            cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
+                            /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
+                            echo "," >>"$msgs_json_file"
+                        done
+                        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$this_sync'"}}]' >>$msgs_json_file
+                        echo "full message to send:"
+                        cat "$msgs_json_file"
+                        # TODO changing this to $extra_opt everywhere
+                        abort_opt=" --user-messages=$msgs_json_file"
+                    fi
+                    do_roadblock "$label" "controller" $timeout "$abort_opt"
+                    rb_rc=$?
+                    cmd_rc=0
+                    abort_opt=""
+                    echo roadblock $label exit code: $rb_rc
+                    if [ $rb_rc -eq $rb_exit_abort ]; then
+                        this_attempt_fail=1
+                        let sample_failures[$iter_idx]=${sample_failures[$iter_idx]}+1
+                        echo -e "\nReceived abort exit code from iteration $iter, sample $samp roadblock"
+                        if [ ${sample_failures[$iter_idx]} -ge $max_sample_failures ]; then
+                            sample_complete=1
+                            printf "[ERROR]All A maximum of %d failures for iteration %d have been reached, failing this iteration\n" \
+                                $max_sample_failures $iter
+                        fi
+                        if [ $abort_run_on_iter_fail -eq 1 ]; then
+                            printf "[ERROR]Since this interation failed, skipping all other tests\n"
+                            quit=1
+                        fi
+                        if [ "$start_stop" == "start" ]; then
+                            # There is no reason to continue the rest of the start syncs because of the abort.
+                            # Since the list of stop syncs are constructed as start syncs are processed,
+                            # only the minimum nummber of stop syncs will be processed.  For example,
+                            # if server-start had an abort, only server-stop would be in the list of 
+                            # stop-syncs.  Or, if endpoint-start had an abort, both endpiont-stop and
+                            # server-stop would be in the list of stop syncs.
+                            break
+                        fi
                     else
-                        cs_buddy="client-$cs_id"
+                        # Allow to break out of inner while loop if no aborts all the way to the last sync
+                        if [ $this_attempt_fail -eq 0 ]; then
+                            if [ "$this_sync" == "server-stop" ]; then
+                                sample_complete=1
+                                let num_fail=$this_attempt_num-1
+                                printf "Sample %d completed successfully with %d failed attempts (%d total sample failures for this iteration)\n" \
+                                    $samp $num_fail ${sample_failures[$iter_idx]}
+                            fi
+                        fi
                     fi
-                    echo "Found messages file: $msgs_file"
-		    # First look for a message to "all" but sent by client-server buddy
-		    # (to be deprecated)
-                    jq -cr '.received[] | select(.payload.sender.id == "'$cs_buddy'" and 
-                            .payload.message.command == "user-object") | .payload.message' $msgs_file\
-                    | while read line; do
-                        msg="$sync:$count"
-                        echo "Found user-object message from $cs_buddy: $line"
-                        echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
-                        let count=$count+1
-                    done
-		    # Next look for a message sent specifically to this client/server
-                    jq -cr '.received[] | select(.payload.recipient.id == "'$cs_label'" and 
-                            .payload.message.command == "user-object") | .payload.message' $msgs_file\
-                    | while read line; do
-                        msg="$sync:$count"
-                        echo "Found user-object message from $cs_buddy: $line"
-                        echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
-                        let count=$count+1
-                    done
-                    # TODO: process the newly created msg files above instead of scanning the entire messages array again
-                    next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
-                    jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file
-                    if [ ! -z "$next_timeout" ]; then
-                        echo "Applying timeout value of $next_timeout to next roadblock sync"
-                        timeout=$next_timeout
+                    if [ $rb_rc -eq 2 ]; then
+                        exit_error "roadblock for client-server-start-test:$iter-$samp timed out"
                     fi
-                fi
-                # These combinations don't run a command:
-                #  sync=server-start & cs_type=client
-                #  sync=client-start & cs_type=server
-                #  sync=server-stop & cs_type=client
-                if [ "$sync" == "server-start" -a "$cs_type" == "server" ]; then
-                    echo "Running $sync command: $start_cmd"
-                    $start_cmd
-                    cmd_rc=$?
-                elif [ "$sync" == "client-start" -a "$cs_type" == "client" ]; then
-                    echo "Running $sync command: $start_cmd"
-                    $start_cmd
-                    cmd_rc=$?
-                elif [ "$sync" == "server-stop" -a "$cs_type" == "server" ]; then
-                    echo "Running $sync command: $stop_cmd"
-                    $stop_cmd
-                    cmd_rc=$?
-                fi
-                if [ $cmd_rc -gt 0 ]; then
-                    # An abort message must be sent so the other members know how to procede
-                    abort_opt=" --abort"
-                    echo -e "\nNon-zero exit code from iteration $iter, sample $samp"
-                    echo -e "\nWill send abort message on next roadblock\n"
-                    echo -e "\nWill not run remaining tests\n"
-                    # Since the rest of the roadblocks for this test will not be done, stop the server now
-                    if [ "$cs_type" == "server" ]; then
-                        echo -e "\nAttempting to stop server\n"
+                    timeout=$default_timeout
+                    if [ -f $msgs_file ]; then
+                        count=1
+                        if [ $cs_type == "client" ]; then
+                            cs_buddy="server-$cs_id"
+                        else
+                            cs_buddy="client-$cs_id"
+                        fi
+                        echo "Found messages file: $msgs_file"
+		                # First look for a message to "all" but sent by client-server buddy
+		                # (to be deprecated)
+                        jq -cr '.received[] | select(.payload.sender.id == "'$cs_buddy'" and 
+                                .payload.message.command == "user-object") | .payload.message' $msgs_file\
+                        | while read line; do
+                            msg="$this_sync:$count"
+                            echo "Found user-object message from $cs_buddy: $line"
+                            echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                            let count=$count+1
+                        done
+		                # Next look for a message sent specifically to this client/server
+                        jq -cr '.received[] | select(.payload.recipient.id == "'$cs_label'" and 
+                                .payload.message.command == "user-object") | .payload.message' $msgs_file\
+                        | while read line; do
+                            msg="$this_sync:$count"
+                            echo "Found user-object message from $cs_buddy: $line"
+                            echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
+                            let count=$count+1
+                        done
+                        # TODO: process the newly created msg files above instead of scanning the entire messages array again
+                        next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
+                        jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file
+                        if [ ! -z "$next_timeout" ]; then
+                            echo "Applying timeout value of $next_timeout to next roadblock sync"
+                            timeout=$next_timeout
+                        fi
+                    fi
+                    # These combinations don't run a command:
+                    #  sync=server-start & cs_type=client
+                    #  sync=client-start & cs_type=server
+                    #  sync=server-stop & cs_type=client
+                    if [ "$this_sync" == "server-start" -a "$cs_type" == "server" ]; then
+                        echo "Running $this_sync command: $start_cmd"
+                        $start_cmd
+                        cmd_rc=$?
+                    elif [ "$this_sync" == "client-start" -a "$cs_type" == "client" ]; then
+                        echo "Running $this_sync command: $start_cmd"
+                        $start_cmd
+                        cmd_rc=$?
+                    elif [ "$this_sync" == "server-stop" -a "$cs_type" == "server" ]; then
+                        echo "Running $this_sync command: $stop_cmd"
                         $stop_cmd
+                        cmd_rc=$?
                     fi
-                fi
-            done #for
+                    if [ $cmd_rc -gt 0 ]; then
+                        echo -e "\nNon-zero exit code from iteration $iter, sample $samp attempt $this_attempt_num"
+                        if [ "$this_sync" != "server-stop" ]; then
+                            # An abort message must be sent so the other members know how to procede
+                            # Not necessary with server-stop since that is the last sync in this sample
+                            abort_opt=" --abort"
+                            echo -e "\nWill not continue this sample attempt and send abort message on next roadblock\n"
+                        fi
+                    fi
+                done #for syncs
+            done #for start/stop
             if [ $this_attempt_fail -eq 1 ]; then
                 /bin/mv "$iter_samp_dir" "$iter_samp_dir-fail${sample_failures[$iter_idx]}"
             fi
@@ -605,15 +630,19 @@ else
     do_roadblock $label "endpoint" 86400
     echo -e "\nCollectors stopping tools"
 fi
-pushd tool-data >/dev/null
-while read -u 9 line; do
-    tool_name=`echo $line | awk -F: '{print $1}'`
-    tool_cmd=`echo $line | sed -e s/^$tool_name://`
-    pushd $tool_name >/dev/null
-    $tool_cmd
+if [ "$disable_tools" == "1" ]; then
+    echo "Not running tools because --disable-tools=1 was used"
+else
+    pushd tool-data >/dev/null
+    while read -u 9 line; do
+        tool_name=`echo $line | awk -F: '{print $1}'`
+        tool_cmd=`echo $line | sed -e s/^$tool_name://`
+        pushd $tool_name >/dev/null
+        $tool_cmd
+        popd >/dev/null
+    done 9<"$tool_stop_cmds"
     popd >/dev/null
-done 9<"$tool_stop_cmds"
-popd >/dev/null
+fi
 
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     label=client-server-send-data

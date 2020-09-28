@@ -72,7 +72,7 @@ echo "bootstrap params:"
 echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts="${longopts},roadblock-passwd:,roadblock-id:"
+longopts="${longopts},roadblock-passwd:,roadblock-id:,disable-tools:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $@\n\n"
@@ -113,6 +113,11 @@ while true; do
         --roadblock-id)
             shift;
             export roadblock_id="$1"
+            shift;
+            ;;
+        --disable-tools)
+            shift;
+            export disable_tools="$1"
             shift;
             ;;
         --)
