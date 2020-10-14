@@ -600,7 +600,7 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                         cmd_rc=$?
                     fi
                     if [ $cmd_rc -gt 0 ]; then
-                        echo -e "\nNon-zero exit code from iteration $iter, sample $samp attempt $this_attempt_num"
+                        echo -e "\nNon-zero exit code ($cmd_rc) from iteration $iter, sample $samp attempt $this_attempt_num"
                         if [ "$this_sync" != "server-stop" ]; then
                             # An abort message must be sent so the other members know how to procede
                             # Not necessary with server-stop since that is the last sync in this sample
