@@ -109,6 +109,8 @@ sub export_metric {
     $metr_desc_doc{'metric_desc'}{'names'} = $$metr_ref{'names'};
     my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
     http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
+    my $count = 0;
+    my $ndjson = "";
     for my $metr_data (@{ $$metr_ref{'data'} }) {
         # The metric_data docs do not include the 'parent' doc info
         # because there are potentially millions and millions of these.
@@ -116,7 +118,17 @@ sub export_metric {
         my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
         $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
         my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
-        http_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/", $metr_data_doc_json);
+        $ndjson .= sprintf "%s\n", '{ "index": {} }';
+        $ndjson .= sprintf "%s\n", $metr_data_doc_json;
+        $count++;
+        if ($count >= 1000) {
+            http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
+            $ndjson = "";
+            $count = 0;
+        }
+    }
+    if ($count > 0) {
+        http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
     }
 }
 
@@ -128,6 +140,21 @@ sub http_request {
     my $client = REST::Client->new();
     $client->setHost($host);
     my %req_header = ("Content-Type" => "application/json");
+    #debug_log(sprintf "%s:\nRequest: http://%s/%s\nbody: %s\n\n", $desc, $host, $req, $body);
+    $client->request($method, $req, $body, \%req_header);
+    my $response = $client->responseContent();
+    #debug_log($response);
+    return $response;
+}
+
+sub http_ndjson_request {
+    my $method = shift;
+    my $host = shift;
+    my $req = shift;
+    my $body = shift;
+    my $client = REST::Client->new();
+    $client->setHost($host);
+    my %req_header = ("Content-Type" => "application/x-ndjson");
     #debug_log(sprintf "%s:\nRequest: http://%s/%s\nbody: %s\n\n", $desc, $host, $req, $body);
     $client->request($method, $req, $body, \%req_header);
     my $response = $client->responseContent();
@@ -227,25 +254,9 @@ my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
 http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/", $run_doc_json);
 if (exists $result{'tool-data'}) {
     print "Working on tool data\n";
+    my $run_doc_ref = $coder->decode($run_doc_json);
     for my $metr (@{ $result{'tool-data'} }) {
-        # Copy data from 'parent' doc so querying directly for metric_desc with
-        # run data is possible
-        my $metr_desc_doc_ref = $coder->decode($run_doc_json);
-        my %metr_desc_doc = %$metr_desc_doc_ref;
-        $metr_desc_doc{'metric_desc'} = $$metr{'desc'};
-        $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
-        $metr_desc_doc{'metric_desc'}{'names'} = $$metr{'names'};
-        my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
-        http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
-        for my $metr_data (@{ $$metr{'data'} }) {
-            # The metric_data docs do not include the 'parent' doc info
-            # because there are potentially millions and millions of these.
-            # The only data copied from its parent (metric_desc) is the metric_desc.id
-            my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
-            $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
-            my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
-            http_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/", $metr_data_doc_json);
-        }
+        export_metric($metr, $run_doc_ref);
     }
 }
 if (exists $result{'iterations'}) {
@@ -294,24 +305,8 @@ if (exists $result{'iterations'}) {
                 my $per_doc_json = $coder->encode(\%per_doc);
                 http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $per_doc_json);
                 for my $metr (@{ $$per{'metrics'} }) {
-                    # Copy data from 'parent' doc so querying directly for metric_desc with
-                    # run/iteration/sample/period data is possible
-                    my $metr_desc_doc_ref = $coder->decode($per_doc_json);
-                    my %metr_desc_doc = %$metr_desc_doc_ref;
-                    $metr_desc_doc{'metric_desc'} = $$metr{'desc'};
-                    $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
-                    $metr_desc_doc{'metric_desc'}{'names'} = $$metr{'names'};
-                    my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
-                    http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
-                    for my $metr_data (@{ $$metr{'data'} }) {
-                        # The metric_data docs do not include the 'parent' doc info
-                        # because there are potentially millions and millions of these.
-                        # The only data copied from its parent (metric_desc) is the metric_desc.id
-                        my %metr_data_doc = ( 'metric_data' => $metr_data, 'cdm' => \%cdm );
-                        $metr_data_doc{'metric_desc'}{'id'} = $metr_desc_doc{'metric_desc'}{'id'};
-                        my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
-                        http_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/", $metr_data_doc_json);
-                    }
+                    my $per_doc_ref = $coder->decode($per_doc_json);
+                    export_metric($metr, $per_doc_ref);
                 }
             }
         }
