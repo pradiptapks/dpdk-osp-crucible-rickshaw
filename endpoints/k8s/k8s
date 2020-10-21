@@ -480,7 +480,7 @@ function create_pods() {
     fi
     mkdir -p "$dir"
     local count=1
-    local pods_to_create=""
+    declare -A pods_to_create
     while [ $# -gt 0 ]; do
         local name="$1"; shift
 	    echo "create_pods: working on [$name]"
@@ -491,16 +491,19 @@ function create_pods() {
 	        name="$type-$count"
 	        echo "$name"
             let count=$count+1
+            pods_to_create[$name]=$host
+        else
+            # Non-tool pods don't get host placement here
+            pods_to_create[$name]=""
 	    fi
-        pods_to_create+=" $name"
     done
-    delete_pods $pods_to_create
+    delete_pods ${!pods_to_create[@]}
     local this_pod
-    for this_pod in $pods_to_create; do
-        #echo "about to delete $name"
-        #delete_pods "$name"
-        echo build_pod_spec "$this_pod" "$type" "$dir" "$host"
-        build_pod_spec "$this_pod" "$type" "$dir" "$host"
+    #for this_pod in $pods_to_create; do
+    for this_pod in ${!pods_to_create[@]}; do
+        echo build_pod_spec "$this_pod" "$type" "$dir" "${pods_to_create[$this_pod]}"
+        build_pod_spec "$this_pod" "$type" "$dir" "${pods_to_create[$this_pod]}"
+        #build_pod_spec "$this_pod" "$type" "$dir" "$host"
         if [ -e "$dir/$this_pod.json" ]; then
             # TODO: the exit code does not work here, need to find a way to have it work
             cat "$dir/$this_pod.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$this_pod.txt"
