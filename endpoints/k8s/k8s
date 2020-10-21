@@ -499,11 +499,9 @@ function create_pods() {
     done
     delete_pods ${!pods_to_create[@]}
     local this_pod
-    #for this_pod in $pods_to_create; do
     for this_pod in ${!pods_to_create[@]}; do
         echo build_pod_spec "$this_pod" "$type" "$dir" "${pods_to_create[$this_pod]}"
         build_pod_spec "$this_pod" "$type" "$dir" "${pods_to_create[$this_pod]}"
-        #build_pod_spec "$this_pod" "$type" "$dir" "$host"
         if [ -e "$dir/$this_pod.json" ]; then
             # TODO: the exit code does not work here, need to find a way to have it work
             cat "$dir/$this_pod.json" | ssh $k8s_user@$k8s_host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$this_pod.txt"
