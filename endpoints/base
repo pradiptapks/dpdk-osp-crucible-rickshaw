@@ -307,7 +307,7 @@ function process_bench_roadblocks() {
         if [ $quit -gt 0 ]; then
             echo "quit = 1, so breaking out of tests"
             break
-	    fi
+        fi
         iter_samp=`echo $line | awk '{print $1}'`
         iter=`echo $iter_samp | awk -F- '{print $1}'`
         let iter_idx=$iter-1
@@ -342,8 +342,8 @@ function process_bench_roadblocks() {
                         # Build the syncs needed for stop, may end up being fewer than all syncs if start syncs abort early
                         stop_syncs="$sync $stop_syncs"
                     fi
-                    local test_id="test-${iter}-${samp}"
-                    local label="${iter}-${samp}-${this_attempt_num}:$this_sync"
+                    local test_id="$iter-$samp-$this_attempt_num"
+                    local label="$test_id:$this_sync"
                     local msgs_file="$roadblock_msgs_dir/$label.json"
                     do_roadblock "$label" "follower" $timeout "$msgs_json_file"
                     rb_rc=$?
@@ -376,8 +376,8 @@ function process_bench_roadblocks() {
                             fi
                         fi
                     fi
-	                # Below checks for a specific timeout message from the benchmark client, and all endpoints
-	                # process this the same way
+                    # Below checks for a specific timeout message from the benchmark client, and all endpoints
+                    # process this the same way
                     timeout=$default_timeout
                     if [ -f $msgs_file ]; then
                         next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
@@ -386,9 +386,9 @@ function process_bench_roadblocks() {
                             timeout=$next_timeout
                         fi
                     fi
-	            # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
-	            # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
-	            if [ -f $msgs_file ]; then
+                # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
+                # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
+                if [ -f $msgs_file ]; then
                         count=1
                         echo "Found messages file: $msgs_file"
                         jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' $msgs_file\
@@ -399,20 +399,22 @@ function process_bench_roadblocks() {
                             let count=$count+1
                         done
                     fi
-	                # This is the opportunity for the endpoints to make any changes
-	                # before the actual test starts (client-start).  For example, this
-	                # may be used to provide a route to a benchmark-server.  The endpoint
-	                # may also create a message to be sent to other participants on
-	                # on the next roadblock.
+                    # This is the opportunity for the endpoints to make any changes
+                    # before the actual test starts (client-start).  For example, this
+                    # may be used to provide a route to a benchmark-server.  The endpoint
+                    # may also create a message to be sent to other participants on
+                    # on the next roadblock.
                     if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-start" ]; then
-		            endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
+                        echo "about to call endpoint_${endpoint_type}_test_start"
+                    endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
+                        echo "returning from endpoint_${endpoint_type}_test_start"
                     fi
                     if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-stop" ]; then
-		            echo "Attempting to call endpoint_${endpoint_type}_test_stop"
-		            endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
+                    echo "Attempting to call endpoint_${endpoint_type}_test_stop"
+                    endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
                     fi
-	                # Check for any messages to send
-	                pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+                    # Check for any messages to send
+                    pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
                     if [ ! -z "$pending_tx_msgs" ]; then
                         echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
                         mkdir -p ${cs_tx_msgs_dir}-sent
@@ -428,7 +430,7 @@ function process_bench_roadblocks() {
                         echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$this_sync'"}}]' >>$msgs_json_file
                         echo "full message to send:"
                         cat "$msgs_json_file"
-	                else
+                    else
                         msgs_json_file=""
                     fi
                 done #for
