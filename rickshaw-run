@@ -178,10 +178,14 @@ sub dump_params {
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'}; 
         my $val = $$param{'val'};
-        if (defined $cs_id) {
-            $val =~ s/\%client-id\%/$cs_id/;
-        }
+        if (defined $val && length $val) {
+            if (defined $cs_id) {
+                $val =~ s/\%client-id\%/$cs_id/;
+            }
             $params_str .= " --" . $arg . "=" . $val;
+        } else {
+            $params_str .= " --" . $arg;
+	}
     }
     $params_str =~ s/^\s//;
     return $params_str;
