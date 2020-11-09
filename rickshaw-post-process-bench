@@ -256,7 +256,19 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     push(@pids, $pid);
                 } else {
                     my $pushd_dir = pushd($cs_id_dir);
-                    system($pp_cmd . " " . $iter_params);
+
+                    my $rc = system($pp_cmd . " " . $iter_params);
+                    if ($rc == -1) {
+                        printf "Failed to execute '%s%s'!\n", $pp_cmd, $iter_params;
+                    } elsif ($rc & 127) {
+                        printf "'%s%s' died with signal %d, %s coredump!\n", $pp_cmd, $iter_params, ($rc & 127), ($rc & 128) ? 'with' : 'without';
+                    } else {
+                        $rc = $rc >> 8;
+                        if ($rc != 0) {
+                           printf "'%s%s' exited with non-zero value %d\n", $pp_cmd, $iter_params, $rc;
+                        }
+                    }
+
                     exit;
                 }
             }
