@@ -70,6 +70,7 @@ my @tools_params;
 my $bench_schema_file = $rickshaw_project_dir . "/schema/benchmark.json";
 my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
+my $bench_params_schema_file = $rickshaw_project_dir . "/schema/bench-params.json";
 my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
 my $roadblock_exit_nofile = 5;
@@ -606,7 +607,7 @@ if (-e $bench_config_file) {
 }
 exists $run{'bench-params'} || die "[ERROR}You must use " .
                                    "--bench-params=/path/to/benchmark-params.json\n";
-my @param_sets = @{ my $param_sets_ref = get_json_file($run{'bench-params'}) };
+my @param_sets = @{ my $param_sets_ref = get_json_file($run{'bench-params'}, $bench_params_schema_file) };
 # TODO: verify user params schema
 $run{'iterations'} = ();
 my $iter_id = 0;
