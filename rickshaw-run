@@ -244,8 +244,9 @@ sub get_json_file {
         $jv->schema($json_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors > 0) {
-            printf "Validation errors when reading %s with schema %s:\n" . Dumper \@errors,
+            printf "Validation errors when reading %s with schema %s:\n" . Dumper(\@errors),
                    $filename, $schema_filename;
+	    exit 1;
         }
     }
     return $json_ref;
