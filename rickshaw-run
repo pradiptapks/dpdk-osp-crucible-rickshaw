@@ -194,23 +194,25 @@ sub dump_params {
 
 sub put_json_file {
     my $filename = shift;
+    chomp $filename;
     my $json_ref = shift;
     my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
     if (defined $schema_filename and -e $schema_filename) {
+        chomp $schema_filename;
         my $jv = JSON::Validator->new;
         open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_text;
+        my $json_schema_text;
         while ( <FH> ) {
-            $json_text .= $_;
+            $json_schema_text .= $_;
         }
         close FH;
-        $jv->schema($json_text);
+        chomp $json_schema_text;
+        $jv->schema($json_schema_text);
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            printf "Validation errors when writing %s with schema %s:\n",
-                  $filename, $schema_filename;
+            printf "Validation errors for file %s with schema %s:\n", $filename, $schema_filename;
             print Dumper \@errors;
             exit 1;
         }
@@ -224,9 +226,9 @@ sub put_json_file {
 
 sub get_json_file {
     my $filename = shift;
+    chomp $filename;
     my $schema_filename = shift;
     my $coder = JSON::XS->new;
-    my $jv = JSON::Validator->new;
     debug_log(sprintf "trying to open [%s]\n", $filename);
     open(FH, $filename) || die("Could not open file $filename\n");
     my $json_text = "";
@@ -234,20 +236,24 @@ sub get_json_file {
         $json_text .= $_;
     }
     close FH;
+    chomp $json_text;
     my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
     if (defined $schema_filename and -e $schema_filename) {
+        chomp $schema_filename;
+        my $jv = JSON::Validator->new;
         open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_text;
+        my $json_schema_text;
         while ( <FH> ) {
-            $json_text .= $_;
+            $json_schema_text .= $_;
         }
         close FH;
-        $jv->schema($json_text);
+        chomp $json_schema_text;
+        $jv->schema($json_schema_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors > 0) {
             printf "Validation errors when reading %s with schema %s:\n" . Dumper(\@errors),
                    $filename, $schema_filename;
-	    exit 1;
+	        exit 1;
         }
     }
     return $json_ref;
