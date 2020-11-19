@@ -50,6 +50,7 @@ sub put_json_file {
             $json_text .= $_;
         }
         close FH;
+        chomp $json_text;
         $jv->schema($json_text);
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
@@ -86,6 +87,7 @@ sub get_json_file {
             $json_text .= $_;
         }
         close FH;
+        chomp $json_text;
         $jv->schema($json_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
