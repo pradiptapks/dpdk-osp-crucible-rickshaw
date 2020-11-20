@@ -1,208 +1,240 @@
 {
-    "type": "object",
-    "properties": {
-        "rickshaw-run": {
-            "type": "object",
-            "properties": {
-                "schema": {
+  "type": "object",
+  "properties": {
+    "rickshaw-run": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^2020\\.03\\.18$"
+            }
+          },
+          "required": [
+            "version"
+          ]
+        }
+      }
+    },
+    "benchmark": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "iterations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "primary-metric": {
+            "type": "string"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "arg": {
+                  "type": "string",
+                  "pattern": "^.+$"
+                },
+                "val": {
+                  "type": "string",
+                  "pattern": "^.+$"
+                }
+              },
+              "addtionalProperties": false
+            },
+            "additionalItems": false
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "periods": {
+                  "type": "array",
+                  "items": {
                     "type": "object",
                     "properties": {
-                        "version": {
-                            "type": "string",
-                            "pattern": "^2020\\.03\\.18$"
-                        }
-                    },
-                    "required": [ "version" ]
-                }
-            }
-        },
-        "benchmark": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "iterations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "primary-metric": {
-                        "type": "string"
-                    },
-                    "params": {
+                      "name": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                      },
+                      "begin": {
+                        "type": "number"
+                      },
+                      "end": {
+                        "type": "number"
+                      },
+                      "metrics": {
                         "type": "array",
                         "items": {
-                            "type": "object",
-                            "properties": {
-                                "arg": {
-                                    "type": "string",
-                                    "pattern": "^.+$"
+                          "type": "object",
+                          "properties": {
+                            "desc": {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "pattern": "^.+$"
                                 },
-                                "val": {
-                                    "type": "string",
-                                    "pattern": "^.+$"
+                                "type": {
+                                  "type": "string",
+                                  "pattern": "^.+$"
+                                },
+                                "name-format": {
+                                  "type": "string",
+                                  "pattern": "^.*$"
+                                },
+                                "class": {
+                                  "type": "string",
+                                  "enum": [
+                                    "throughput",
+                                    "count"
+                                  ]
                                 }
+                              },
+                              "required": [
+                                "source",
+                                "class",
+                                "name-format",
+                                "type"
+                              ],
+                              "additionalProperties": false
                             },
-                            "addtionalProperties": false
+                            "names": {
+                              "type": "object",
+                              "propertyNames": {
+                                "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
+                              }
+                            },
+                            "data": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "duration": {
+                                    "type": "number"
+                                  },
+                                  "value": {
+                                    "type": "number"
+                                  },
+                                  "end": {
+                                    "type": "number"
+                                  },
+                                  "begin": {
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "value",
+                                  "end"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "additionalItems": false
+                            }
+                          },
+                          "required": [
+                            "desc",
+                            "names",
+                            "data"
+                          ],
+                          "additionalProperties": false
                         },
                         "additionalItems": false
+                      }
                     },
-                    "samples": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "status": {
-                                    "type": "string"
-                                    },
-                                "periods": {
-                                    "type": "array",
-                                    "items": { 
-                                        "type": "object",
-                                        "properties": {
-                                            "name": {
-                                                "type": "string",
-                                                "pattern": "^.+$"
-                                            },
-                                            "begin": {
-                                                "type": "number"
-                                            },
-                                            "end": {
-                                                "type": "number"
-                                            },
-                                            "metrics": {
-                                                "type": "array",
-                                                "items": {
-                                                    "type": "object",
-                                                    "properties": {
-                                                        "desc": {
-                                                            "type": "object",
-                                                            "properties": {
-                                                                "source": {
-                                                                    "type": "string",
-                                                                    "pattern": "^.+$"
-                                                                },
-                                                                "type": {
-                                                                    "type": "string",
-                                                                    "pattern": "^.+$"
-                                                                },
-                                                                "name-format": {
-                                                                    "type": "string",
-                                                                    "pattern": "^.*$"
-                                                                },
-                                                                "class": {
-                                                                    "type": "string",
-                                                                    "enum": [ "throughput", "count" ]
-                                                                }
-                                                            },
-                                                            "required": [ "source", "class", "name-format", "type" ],
-                                                            "additionalProperties": false
-                                                        },
-                                                        "names": {
-                                                            "type": "object",
-                                                            "propertyNames": {
-                                                                "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
-                                                            }
-                                                        },
-                                                        "data": {
-                                                            "type": "array",
-                                                            "items": {
-                                                                "type": "object",
-                                                                "properties": {
-                                                                    "duration": {
-                                                                        "type": "number"
-                                                                    },
-                                                                    "value": {
-                                                                        "type": "number"
-                                                                    },
-                                                                    "end": {
-                                                                        "type": "number"
-                                                                    },
-                                                                    "begin": {
-                                                                        "type": "number"
-                                                                    }
-                                                                },
-                                                                "required": [ "value", "end" ],
-                                                                "additionalProperties": false
-                                                            },
-                                                            "additionalItems": false
-                                                        }
-                                                    },
-                                                    "required": [ "desc", "names", "data" ],
-                                                    "additionalProperties": false
-                                                },
-                                                "additionalItems": false
-                                            }
-                                        },
-                                        "required": [ "name", "metrics" ],
-                                        "additionalProperties": false
-                                    },
-                                    "additionalItems": false
-                                }
-                            },
-                            "required": [ "periods" ],
-                            "additionalProperties": false
-                        },
-                        "additionalItems": false
-                    }
-                },
-                "required": [ "params", "samples" ],
-                "addtionalProperties": false
-            },
-            "addtionalItems" : false
-        },
-        "endpoints": {
-            "type": "array",
-             "items": {
-                "type": "object",
-                "properties": {
-                    "type": {
-                        "type": "string"
-                    },
-                    "opts": {
-                        "type": "string"
-                    },
-                    "label": {
-                        "type": "string"
-                    }
+                    "required": [
+                      "name",
+                      "metrics"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "additionalItems": false
                 }
+              },
+              "required": [
+                "periods"
+              ],
+              "additionalProperties": false
             },
             "additionalItems": false
+          }
         },
-        "email": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "name": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "run-id": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "tags": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "pattern": "^.+$"
-                    },
-                    "val": {
-                        "type": "string",
-                        "pattern": "^.+$"
-                    }
-                },
-                "required": [ "name", "val" ],
-                "addtionalProperties": false
-            },
-            "additionalItems": false
-        },
-        "test-order": {
-            "type": "string",
-            "enum": [ "i", "s", "r" ]
-        }
+        "required": [
+          "params",
+          "samples"
+        ],
+        "addtionalProperties": false
+      },
+      "addtionalItems": false
     },
-    "addtionalProperties": false
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "opts": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalItems": false
+    },
+    "email": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "run-id": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^.+$"
+          }
+        },
+        "required": [
+          "name",
+          "val"
+        ],
+        "addtionalProperties": false
+      },
+      "additionalItems": false
+    },
+    "test-order": {
+      "type": "string",
+      "enum": [
+        "i",
+        "s",
+        "r"
+      ]
+    }
+  },
+  "addtionalProperties": false
 }

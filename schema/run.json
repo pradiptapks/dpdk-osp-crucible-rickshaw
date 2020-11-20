@@ -1,110 +1,129 @@
 {
-    "type": "object",
-    "properties": {
-        "rickshaw-run": {
-            "type": "object",
-            "properties": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "version": {
-                            "type": "string",
-                            "pattern": "^2020\\.03\\.18$"
-                        }
-                    },
-                    "required": [ "version" ],
-                    "addtionalProperties": false
-                }
+  "type": "object",
+  "properties": {
+    "rickshaw-run": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^2020\\.03\\.18$"
             }
-        },
-        "bechmark": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "iterations": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "params": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "arg": {
-                                    "type": "string",
-                                    "pattern": "^.+$"
-                                },
-                                "val": {
-                                    "type": "string",
-                                    "pattern": "^.+$"
-                                }
-                            },
-                            "required": [ "arg", "val" ],
-                            "addtionalProperties": false
-                        },
-                        "additionalItems": false
-                    }
-                },
-                "required": [ "params" ],
-                "addtionalProperties": false
-            },
-            "additionalItems": false
-        },
-        "endpoints": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {
-                        "type": "string"
-                    },
-                    "opts": {
-                        "type": "string"
-                    },
-                    "label": {
-                        "type": "string"
-                    }
-                }
-            },
-            "additionalItems": false
-        },
-        "email": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "name": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "run-id": {
-            "type": "string",
-            "pattern": "^.+$"
-        },
-        "tags": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "pattern": "^.+$"
-                    },
-                    "val": {
-                        "type": "string",
-                        "pattern": "^.+$"
-                    }
-                },
-                "required": [ "name", "val" ],
-                "addtionalProperties": false
-            },
-            "additionalItems": false
-        },
-        "test-order": {
-            "type": "string",
-            "pattern": "^.+$"
+          },
+          "required": [
+            "version"
+          ],
+          "addtionalProperties": false
         }
+      }
     },
-    "required": [ "email", "name", "run-id", "test-order", "endpoints", "iterations", "benchmark", "rickshaw-run" ],
-    "addtionalProperties": false
+    "bechmark": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "iterations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "arg": {
+                  "type": "string",
+                  "pattern": "^.+$"
+                },
+                "val": {
+                  "type": "string",
+                  "pattern": "^.+$"
+                }
+              },
+              "required": [
+                "arg",
+                "val"
+              ],
+              "addtionalProperties": false
+            },
+            "additionalItems": false
+          }
+        },
+        "required": [
+          "params"
+        ],
+        "addtionalProperties": false
+      },
+      "additionalItems": false
+    },
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "opts": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalItems": false
+    },
+    "email": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "run-id": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "val": {
+            "type": "string",
+            "pattern": "^.+$"
+          }
+        },
+        "required": [
+          "name",
+          "val"
+        ],
+        "addtionalProperties": false
+      },
+      "additionalItems": false
+    },
+    "test-order": {
+      "type": "string",
+      "pattern": "^.+$"
+    }
+  },
+  "required": [
+    "email",
+    "name",
+    "run-id",
+    "test-order",
+    "endpoints",
+    "iterations",
+    "benchmark",
+    "rickshaw-run"
+  ],
+  "addtionalProperties": false
 }

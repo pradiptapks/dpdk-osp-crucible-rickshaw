@@ -1,107 +1,130 @@
 {
-    "type": "object",
-    "properties": {
-        "rickshaw-bench-metric": {
-            "type": "object",
-            "properties": {
-                "schema": {
+  "type": "object",
+  "properties": {
+    "rickshaw-bench-metric": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^2020\\.03\\.18$"
+            }
+          },
+          "required": [
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "additionalProperties": false
+    },
+    "primary-metric": {
+      "type": "string"
+    },
+    "primary-period": {
+      "type": "string"
+    },
+    "periods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^.+$"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "desc": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "pattern": "^.+$"
+                    },
+                    "type": {
+                      "type": "string",
+                      "pattern": "^.+$"
+                    },
+                    "name-format": {
+                      "type": "string",
+                      "pattern": "^.*$"
+                    },
+                    "class": {
+                      "type": "string",
+                      "enum": [
+                        "throughput",
+                        "count"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "class",
+                    "name-format",
+                    "type"
+                  ],
+                  "additionalProperties": false
+                },
+                "names": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
+                  }
+                },
+                "data": {
+                  "type": "array",
+                  "items": {
                     "type": "object",
                     "properties": {
-                        "version": {
-                            "type": "string",
-                            "pattern": "^2020\\.03\\.18$"
-                        }
+                      "value": {
+                        "type": "number"
+                      },
+                      "end": {
+                        "type": "number"
+                      },
+                      "begin": {
+                        "type": "number"
+                      }
                     },
-                    "required": [ "version" ],
+                    "required": [
+                      "value",
+                      "end"
+                    ],
                     "additionalProperties": false
+                  },
+                  "additionalItem": false
                 }
-            },
-            "required": [ "schema" ],
-            "additionalProperties": false
-        },
-        "primary-metric": {
-            "type": "string"
-        },
-        "primary-period": {
-            "type": "string"
-        },
-        "periods": {
-            "type": "array",
-            "items": { 
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "pattern": "^.+$"
-                    },
-                    "metrics": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "desc": {
-                                    "type": "object",
-                                    "properties": {
-                                        "source": {
-                                            "type": "string",
-                                            "pattern": "^.+$"
-                                        },
-                                        "type": {
-                                            "type": "string",
-                                            "pattern": "^.+$"
-                                        },
-                                        "name-format": {
-                                            "type": "string",
-                                            "pattern": "^.*$"
-                                        },
-                                        "class": {
-                                            "type": "string",
-                                            "enum": [ "throughput", "count" ]
-                                        }
-                                    },
-                                    "required": [ "source", "class", "name-format", "type" ],
-                                    "additionalProperties": false
-                                },
-                                "names": {
-                                    "type": "object",
-                                    "propertyNames": {
-                                        "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
-                                    }
-                                },
-                                "data": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "value": {
-                                                "type": "number"
-                                            },
-                                            "end": {
-                                                "type": "number"
-                                            },
-                                            "begin": {
-                                                "type": "number"
-                                            }
-                                        },
-                                        "required": [ "value", "end" ],
-                                        "additionalProperties": false
-                                    },
-                                    "additionalItem": false
-                                }
-                            },
-                            "required": [ "desc", "data" ],
-                            "additionalProperties": false
-                        },
-                        "additionalItems": false
-                    }
-                },
-                "required": [ "name", "metrics" ],
-                "additionalProperties": false
+              },
+              "required": [
+                "desc",
+                "data"
+              ],
+              "additionalProperties": false
             },
             "additionalItems": false
-        }
-    },
-    "required": [ "rickshaw-bench-metric", "periods" ],
-    "additionalProperties": false
+          }
+        },
+        "required": [
+          "name",
+          "metrics"
+        ],
+        "additionalProperties": false
+      },
+      "additionalItems": false
+    }
+  },
+  "required": [
+    "rickshaw-bench-metric",
+    "periods"
+  ],
+  "additionalProperties": false
 }
-
