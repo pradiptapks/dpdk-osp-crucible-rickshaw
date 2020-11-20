@@ -87,7 +87,8 @@ sub usage {
     print "--tool-params   File with tool parameters to use\n";
     print "--num-samples    The number of sample exeuctions to run for each benchmark iteration\n";
     print "--test-order     's' = run all samples of an iteration first\n";
-    print "                 'i' = run all iterations of a sample first\n\n";
+    print "                 'i' = run all iterations of a sample first\n";
+    print "                 'r' = run a sample from a random iteration one at a time (ie. chaos mode)\n\n";
 }
 
 sub roadblock_leader {
@@ -838,6 +839,37 @@ if ($run{'test-order'} eq 's') {
             my %test = ('iteration-id' => $iid, 'sample-id' => $sid);
             push(@tests, \%test);
         }
+    }
+} elsif ($run{'test-order'} eq 'r') {
+    my $total_samples = scalar( @{$run{'iterations'} }) * $run{'num-samples'};
+
+    my @available_tests;
+    for (my $iid = 1; $iid <= scalar @{ $run{'iterations'} }; $iid++) {
+        my %test = ('iteration-id' => $iid);
+        $test{'samples'} = [];
+
+        for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
+            push(@{ $test{'samples'} }, $sid);
+        }
+
+        push(@available_tests, \%test);
+    }
+
+    while(scalar(@available_tests)) {
+        my $random_iteration = int(rand(scalar(@available_tests)));
+
+        my %test = ('iteration-id' => $available_tests[$random_iteration]{'iteration-id'},
+                    'sample-id' => shift( @{ $available_tests[$random_iteration]{'samples'} } ));
+        push(@tests, \%test);
+
+        if (scalar( @{ $available_tests[$random_iteration]{'samples'} } ) == 0) {
+            delete $available_tests[$random_iteration];
+        }
+    }
+
+    if (scalar(@tests) != $total_samples) {
+        printf "[ERROR]Expected %d tests but found %d --> is the random test-order algorithm broken?\n", $total_samples, scalar(@tests);
+        exit 1;
     }
 } else {
     printf "[ERROR]Value for --test-order [%s] is not valid\n", $run{'test-order'};
