@@ -232,7 +232,7 @@ if (-e $result_file) {
 # Start by creating what will be the CDM run document for elasticsearch
 my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
             'host' => 'localhost', 'name' => $result{'name'}, 'email' => $result{'email'} );
-for my $field (qw(host name email desc tags)) {
+for my $field (qw(host name email desc)) {
     if (defined $result{$field}) {
         $run{$field} = $result{$field};
     }
@@ -259,6 +259,19 @@ if (exists $result{'tool-data'}) {
     my $run_doc_ref = $coder->decode($run_doc_json);
     for my $metr (@{ $result{'tool-data'} }) {
         export_metric($metr, $run_doc_ref);
+    }
+}
+if (exists $result{'tags'}) {
+    for my $tag (@{ $result{'tags'} }) {
+        # Copy data from 'parent' doc so querying directly for tags with
+        # run/iteration data is possible
+        my $tag_doc_ref = $coder->decode($run_doc_json);
+        my %tag_doc = %$tag_doc_ref;
+        $tag_doc{'tag'}{'id'} = Data::UUID->new->create_str();
+        $tag_doc{'tag'}{'name'} = $$tag{'name'};
+        $tag_doc{'tag'}{'val'} = $$tag{'val'};
+        my $tag_doc_json = $coder->encode(\%tag_doc);
+        http_request("POST", "localhost:9200", "/cdmv5dev-tag/_doc/", $tag_doc_json);
     }
 }
 if (exists $result{'iterations'}) {
