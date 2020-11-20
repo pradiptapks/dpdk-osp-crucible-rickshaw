@@ -565,9 +565,23 @@ while (scalar @ARGV > 0) {
              $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
              $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
              $arg =~ /^reg-(auth|repo)$/ or
-             $arg =~ /^email$|^tags$|^desc$/) {
+             $arg =~ /^email$|^desc$/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $run{$arg} = $val;
+    } elsif ($arg =~ /^tags$/) {
+        debug_log(sprintf "argument: [%s]\n", $arg);
+        if (! exists($run{'tags'})) {
+            $run{'tags'} = [];
+        }
+        foreach my $this_tag (split(/,/, $val)) {
+            if ($this_tag =~ /(\S+):(\S+)/) {
+                my %tag = ('name' => $1, 'val' => $2);
+                push(@{ $run{'tags'} }, \%tag);
+            } else {
+                printf "ERROR: format for tag is not valid: %s\n", $this_tag;
+                exit 1;
+            }
+        }
     } else {
         printf "[ERROR]argument not valid: [%s]\n", $arg;
         usage;

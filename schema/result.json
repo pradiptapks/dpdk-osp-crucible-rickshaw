@@ -181,8 +181,23 @@
             "pattern": "^.+$"
         },
         "tags": {
-            "type": "string",
-            "pattern": "^.+$"
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                    },
+                    "val": {
+                        "type": "string",
+                        "pattern": "^.+$"
+                    }
+                },
+                "required": [ "name", "val" ],
+                "addtionalProperties": false
+            },
+            "additionalItems": false
         },
         "test-order": {
             "type": "string",
