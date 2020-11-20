@@ -863,7 +863,7 @@ if ($run{'test-order'} eq 's') {
         push(@tests, \%test);
 
         if (scalar( @{ $available_tests[$random_iteration]{'samples'} } ) == 0) {
-            delete $available_tests[$random_iteration];
+            splice @available_tests, $random_iteration, 1;
         }
     }
 
