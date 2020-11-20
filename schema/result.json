@@ -186,7 +186,7 @@
         },
         "test-order": {
             "type": "string",
-            "enum": [ "i", "s" ]
+            "enum": [ "i", "s", "r" ]
         }
     },
     "addtionalProperties": false
