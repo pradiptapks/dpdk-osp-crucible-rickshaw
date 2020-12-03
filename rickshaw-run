@@ -890,6 +890,7 @@ if ($run{'test-order'} eq 's') {
     usage;
     exit 1;
 }
+put_json_file($config_dir . "/test-order.json", \@tests);
 
 # Run on the controller (the host running this script) the benchmark-specific "pre-script"
 if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controller"}{"pre-script"} ne "") {
