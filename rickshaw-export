@@ -19,6 +19,8 @@ use JSON::XS;
 use JSON::Validator;
 use Data::Dumper;
 use REST::Client;
+use IO::Compress::Xz;
+use IO::Uncompress::UnXz;
 
 my $debug = 0;
 my %result;
