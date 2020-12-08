@@ -39,60 +39,70 @@ sub debug_log {
 
 sub put_json_file {
     my $filename = shift;
+    chomp $filename;
     my $json_ref = shift;
     my $schema_filename = shift;
     my $coder = JSON::XS->new->canonical->pretty;
     if (defined $schema_filename and -e $schema_filename) {
+        chomp $schema_filename;
         my $jv = JSON::Validator->new;
-        open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_text;
-        while ( <FH> ) {
-            $json_text .= $_;
+	my $schema_fh = new IO::Uncompress::UnXz $schema_filename, Transparent => 1 || die "Could not open file " . $schema_filename;
+        my $json_schema_text;
+        while ( <$schema_fh> ) {
+            $json_schema_text .= $_;
         }
-        close FH;
-        chomp $json_text;
-        $jv->schema($json_text);
+        close($schema_fh);
+        chomp $json_schema_text;
+        $jv->schema($json_schema_text);
         debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            printf "Validation errors for file %s with schema %s:\n" . Dumper \@errors,
-                   $filename, $schema_filename;
+            printf "Validation errors for file %s with schema %s:\n", $filename, $schema_filename;
+            print Dumper \@errors;
             exit 1;
         }
     }
     debug_log(sprintf "trying to write [%s]\n", $filename);
     my $json_text = $coder->encode($json_ref);
-    open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
-    printf JSON_FH "%s", $json_text;
-    close JSON_FH;
+    my $json_fh;
+    if ($filename =~ /xz$/) {
+	$json_fh = new IO::Compress::Xz "$filename" || die("Could not open $filename.xz for writing\n");
+    } else {
+	open($json_fh, ">", $filename);
+    }
+    printf $json_fh "%s", $json_text;
+    close($json_fh);
 }
 
 sub get_json_file {
     my $filename = shift;
+    chomp $filename;
     my $schema_filename = shift;
     my $coder = JSON::XS->new;
     debug_log(sprintf "trying to open [%s]\n", $filename);
-    open(FH, $filename) || die("Could not open file $filename\n");
+    my $log_fh = new IO::Uncompress::UnXz $filename, Transparent => 1 || die "Could not open file " . $filename;
     my $json_text = "";
-    while ( <FH> ) {
+    while ( <$log_fh> ) {
         $json_text .= $_;
     }
-    close FH;
+    close($log_fh);
+    chomp $json_text;
     my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
     if (defined $schema_filename and -e $schema_filename) {
+        chomp $schema_filename;
         my $jv = JSON::Validator->new;
-        open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_text;
-        while ( <FH> ) {
-            $json_text .= $_;
+	my $schema_fh = new IO::Uncompress::UnXz $schema_filename, Transparent => 1 || die "Could not open file " . $schema_filename;
+        my $json_schema_text;
+        while ( <$schema_fh> ) {
+            $json_schema_text .= $_;
         }
-        close FH;
-        chomp $json_text;
-        $jv->schema($json_text);
+        close($schema_fh);
+        chomp $json_schema_text;
+        $jv->schema($json_schema_text);
         my @errors = $jv->validate($json_ref);
         if (scalar @errors >  0) {
-            printf "Validaton errors for file %s with schema %s:\n" . Dumper \@errors,
-                   $filename, $schema_filename;
+            printf "Validaton errors for file %s with schema %s:\n", $filename, $schema_filename;
+            print Dumper \@errors;
             exit 1;
         }
     }
@@ -218,6 +228,9 @@ my $iter_dir = $run_dir . "/iterations";
 my $result_schema_file = $rickshaw_project_dir . "/schema/result.json";
 
 my $result_file = $run_dir . "/rickshaw-result.json";
+if (! -e $result_file) {
+    $result_file = $run_dir . "/rickshaw-result.json.xz";
+}
 if (-e $result_file) {
     printf "Opening %s\n", $result_file;
     my $result_ref = get_json_file($result_file, $result_schema_file);
