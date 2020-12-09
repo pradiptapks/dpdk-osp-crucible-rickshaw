@@ -187,7 +187,7 @@ sub dump_params {
             $params_str .= " --" . $arg . "=" . $val;
         } else {
             $params_str .= " --" . $arg;
-	}
+        }
     }
     $params_str =~ s/^\s//;
     return $params_str;
@@ -254,7 +254,7 @@ sub get_json_file {
         if (scalar @errors > 0) {
             printf "Validation errors when reading %s with schema %s:\n" . Dumper(\@errors),
                    $filename, $schema_filename;
-	        exit 1;
+                exit 1;
         }
     }
     return $json_ref;
@@ -1217,7 +1217,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
                         if ($abort_run_on_iter_fail == 1) {
                             $abort_test_id = $tid;
                             $tid = scalar @tests; # Force break from outer loop
-		                    $quit = 1;
+                                    $quit = 1;
                         }
                         # Don't continue with remaining syncs if this is start.
                         # Stop syncs are automatically reduced because that array is built
