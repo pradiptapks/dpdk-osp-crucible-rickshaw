@@ -346,7 +346,8 @@ sub build_container_image {
                         },
                         'config' => {
                             #'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
-                            'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ]
+                            'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ],
+                            'labels' => [ 'quay.expires-after=2w' ]
                         }
                     );
         my $cs_req_file = $config_dir . "/cs-req.json";
