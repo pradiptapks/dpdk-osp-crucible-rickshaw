@@ -187,7 +187,7 @@ sub dump_params {
             $params_str .= " --" . $arg . "=" . $val;
         } else {
             $params_str .= " --" . $arg;
-	}
+        }
     }
     $params_str =~ s/^\s//;
     return $params_str;
@@ -254,7 +254,7 @@ sub get_json_file {
         if (scalar @errors > 0) {
             printf "Validation errors when reading %s with schema %s:\n" . Dumper(\@errors),
                    $filename, $schema_filename;
-	        exit 1;
+                exit 1;
         }
     }
     return $json_ref;
@@ -414,20 +414,38 @@ sub build_container_image {
         }
         put_json_file($cs_req_file, \%cs_req);
         put_json_file($cs_conf_file, \%cs_conf);
-    
+
+        my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
+            " --skip-update=true " .
+            " --config " . $cs_conf_file .
+            " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
+            " --requirements " . $run{'bench-dir'} . "/workshop.json" .
+            " --requirements " . $cs_req_file .
+            $workshop_roadblock_opt .
+            " 2>&1";
+        foreach my $tool_entry (@tools_params) {
+            $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
+                $$tool_entry{'tool'} . "/workshop.json ";
+        }
+        my @config_analysis_output = `$workshop_cmd --label config-analysis --dump-config true`;
+        my $break_line;
+        for (my $i=0; $i<scalar(@config_analysis_output); $i++) {
+            if ($config_analysis_output[$i] =~ /Config dump:/) {
+                $break_line = $i;
+            }
+        }
+        splice(@config_analysis_output, 0, $break_line+1);
+
         # The rest of the requirements come from the user-environment (base Linux OS),
         # the benchmark, and tools
-        my @files = ($run{'bench-dir'} . "/workshop.json",
-                    $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json",
-                    $cs_req_file, $cs_conf_file,
-                    #$rickshaw_project_dir . "/client-server-script");
-                    $rickshaw_project_dir . "/bootstrap");  # replaces ^^^
+        my @files = ($rickshaw_project_dir . "/bootstrap");
         foreach my $tool_entry (@tools_params) {
             push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
         }
         my $md5 = Digest::MD5->new;
         my $coder = JSON::XS->new->canonical;
         my $js = $coder->encode(\%cs_req);
+        $md5->add(join("", @config_analysis_output));
         for my $file (@files) {
             open(my $fh, $file);
             binmode($fh);
@@ -471,20 +489,7 @@ sub build_container_image {
         }
         if (!$image_found) {
             my $workshop_image_id;
-            my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
-                            #" --label " . $run{'benchmark'} .
-                            " --skip-update=true " .
-                            " --config " . $cs_conf_file .
-                            " --label " . $image_md5 .
-                            " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
-                            " --requirements " . $run{'bench-dir'} . "/workshop.json" .
-                            " --requirements " . $cs_req_file .
-                            $workshop_roadblock_opt .
-                            " 2>&1"; 
-            foreach my $tool_entry (@tools_params) {
-                $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
-                                $$tool_entry{'tool'} . "/workshop.json ";
-            }
+            $workshop_cmd .= " --label " . $image_md5;
             printf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_cmd;
             printf "This may take a few minutes\n";
             my @workshop_output = `$workshop_cmd`;
@@ -1212,7 +1217,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
                         if ($abort_run_on_iter_fail == 1) {
                             $abort_test_id = $tid;
                             $tid = scalar @tests; # Force break from outer loop
-		                    $quit = 1;
+                                    $quit = 1;
                         }
                         # Don't continue with remaining syncs if this is start.
                         # Stop syncs are automatically reduced because that array is built
