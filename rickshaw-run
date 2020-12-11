@@ -378,7 +378,8 @@ sub build_container_image {
 
         # The rest of the requirements come from the user-environment (base Linux OS),
         # the benchmark, and tools
-        my @files = ($rickshaw_project_dir . "/bootstrap");
+        my @files = ($run{'workshop-dir'} . "/workshop.pl",
+                     $rickshaw_project_dir . "/bootstrap");
 	if ($use_roadblock) {
 	    push(@files, $run{'roadblock-dir'} . "/roadblock.py");
 	}
