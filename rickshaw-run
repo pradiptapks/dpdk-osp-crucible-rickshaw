@@ -20,12 +20,25 @@ use JSON::XS;
 use JSON::Validator;
 use Data::Dumper;
 
+BEGIN {
+    if (!(exists $ENV{'TOOLBOX_HOME'} && -d "$ENV{'TOOLBOX_HOME'}/perl")) {
+        print "This script requires libraries that are provided by the toolbox project.\n";
+        print "Toolbox can be acquired from https://github.com/perftool-incubator/toolbox and\n";
+        print "then use 'export TOOLBOX_HOME=/path/to/toolbox' so that it can be located.\n";
+        exit 1;
+    }
+}
+use lib "$ENV{'TOOLBOX_HOME'}/perl";
+use toolbox::json;
+use toolbox::logging;
+
+$toolbox::logging::debug = 0;
+
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
                  "max-sample-failures" => 5);
 
-my $debug = 0;
 my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
@@ -167,12 +180,6 @@ sub roadblock_leader {
     }
 }
 
-sub debug_log {
-    if ($debug) {
-        print "[DEBUG]" . shift;
-    }
-}
-
 sub dump_params {
     my $params_ref = shift;
     my $cs_id = shift;
@@ -191,73 +198,6 @@ sub dump_params {
     }
     $params_str =~ s/^\s//;
     return $params_str;
-}
-
-sub put_json_file {
-    my $filename = shift;
-    chomp $filename;
-    my $json_ref = shift;
-    my $schema_filename = shift;
-    my $coder = JSON::XS->new->canonical->pretty;
-    if (defined $schema_filename and -e $schema_filename) {
-        chomp $schema_filename;
-        my $jv = JSON::Validator->new;
-        open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_schema_text;
-        while ( <FH> ) {
-            $json_schema_text .= $_;
-        }
-        close FH;
-        chomp $json_schema_text;
-        $jv->schema($json_schema_text);
-        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
-        my @errors = $jv->validate($json_ref);
-        if (scalar @errors >  0) {
-            printf "Validation errors for file %s with schema %s:\n", $filename, $schema_filename;
-            print Dumper \@errors;
-            exit 1;
-        }
-    }
-    debug_log(sprintf "trying to write [%s]\n", $filename);
-    my $json_text = $coder->encode($json_ref);
-    open(JSON_FH, ">" . $filename) || die("Could not open file $filename\n");
-    printf JSON_FH "%s", $json_text;
-    close JSON_FH;
-}
-
-sub get_json_file {
-    my $filename = shift;
-    chomp $filename;
-    my $schema_filename = shift;
-    my $coder = JSON::XS->new;
-    debug_log(sprintf "trying to open [%s]\n", $filename);
-    open(FH, $filename) || die("Could not open file $filename\n");
-    my $json_text = "";
-    while ( <FH> ) {
-        $json_text .= $_;
-    }
-    close FH;
-    chomp $json_text;
-    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
-    if (defined $schema_filename and -e $schema_filename) {
-        chomp $schema_filename;
-        my $jv = JSON::Validator->new;
-        open(FH, $schema_filename) or die "Could not open $schema_filename";
-        my $json_schema_text;
-        while ( <FH> ) {
-            $json_schema_text .= $_;
-        }
-        close FH;
-        chomp $json_schema_text;
-        $jv->schema($json_schema_text);
-        my @errors = $jv->validate($json_ref);
-        if (scalar @errors > 0) {
-            printf "Validation errors when reading %s with schema %s:\n" . Dumper(\@errors),
-                   $filename, $schema_filename;
-                exit 1;
-        }
-    }
-    return $json_ref;
 }
 
 sub file_newer_than {
@@ -561,7 +501,7 @@ while (scalar @ARGV > 0) {
         $val =~ /^(\w+),(.*)$/;
          add_endpoint(\@endpoints, $1, $2);
     } elsif ($arg =~ /^debug$/) {
-        $debug = $val;
+        $toolbox::logging::debug = $val;
     } elsif ($arg =~ /^help$/) {
         usage;
         exit 0;

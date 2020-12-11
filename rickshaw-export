@@ -19,10 +19,21 @@ use JSON::XS;
 use JSON::Validator;
 use Data::Dumper;
 use REST::Client;
-use IO::Compress::Xz;
-use IO::Uncompress::UnXz;
 
-my $debug = 0;
+BEGIN {
+    if (!(exists $ENV{'TOOLBOX_HOME'} && -d "$ENV{'TOOLBOX_HOME'}/perl")) {
+        print "This script requires libraries that are provided by the toolbox project.\n";
+        print "Toolbox can be acquired from https://github.com/perftool-incubator/toolbox and\n";
+        print "then use 'export TOOLBOX_HOME=/path/to/toolbox' so that it can be located.\n";
+        exit 1;
+    }
+}
+use lib "$ENV{'TOOLBOX_HOME'}/perl";
+use toolbox::json;
+use toolbox::logging;
+
+$toolbox::logging::debug = 0;
+
 my %result;
 my $base_run_dir;
 my %cdm = ( 'ver' => 'v5dev' );
@@ -31,84 +42,6 @@ my $coder = JSON::XS->new->canonical;
 sub usage {
     print "\nusage:\n\n";
     print "--base-run-dir <dir>  (this is a result-file in json that rickshaw-post-process generates)\n";
-}
-
-sub debug_log {
-    if ($debug) {
-        print "[DEBUG]" . shift;
-    }
-}
-
-sub put_json_file {
-    my $filename = shift;
-    chomp $filename;
-    my $json_ref = shift;
-    my $schema_filename = shift;
-    my $coder = JSON::XS->new->canonical->pretty;
-    if (defined $schema_filename and -e $schema_filename) {
-        chomp $schema_filename;
-        my $jv = JSON::Validator->new;
-	my $schema_fh = new IO::Uncompress::UnXz $schema_filename, Transparent => 1 || die "Could not open file " . $schema_filename;
-        my $json_schema_text;
-        while ( <$schema_fh> ) {
-            $json_schema_text .= $_;
-        }
-        close($schema_fh);
-        chomp $json_schema_text;
-        $jv->schema($json_schema_text);
-        debug_log(sprintf "Going to validate schema with [%s]\n", $schema_filename);
-        my @errors = $jv->validate($json_ref);
-        if (scalar @errors >  0) {
-            printf "Validation errors for file %s with schema %s:\n", $filename, $schema_filename;
-            print Dumper \@errors;
-            exit 1;
-        }
-    }
-    debug_log(sprintf "trying to write [%s]\n", $filename);
-    my $json_text = $coder->encode($json_ref);
-    my $json_fh;
-    if ($filename =~ /xz$/) {
-	$json_fh = new IO::Compress::Xz "$filename" || die("Could not open $filename.xz for writing\n");
-    } else {
-	open($json_fh, ">", $filename);
-    }
-    printf $json_fh "%s", $json_text;
-    close($json_fh);
-}
-
-sub get_json_file {
-    my $filename = shift;
-    chomp $filename;
-    my $schema_filename = shift;
-    my $coder = JSON::XS->new;
-    debug_log(sprintf "trying to open [%s]\n", $filename);
-    my $log_fh = new IO::Uncompress::UnXz $filename, Transparent => 1 || die "Could not open file " . $filename;
-    my $json_text = "";
-    while ( <$log_fh> ) {
-        $json_text .= $_;
-    }
-    close($log_fh);
-    chomp $json_text;
-    my $json_ref = $coder->decode($json_text) || die "Could not read JSON";
-    if (defined $schema_filename and -e $schema_filename) {
-        chomp $schema_filename;
-        my $jv = JSON::Validator->new;
-	my $schema_fh = new IO::Uncompress::UnXz $schema_filename, Transparent => 1 || die "Could not open file " . $schema_filename;
-        my $json_schema_text;
-        while ( <$schema_fh> ) {
-            $json_schema_text .= $_;
-        }
-        close($schema_fh);
-        chomp $json_schema_text;
-        $jv->schema($json_schema_text);
-        my @errors = $jv->validate($json_ref);
-        if (scalar @errors >  0) {
-            printf "Validaton errors for file %s with schema %s:\n", $filename, $schema_filename;
-            print Dumper \@errors;
-            exit 1;
-        }
-    }
-    return $json_ref;
 }
 
 sub export_metric {
