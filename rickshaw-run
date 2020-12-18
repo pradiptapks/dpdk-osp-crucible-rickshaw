@@ -951,6 +951,7 @@ foreach my $cs_type (keys %clients_servers) {
 }
 
 # Build the client and server bench-cmd files
+# Each benchmark has to define the commands used in their rickshaw.json
 foreach my $cs_type (keys %clients_servers) {
     foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
         my @cmd_type_files = ("start");
@@ -959,6 +960,9 @@ foreach my $cs_type (keys %clients_servers) {
         }
         if ($cs_type eq "client") {
             push(@cmd_type_files, "runtime");
+        }
+        if ($cs_type eq "client") {
+            push(@cmd_type_files, "infra");
         }
         my $cs_id = $$cs_ref{'id'};
         my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
@@ -991,7 +995,10 @@ foreach my $cs_type (keys %clients_servers) {
                     }
                     printf FH "%d-%d %s\n", $test_iter, $test_samp, $cmd;
                 } else {
-                    die "[ERROR]Could not find " . $cmd_type . " in bench_config\n";
+                    # infra command is optional
+                    if ($cmd_type ne "infra") {
+                        die "[ERROR]Could not find " . $cmd_type . " in bench_config\n";
+                    }
                 }
             }
             close FH;
@@ -1131,9 +1138,8 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
         my @syncs;
         my @stop_syncs;
         for my $start_stop (qw(start stop)) {
-        #for my $sync_point (qw(server-start endpoint-start client-start client-stop endpoint-stop server-stop)) {
             if ($start_stop eq "start") {
-                @syncs = (qw(server endpoint client));
+                @syncs = (qw(infra server endpoint client));
             } else {
                 @syncs = @stop_syncs;
             }

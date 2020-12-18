@@ -247,8 +247,8 @@ function launch_osruntime() {
         if [ ! -z "$container_mount" ]; then
             echo "Container mount: $container_mount"
             echo "Adding host directories to container mount"
-            #for fs in dev proc sys lib/modules usr/src boot; do
-            for fs in dev proc sys; do
+            #for fs in dev proc sys; do
+            for fs in proc dev dev/hugepages proc sys lib/modules usr/src boot; do
                 echo "Adding $fs"
                 do_ssh $user@$host mkdir -p $container_mount/$fs
                 do_ssh $user@$host mount --verbose --options bind /$fs $container_mount/$fs
