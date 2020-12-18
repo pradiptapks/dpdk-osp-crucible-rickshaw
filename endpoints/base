@@ -331,7 +331,7 @@ function process_bench_roadblocks() {
             for start_stop in "start" "stop"; do
                 #for sync in server-start endpoint-start client-start client-stop endpoint-stop server-stop; do
                 if [ "$start_stop" == "start" ]; then
-                    syncs="server endpoint client"
+                    syncs="infra server endpoint client"
                 else
                     syncs="$stop_syncs"
                 fi

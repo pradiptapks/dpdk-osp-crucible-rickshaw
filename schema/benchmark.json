@@ -69,6 +69,10 @@
           "type": "string",
           "pattern": "^.+$"
         },
+        "infra": {
+          "type": "string",
+          "pattern": "^.+$"
+        },
         "start": {
           "type": "string",
           "pattern": "^.+$"
