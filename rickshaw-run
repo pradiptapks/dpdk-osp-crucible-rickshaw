@@ -757,8 +757,7 @@ printf " and server(s)" if exists $bench_config{'server'};
 printf "\n";
 
 if ($use_roadblock) {
-    $endpoint_roadblock_opt = " --roadblock-server=" . $hostname .
-                              " --roadblock-id=" . $run{'run-id'} .
+    $endpoint_roadblock_opt = " --roadblock-id=" . $run{'run-id'} .
                               " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
                               "/workshop.json ";

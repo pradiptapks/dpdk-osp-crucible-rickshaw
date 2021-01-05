@@ -197,6 +197,7 @@ function process_remotehost_opts() {
                 ;;
             host)
                 host=$val
+                controller_ipaddr=`get_controller_ip $host`
                 ;;
             user)
                 user=$val
@@ -271,7 +272,7 @@ function launch_osruntime() {
     count=1
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         this_cs_log_file="$this_cs_label.txt"
-        base_cmd="/usr/local/bin/bootstrap --rickshaw-host=$hostname"
+        base_cmd="/usr/local/bin/bootstrap --rickshaw-host=$controller_ipaddr"
         base_cmd+=" --endpoint-run-dir=$endpoint_run_dir --cs-label=$this_cs_label $cs_rb_opts"
         base_cmd+=" --base-run-dir=$base_run_dir"
         if [ $count -gt 1 ]; then

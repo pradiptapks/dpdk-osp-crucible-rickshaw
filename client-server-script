@@ -43,13 +43,14 @@ function do_roadblock() {
     local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd=""
     local role="follower"
-    cmd="$cmd $roadblock_bin --role=follower --redis-server=$roadblock_server"
+    ping -c 4 $rickshaw_host || exit_error "Could not ping controller"
+    cmd="$cmd $roadblock_bin --role=follower --redis-server=$rickshaw_host"
     cmd="$cmd --leader-id=$leader --timeout=$timeout --redis-password=$roadblock_passwd"
-    #cmd="$cmd --uuid=$roadblock_id:$label --follower-id=$cs_label --message-log=$msgs_file $extra"
     cmd="$cmd --follower-id=$cs_label --message-log=$msgs_file $extra"
     local uuid="$roadblock_id:$label"
     printf "\n\n"
     echo "Starting roadblock [`date`]"
+    echo "server: $rickshaw_host"
     echo "role: $role"
     echo "uuid (without attempt ID embedded): $uuid"
     echo "timeout: $timeout"
@@ -184,11 +185,6 @@ while true; do
             endpoint_run_dir="$1"
             shift;
             ;;
-        --roadblock-server)
-            shift;
-            roadblock_server="$1"
-            shift;
-            ;;
         --roadblock-passwd)
             shift;
             roadblock_passwd="$1"
@@ -253,10 +249,6 @@ fi
 
 roadblock_bin="/usr/local/bin/roadblock.py"
 use_roadblock=1
-if [ -z "$roadblock_server" ]; then
-    echo "Cannot use roadblock for synchronizaton because a server was not provided"
-    use_roadblock=0
-fi
 if [ -z "$roadblock_id" ]; then
     echo "Cannot use roadblock for synchronizaton because an ID was not provided"
     use_roadblock=0
