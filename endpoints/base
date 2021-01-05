@@ -6,7 +6,8 @@
 # Shared init and functions for endpoints
 
 echo "#params: $@"
-hostname=`hostname`
+host="" # the host the endpoint works with
+controller_ipaddr=""
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
@@ -66,12 +67,6 @@ function process_opts() {
             --image)
                 shift;
                 image="$1"
-                shift;
-                ;;
-            --roadblock-server)
-                shift;
-                rb_server="$1"
-                cs_rb_opts="$cs_rb_opts --roadblock-server=$rb_server"
                 shift;
                 ;;
             --roadblock-passwd)
@@ -155,7 +150,7 @@ function init_common_dirs() {
 }
 
 function base_req_check() {
-    if [ -z "$rb_server" -o -z "$rb_passwd" -o -z "$rb_id" ]; then
+    if [ -z "$rb_passwd" -o -z "$rb_id" ]; then
         echo "Not using roadblock to synchronize since some or all options were missing"
         use_rb=0
         cs_rb_opts=""
@@ -220,7 +215,7 @@ function do_roadblock() {
     echo "timeout: $timeout"
     local msgs_file="$roadblock_msgs_dir/$label.json"
     local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server $rb_server --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_file"
+    cmd+=" --redis-server localhost --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_file"
     if [ ! -z "$message" ]; then
         cmd+=" --user-message $message"
     fi
@@ -457,4 +452,15 @@ function process_final_roadblocks() {
     for label in endpoint-finish endpoint-really-finish; do
         do_roadblock "$label" "follower" $default_timeout
     done
+}
+
+function get_controller_ip() {
+    local host=$1; shift
+    local ip=`host $host | awk -F"address " '{print $2}'`
+    # TODO: confirm is valid ipv4 addr
+
+    # Now that we have the remote IP, figure out what IP this remote
+    # host will need to use to contact the controller
+    local controller_ipaddr=`ip route get $ip | head -1 | awk -F"src " '{print $2}' | awk '{print $1}'`
+    echo $controller_ipaddr
 }
