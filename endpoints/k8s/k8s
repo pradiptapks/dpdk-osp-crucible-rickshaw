@@ -449,6 +449,12 @@ function build_pod_spec() {
     else
         if [ ! -z "$securityContext" ]; then
             echo -e ",$securityContext" >>$json
+        else
+            echo "        ,\"securityContext\": {" >>$json
+            echo "            \"capabilities\": {" >>$json
+            echo "                \"add\": [ \"NET_ADMIN\", \"NET_RAW\" ]" >>$json
+            echo "            }" >>$json
+            echo "        }" >>$json
         fi
         if [ ! -z "$resources" ]; then
             echo -e ",$resources" >>$json
