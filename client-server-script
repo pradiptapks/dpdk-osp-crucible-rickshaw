@@ -157,7 +157,7 @@ version=20200509
 echo "version: $version"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts="${longopts},roadblock-passwd:,roadblock-id:,disable-tools:"
+longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,endpoint:,osruntime:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $@\n\n"
@@ -165,6 +165,16 @@ fi
 eval set -- "$opts";
 while true; do
     case "$1" in
+        --osruntime)
+            shift;
+            osruntime="$1"
+            shift;
+            ;;
+        --endpoint)
+            shift;
+            endpoint="$1"
+            shift;
+            ;;
         --rickshaw-host)
             shift;
             rickshaw_host="$1"
