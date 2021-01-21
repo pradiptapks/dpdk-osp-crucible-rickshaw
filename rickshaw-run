@@ -300,39 +300,20 @@ sub build_container_image {
                         'userenvs' => [
                             {
                                 'name' => 'default',
-                                'requirements' => [ 'bootstrap', 'jq_src' ]
+                                'requirements' => [ 'bootstrap' ]
                             }
                         ],
                         'requirements' => [
                             {
-                                #'name' => 'endpoint-run',
                                 'name' => 'bootstrap',
                                 'type' => 'files',
                                 'files_info' => {
                                     'files' => [
                                         {
-                                            #'src' => $rickshaw_project_dir . "/client-server-script",
                                             'src' => $rickshaw_project_dir . "/bootstrap",
                                             'dst' => '/usr/local/bin'
                                         }
                                     ]
-                                }
-                            },
-                            {
-                                'name' => 'jq_src',
-                                'type' => 'source',
-                                'source_info' => {
-                                    'url' => 'https://github.com/stedolan/jq/releases/download/jq-1.5/jq-1.5.tar.gz',
-                                    'filename' => 'jq-1.5.tar.gz',
-                                    'commands' => {
-                                        'unpack' => 'tar -xzf jq-1.5.tar.gz',
-                                        'get_dir' => 'tar -tzf jq-1.5.tar.gz | head -n 1',
-                                        'commands' => [
-                                            './configure',
-                                            'make',
-                                            'make install'
-                                        ]
-                                    }
                                 }
                             }
                         ] 
@@ -356,7 +337,7 @@ sub build_container_image {
         put_json_file($cs_conf_file, \%cs_conf);
 
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
-            " --skip-update=true " .
+            # " --skip-update=true " .
             " --config " . $cs_conf_file .
             " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
             " --requirements " . $run{'bench-dir'} . "/workshop.json" .

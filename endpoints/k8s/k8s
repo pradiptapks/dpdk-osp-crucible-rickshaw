@@ -343,6 +343,13 @@ function process_k8s_opts() {
                     exit_error "Could not find resources file '$val'"
                 fi
                 ;;
+            annotations)
+                if [ ! -z "$val" -a -e "$val" ]; then
+                    annotations=`cat $val`
+                else
+                    exit_error "Could not find resources file '$val'"
+                fi
+                ;;
             *)
                 if echo $arg | grep -q -- "="; then
                     echo "You can't use a \"=\" for assignment in endpoint options"
@@ -366,6 +373,9 @@ function build_pod_spec() {
     echo "  \"kind\": \"Pod\"," >>$json
     echo "  \"metadata\": {" >>$json
     echo "    \"name\": \"$pod_prefix-$name\"" >>$json
+    if [ "$type" == "cs" -a ! -z "$annotations" ]; then
+        echo -e "    ,$annotations" >>$json
+    fi
     echo "  }," >>$json
     echo "  \"spec\": {" >>$json
     echo "    \"restartPolicy\": \"Never\"," >>$json
@@ -415,10 +425,14 @@ function build_pod_spec() {
     echo "            \"name\": \"endpoint_run_dir\"," >>$json
     echo "            \"value\": \"/endpoint-run\"" >>$json
     echo "          }," >>$json
-    #echo "          {" >>$json
-    #echo "            \"name\": \"roadblock_server\"," >>$json
-    #echo "            \"value\": \"$rb_server\"" >>$json
-    #echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"endpoint\"," >>$json
+    echo "            \"value\": \"k8s\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
+    echo "            \"name\": \"osruntime\"," >>$json
+    echo "            \"value\": \"pod\"" >>$json
+    echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"roadblock_passwd\"," >>$json
     echo "            \"value\": \"flubber\"" >>$json
@@ -441,6 +455,12 @@ function build_pod_spec() {
         echo '            "name": "hostfs-run"' >>$json
         echo '          }' >>$json
         echo "        ]" >>$json
+    else
+        echo '       ,"volumeMounts": [' >>$json
+        echo '          { "mountPath": "/dev/hugepages",' >>$json
+        echo '            "name": "hugepage"' >>$json
+        echo '          }' >>$json
+        echo "        ]" >>$json
     fi
     if [ "$type" == "worker" -o "$type" == "master" ]; then
         echo "        ,\"securityContext\": {" >>$json
@@ -449,12 +469,13 @@ function build_pod_spec() {
     else
         if [ ! -z "$securityContext" ]; then
             echo -e ",$securityContext" >>$json
-        else
-            echo "        ,\"securityContext\": {" >>$json
-            echo "            \"capabilities\": {" >>$json
-            echo "                \"add\": [ \"NET_ADMIN\", \"NET_RAW\" ]" >>$json
-            echo "            }" >>$json
-            echo "        }" >>$json
+        #else
+            #echo "        ,\"securityContext\": {" >>$json
+            #echo "            \"privileged\": true," >>$json
+            #echo "            \"capabilities\": {" >>$json
+            #echo "                \"add\": [ \"IPC_LOCK\", \"SYS_ADMIN\", \"NET_ADMIN\", \"NET_RAW\" ]" >>$json
+            #echo "            }" >>$json
+            #echo "        }" >>$json
         fi
         if [ ! -z "$resources" ]; then
             echo -e ",$resources" >>$json
@@ -468,6 +489,14 @@ function build_pod_spec() {
         echo '            "hostPath": {' >>$json
         echo '              "path": "/var/run",' >>$json
         echo '              "type": "Directory"' >>$json
+        echo '            }' >>$json
+        echo '          }' >>$json
+        echo '        ]' >>$json
+    else
+        echo '       ,"volumes": [' >>$json
+        echo '          { "name": "hugepage",' >>$json
+        echo '            "emptyDir": {' >>$json
+        echo '              "medium": "HugePages"' >>$json
         echo '            }' >>$json
         echo '          }' >>$json
         echo '        ]' >>$json

@@ -119,9 +119,14 @@ function launch_osruntime() {
     # For each client and server launch the actual script which will run it.
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         this_cs_log_file="$client_server_logs_dir/$this_cs_label.txt"
-        base_cmd="$bootstrap_script --rickshaw-host=localhost"
-        base_cmd="$base_cmd --endpoint-run-dir=$endpoint_run_dir --cs-label=$this_cs_label $cs_rb_opts"
-        base_cmd="$base_cmd --base-run-dir=$base_run_dir"
+        base_cmd="$bootstrap_script"
+        base_cmd+=" --rickshaw-host=localhost"
+        base_cmd+=" --endpoint-run-dir=$endpoint_run_dir"
+        base_cmd+=" --cs-label=$this_cs_label"
+        base_cmd+=" $cs_rb_opts"
+        base_cmd+=" --base-run-dir=$base_run_dir"
+        base_cmd+=" --endpoint=remotehost"
+        base_cmd+=" --osruntime=$osruntime"
         if [ "$osruntime" == "builtin" ]; then
             cmd="$base_cmd"
             if [ -e "$bootstrap_script" ]; then
