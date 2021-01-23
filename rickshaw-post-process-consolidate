@@ -57,6 +57,12 @@ sub dedup_metric {
     my $first_begin;
     my $last_end;
     return (-1, -1) if ($num_samples == 0);
+    if (scalar @{ $$metric_ref{'data'} } == 1) {
+        # There is only one sample, so no need to consoldate
+        $$metric_ref{'data'}[0]{'duration'} = int $$metric_ref{'data'}[0]{'end'} -
+                                                    $$metric_ref{'data'}[0]{'begin'} + 1;
+        return ( int $$metric_ref{'data'}[0]{'begin'}, int $$metric_ref{'data'}[0]{'end'} );
+    }
     if (! defined $$metric_ref{'data'}[1]{'end'}) {
         print "[ERROR]could not find second sample for metric\n";
         print Dumper $$metric_ref{'desc'};

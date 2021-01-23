@@ -91,11 +91,16 @@
                                   "type": "string",
                                   "pattern": "^.*$"
                                 },
+                                "value-format": {
+                                  "type": "string",
+                                  "pattern": "^.*$"
+                                },
                                 "class": {
                                   "type": "string",
                                   "enum": [
                                     "throughput",
-                                    "count"
+                                    "count",
+                                    "pass/fail"
                                   ]
                                 }
                               },
@@ -108,6 +113,12 @@
                               "additionalProperties": false
                             },
                             "names": {
+                              "type": "object",
+                              "propertyNames": {
+                                "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
+                              }
+                            },
+                            "values": {
                               "type": "object",
                               "propertyNames": {
                                 "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
@@ -133,7 +144,9 @@
                                 },
                                 "required": [
                                   "value",
-                                  "end"
+                                  "begin",
+                                  "end",
+                                  "duration"
                                 ],
                                 "additionalProperties": false
                               },
