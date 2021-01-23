@@ -53,7 +53,12 @@ sub export_metric {
     my %metr_desc_doc = %$base_doc_ref;
     $metr_desc_doc{'metric_desc'} = $$metr_ref{'desc'};
     $metr_desc_doc{'metric_desc'}{'id'} = Data::UUID->new->create_str();
-    $metr_desc_doc{'metric_desc'}{'names'} = $$metr_ref{'names'};
+    if ( exists $$metr_ref{'names'} ) {
+        $metr_desc_doc{'metric_desc'}{'names'} = $$metr_ref{'names'};
+    }
+    if ( exists $$metr_ref{'values'} ) {
+        $metr_desc_doc{'metric_desc'}{'values'} = $$metr_ref{'values'};
+    }
     my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
     http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
     my $count = 0;
