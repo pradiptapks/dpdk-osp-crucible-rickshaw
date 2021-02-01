@@ -31,7 +31,7 @@ function exit_error() {
 
 function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
-    local longopts="$longopts,roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:"
+    local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         printf -- "\tUnrecognized option specified\n\n"
@@ -81,6 +81,12 @@ function process_opts() {
                 cs_rb_opts="$cs_rb_opts --roadblock-id=$rb_id"
                 shift;
                 ;;
+            --max-sample-failures)
+                shift;
+                max_sample_failures="$1"
+                # echo "# Setting max_sample_failures to $max_sample_failures"
+                shift;
+                ;;
             --)
                 shift;
                 break;
@@ -93,6 +99,12 @@ function process_opts() {
         esac
     done
 }
+if [ -z "$max_sample_failures" ]; then
+    max_sample_failures=3
+    if [ "do_validate" == "0" ]; then
+        echo "[WARNING] --max-sample-failures was not used, so setting to default of $max_sample_failures"
+    fi
+fi
 
 function addto_clients_servers() {
     local arg="$1"; shift
@@ -291,7 +303,6 @@ function process_bench_roadblocks() {
     local timeout=$default_timeout
     local quit=0
     abort_run_on_iter_fail=0
-    max_sample_failures=5
     while read -u 9 line; do
         iter_samp=`echo $line | awk '{print $1}'`
         iter=`echo $iter_samp | awk -F- '{print $1}'`

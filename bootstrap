@@ -72,7 +72,7 @@ echo "bootstrap params:"
 echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:"
+longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max_sample_failures:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $1\n\n"
@@ -130,6 +130,12 @@ while true; do
             export disable_tools="$1"
             shift;
             ;;
+        --max-sample-failures)
+            shift;
+            echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
+            export max_sample_failures="$1"
+            shift;
+            ;;
         --)
             shift;
             break;
@@ -141,6 +147,12 @@ while true; do
             ;;
     esac
 done
+
+if [ -z "$max_sample_failures" ]; then
+    max_sample_failures=3
+    echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
+fi
+
 export ssh_id_file="/tmp/rickshaw_id.rsa"
 if [ ! -z "$ssh_id" ]; then
    echo -e "$ssh_id" > $ssh_id_file

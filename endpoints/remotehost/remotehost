@@ -59,6 +59,11 @@ function endpoint_remotehost_test_start() {
     local this_msg_file="$msgs_dir/$test_id:endpoint-start.json"
     if [ -e $this_msg_file ]; then
         echo "Found $this_msg_file"
+        # We are looking for a specific type of message, where a server is providing a
+        # { "user-object": { "svc": { "ip: "<ipaddr>", "ports": [ ... ] } } }
+        # This is the only type of message that an endpoint processes.
+        # The message must come from a benchmark-server hosted on *this* endpoint
+        #
         # Extract the cs-label (server-n, client-y) and the ports this benchmark is using
         # server-1 30002 30003
         cat $this_msg_file | jq -r '.received[] | if .payload.message.command == "user-object" and .payload.message."user-object".svc.ports then [.payload.sender.id, .payload.message."user-object".svc.ip, .payload.message."user-object".svc.ports  ] | flatten | tostring else null end' | grep -v null | sed -e 's/"//g' -e 's/\[//' -e 's/\]//' -e 's/,/ /g' >"$endpoint_run_dir/ip-ports.txt"
@@ -85,16 +90,23 @@ function endpoint_remotehost_test_start() {
                 fi
                 let count=$count+1
             done
-            # TODO: determine if client is outside this remotehost
-            local client_outside_endpoint="true"
-            if [ "$client_outside_endpoint" == "true" ]; then
-                echo "Going to punch hole through fireall (some day...)"
+            # TODO: if this is a message from a benchmark-server that is *not* hosted
+            # by this endpoint, then nothing should be done
+            local server_outside_endpoint=1
+
+            # TODO: If the client is on this [remotehost] endpoint, opening
+            # up the firewall shold not be necessary, and the message should
+            # not be forwarded, as another endpoint (the one hosting the server)
+            # is already processing and fowarding the message.
+            local client_outside_endpoint=0
+            if [ $client_outside_endpoint -eq 1 -a $server_outside_endpoint -eq 0 ]; then
+                echo "Going to punch hole through firewall (some day...)"
+                # Now we can construct a message to be sent to the client about the IP and ports for the server
+                echo -n '{"recipient":{"type":"follower","id":"client-' >"$tx_msgs_dir/service-ip-$name.json"
+                echo $name | awk -F- '{print $2}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
+                echo -n '"},"user-object":{"svc":{"ip": "'$ip'", ' >>"$tx_msgs_dir/service-ip-$name.json"
+                echo '"ports": ['$port_list']}}}' >>"$tx_msgs_dir/service-ip-$name.json"
             fi # client is outside endpoint
-            # Now we can consruct a message to be sent to the client about the IP and ports for the server
-            echo -n '{"recipient":{"type":"follower","id":"client-' >"$tx_msgs_dir/service-ip-$name.json"
-            echo $name | awk -F- '{print $2}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
-            echo -n '"},"user-object":{"svc":{"ip": "'$ip'", ' >>"$tx_msgs_dir/service-ip-$name.json"
-            echo '"ports": ['$port_list']}}}' >>"$tx_msgs_dir/service-ip-$name.json"
         done 9< "$endpoint_run_dir/ip-ports.txt"
     else
         echo "Could not find $this_msg_file"
@@ -280,6 +292,7 @@ function launch_osruntime() {
         base_cmd+=" --base-run-dir=$base_run_dir"
         base_cmd+=" --endpoint=remotehost"
         base_cmd+=" --osruntime=$osruntime"
+        base_cmd+=" --max-sample-failures=$max_sample_failures"
         if [ $count -gt 1 ]; then
             # Only the first client/server needs to run tools
             echo "Skipping tools execution on $this_cs_label because a previous client/server is running tools on this host"

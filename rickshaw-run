@@ -37,7 +37,7 @@ $toolbox::logging::debug = 0;
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
-                 "max-sample-failures" => 5);
+                 "max-sample-failures" => 3);
 
 my $use_roadblock = 0;
 my $use_workshop = 0;
@@ -91,17 +91,18 @@ my $max_rb_attempts = 5;
 
 sub usage {
     print "\nusage:\n\n";
-    print "--json-validator Path to json schema validation utility\n";
-    print "--workshop-dir   Directory where workshop project exists\n";
-    print "--roadblock-dir  Directory where workshop project exists\n";
-    print "--bench-dir      Directory where benchmark helper project exists\n";
-    print "--bench-params  File with benchmark parameters to use\n";
-    print "--tools-dir     Directory where *all* tool subprojects exist (like \$CRUCIBLE_HOME/subprojects/tools)\n";
-    print "--tool-params   File with tool parameters to use\n";
-    print "--num-samples    The number of sample exeuctions to run for each benchmark iteration\n";
-    print "--test-order     's' = run all samples of an iteration first\n";
-    print "                 'i' = run all iterations of a sample first\n";
-    print "                 'r' = run a sample from a random iteration one at a time (ie. chaos mode)\n\n";
+    print "--json-validator        Path to json schema validation utility\n";
+    print "--workshop-dir          Directory where workshop project exists\n";
+    print "--roadblock-dir         Directory where workshop project exists\n";
+    print "--bench-dir             Directory where benchmark helper project exists\n";
+    print "--bench-params          File with benchmark parameters to use\n";
+    print "--tools-dir             Directory where *all* tool subprojects exist (like \$CRUCIBLE_HOME/subprojects/tools)\n";
+    print "--tool-params           File with tool parameters to use\n";
+    print "--num-samples           The number of sample exeuctions to run for each benchmark iteration\n";
+    print "--max-sample-failures   The total number of benchmark sample executions that are tolerated\n";
+    print "--test-order            's' = run all samples of an iteration first\n";
+    print "                        'i' = run all iterations of a sample first\n";
+    print "                        'r' = run a sample from a random iteration one at a time (ie. chaos mode)\n\n";
 }
 
 sub roadblock_leader {
@@ -494,7 +495,7 @@ while (scalar @ARGV > 0) {
         #$json_validator = $val;
     } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
              $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
-             $arg =~ /^test-order$|^tool-group$|^num-samples$|^name$/ or
+             $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$/ or
              $arg =~ /^reg-(auth|repo)$/ or
              $arg =~ /^email$|^desc$/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
@@ -1055,6 +1056,7 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
                   " --endpoint-label=" . $label .
                   " --run-id=" . $run{'run-id'} .
                   " --base-run-dir=" . $run{'base-run-dir'} .
+                  " --max-sample-failures=" . $run{'max-sample-failures'} .
                   $endpoint_image_opt .
                   $endpoint_roadblock_opt .
                   " >" . $this_endpoint_run_dir . "/endpoint-stdout.txt" .
