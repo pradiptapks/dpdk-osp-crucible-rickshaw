@@ -15,7 +15,7 @@ rb_exit_abort=4
 rb_exit_nonet=5
 default_timeout=240
 client_server_script_timeout=720
-runtime_padding=120
+runtime_padding=180
 
 function exit_error() {
     local message=$1; shift
@@ -157,7 +157,7 @@ version=20200509
 echo "version: $version"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,endpoint:,osruntime:"
+longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,endpoint:,osruntime:,max_sample_failures:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $@\n\n"
@@ -210,6 +210,12 @@ while true; do
             disable_tools="$1"
             shift;
             ;;
+        --max-sample-failures)
+            shift;
+            echo "Setting max_sample_failures to $max_sample_failures"
+            max_sample_failures="$1"
+            shift;
+            ;;
         --)
             shift;
             break;
@@ -221,6 +227,10 @@ while true; do
             ;;
     esac
 done
+if [ -z "$max_sample_failures" ]; then
+    max_sample_failures=3
+    echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
+fi
 
 if [ -z "$endpoint_run_dir" ]; then
     exit_error "The endpoint run directory (--endpoint-run-dir) was not defined"
@@ -434,7 +444,6 @@ abort_opt=""
 # Run the actual tests by processing the commands array
 if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
     abort_run_on_iter_fail=0
-    max_sample_failures=5
     timeout=$default_timeout
     len=${#bench_start_cmds[@]}
     quit=0
