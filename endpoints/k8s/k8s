@@ -508,7 +508,8 @@ function build_pod_spec() {
         echo '            "name": "hostfs-run"' >>$json
         echo '          }' >>$json
         echo "        ]" >>$json
-    elif [ "$hugepage" == "1" ]; then
+    fi
+    if [ "$type" == "cs" -a "$hugepage" == "1" ]; then
         echo '       ,"volumeMounts": [' >>$json
         echo '          { "mountPath": "/dev/hugepages",' >>$json
         echo '            "name": "hugepage"' >>$json
@@ -545,7 +546,8 @@ function build_pod_spec() {
         echo '            }' >>$json
         echo '          }' >>$json
         echo '        ]' >>$json
-    elif [ "$hugepage" == "1" ]; then
+    fi
+    if [ "$type" == "cs" -a "$hugepage" == "1" ]; then
         echo '       ,"volumes": [' >>$json
         echo '          { "name": "hugepage",' >>$json
         echo '            "emptyDir": {' >>$json

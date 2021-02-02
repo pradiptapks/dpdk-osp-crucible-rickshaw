@@ -84,7 +84,6 @@ function process_opts() {
             --max-sample-failures)
                 shift;
                 max_sample_failures="$1"
-                # echo "# Setting max_sample_failures to $max_sample_failures"
                 shift;
                 ;;
             --)
