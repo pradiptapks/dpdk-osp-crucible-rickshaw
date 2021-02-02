@@ -132,7 +132,6 @@ while true; do
             ;;
         --max-sample-failures)
             shift;
-            echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
             export max_sample_failures="$1"
             shift;
             ;;

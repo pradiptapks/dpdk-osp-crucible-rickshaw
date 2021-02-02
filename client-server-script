@@ -212,7 +212,6 @@ while true; do
             ;;
         --max-sample-failures)
             shift;
-            echo "Setting max_sample_failures to $max_sample_failures"
             max_sample_failures="$1"
             shift;
             ;;
@@ -508,11 +507,6 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                     label="${iter}-${samp}-${this_attempt_num}:$this_sync"
                     msgs_file="$roadblock_msgs_dir/$label.json"
                     this_timeout=$default_timeout
-                    # An opportunity for the client to do some work before the server starts
-                    if [ ! -z "$infra_cmd" -a "$this_sync" == "infra-start" -a "$abort_opt" == "" ]; then
-                        echo "going to run this command for client infra: $infra_cmd"
-                        $infra_cmd
-                    fi
                     # Conditional below restricts to first client because we assume the runtime is the same for all clients
                     if [ ! -z "$runtime_cmd" -a "$this_sync" == "client-start" -a "$cs_id" == "1" -a "$abort_opt" == "" ]; then
                         user_message_opt=""
@@ -627,10 +621,15 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                         fi
                     fi
                     # These combinations don't run a command:
+                    #  sync=infra-start & cs_type=server
                     #  sync=server-start & cs_type=client
                     #  sync=client-start & cs_type=server
                     #  sync=server-stop & cs_type=client
-                    if [ "$this_sync" == "server-start" -a "$cs_type" == "server" ]; then
+                    #  sync=infra-stop & cs_type=client|server
+                    if [ "$this_sync" == "infra-start" -a "$cs_type" == "client" -a ! -z "$infra_cmd" ]; then
+                        $infra_cmd
+                        cmd_rc=$?
+                    elif [ "$this_sync" == "server-start" -a "$cs_type" == "server" ]; then
                         echo "Running $this_sync command: $start_cmd"
                         $start_cmd
                         cmd_rc=$?

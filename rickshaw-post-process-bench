@@ -202,8 +202,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     push(@pids, $pid);
                 } else {
                     my $pushd_dir = pushd($cs_id_dir);
-
-                    my $rc = system($pp_cmd . " " . $iter_params);
+                    my $rc = system("RS_CS_LABEL=" . $cs_name . "-" . $cs_id . " " . $pp_cmd . " " . $iter_params);
                     if ($rc == -1) {
                         printf "Failed to execute '%s%s'!\n", $pp_cmd, $iter_params;
                     } elsif ($rc & 127) {
