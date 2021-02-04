@@ -172,7 +172,7 @@ if (! -e $result_file) {
     $result_file = $run_dir . "/rickshaw-result.json.xz";
 }
 if (-e $result_file) {
-    printf "Opening %s\n", $result_file;
+    debug_log(sprintf "Opening %s\n", $result_file);
     my $result_ref = get_json_file($result_file, $result_schema_file);
     %result = %{ $result_ref };
     # TODO checks for minimum fileds for valid run
@@ -195,9 +195,9 @@ printf "Exporting from %s to elasticsearch documents and POSTing to localhost:92
 printf "Run ID: %s\n", $result{'run-id'};
 my $response = http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
 
-#printf("response:\n%s\n", $response);
+debug_log(sprintf("response:\n%s\n", $response));
 my $response_ref = $coder->decode($response);
-#print "response" . Dumper $response_ref;
+debug_log(sprintf "response" . Dumper $response_ref);
 if ($$response_ref{'hits'}{'total'}{'value'} > 0) {
     print "Run ID already exists, so will not POST to elasticsearch\n";
     print "Either delete existing run from ES or regenerate rickshaw-result.json\n";

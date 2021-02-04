@@ -132,7 +132,7 @@ my $iter_dir = $run_dir . "/iterations";
 # Load the existing rickshaw-run.json
 $run_file = $run_dir . "/rickshaw-run.json";
 if (-e $run_file) {
-    printf "opening %s\n", $run_file;
+    debug_log(sprintf "Opening %s\n", $run_file);
     my $run_ref = get_json_file($run_file, $run_schema_file);
     %run = %{ $run_ref };
     # TODO checks for minimum fileds for valid run
