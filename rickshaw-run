@@ -142,6 +142,7 @@ sub roadblock_leader {
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
             my $output = `$cmd`;
             $rc = $? & 127;
+            $_[0] = get_json_file($msgs_file);
             #printf "roadblock exit code: %d\n", $rc;
             # Becasue roadblock leader does not exit with right code
             if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
@@ -151,6 +152,12 @@ sub roadblock_leader {
                 printf "roadblock output BEGIN\n";
                 printf "%s", $output;
                 printf "roadblock output END\n";
+                printf "roadblock messages\n";
+                foreach my $msg (@{ $_[0]{'received'} }) {
+                    if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
+                        printf "\nError from %s:\n%s\n\n", $$msg{'payload'}{'sender'}{'id'}, $$msg{'payload'}{'message'}{'user-object'}{'error'};
+                    }
+                }
             }
             if ( my $g_output = grep(/(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
