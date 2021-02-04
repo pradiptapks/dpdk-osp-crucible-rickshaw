@@ -644,10 +644,31 @@ if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
                     fi
                     if [ $cmd_rc -gt 0 ]; then
                         echo -e "\nNon-zero exit code ($cmd_rc) from iteration $iter, sample $samp attempt $this_attempt_num"
+                        # An abort message must be sent so the other members know how to procede
+                        # Not necessary with server-stop since that is the last sync in this sample
                         if [ "$this_sync" != "server-stop" ]; then
-                            # An abort message must be sent so the other members know how to procede
-                            # Not necessary with server-stop since that is the last sync in this sample
                             abort_opt=" --abort"
+                            # Also send any messages. as we expect the benchmark scripts to send
+                            # details about why it had a non-zero exit code.
+                            pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
+                            if [ ! -z "$pending_tx_msgs" ]; then
+                                echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
+                                mkdir -p ${cs_tx_msgs_dir}-sent
+                                msgs_json_file="$iter_samp_dir/rb-msgs-$this_sync"
+                                echo "[" >"$msgs_json_file"
+                                for msg in $pending_tx_msgs; do
+                                    # TODO validate JSON schema
+                                    echo "Adding $msg to $msgs_json_file"
+                                    cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
+                                    /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
+                                    echo "," >>"$msgs_json_file"
+                                done
+                                echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$this_sync'"}}]' >>$msgs_json_file
+                                echo "full message to send:"
+                                cat "$msgs_json_file"
+                                # TODO change this to $extra_opt everywhere
+                                abort_opt+=" --user-messages=$msgs_json_file"
+                            fi
                             echo -e "\nWill not continue this sample attempt and send abort message on next roadblock\n"
                         fi
                     fi
