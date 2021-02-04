@@ -1114,7 +1114,7 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     if (! defined $sample_failures[$iter_array_idx]) {
         $sample_failures[$iter_array_idx] = 0;
     }
-    while ($sample_complete == 0 and $sample_failures[$iter_array_idx] <= $run{'max-sample-failures'}) {
+    while ($sample_complete == 0 and $sample_failures[$iter_array_idx] < $run{'max-sample-failures'}) {
         my $this_attempt_fail = 0;
         my @syncs;
         my @stop_syncs;
