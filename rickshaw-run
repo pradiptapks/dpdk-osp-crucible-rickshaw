@@ -37,7 +37,7 @@ $toolbox::logging::debug = 0;
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
-                 "max-sample-failures" => 3);
+                 "max-sample-failures" => 1);
 
 my $use_roadblock = 0;
 my $use_workshop = 0;
@@ -457,7 +457,7 @@ foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REG_AUTH RS_REG_REPO)) {
         $var =~ s/^RS_//;
         $var =~ tr/[A-Z]/[a-z]/;
         $var =~ s/_/\-/g;
-        printf "Found envornment variable: %s, assigning \"%s\" to %s\n", $e, $ENV{$e}, $var;
+        debug_log(sprintf("Found envornment variable: %s, assigning \"%s\" to %s\n", $e, $ENV{$e}, $var));
         $run{$var} = $ENV{$e};
     }
 }
@@ -615,8 +615,8 @@ for my $dirtype (qw(base-run-dir bench-dir tools-dir)) {
     }
 }
 -e $run{'base-run-dir'} || mkdir($run{'base-run-dir'});
-printf "Base run directory: [%s]\n", $run{'base-run-dir'};
-printf "Bench helper subproject directory: [%s]\n", $run{'bench-dir'};
+debug_log(sprintf("Base run directory: [%s]\n", $run{'base-run-dir'}));
+debug_log(sprintf("Bench helper subproject directory: [%s]\n", $run{'bench-dir'}));
 $config_dir = $run{'base-run-dir'} . "/config";
 mkdir($config_dir);
 $client_server_config_dir = $config_dir . "/client-server";
@@ -698,8 +698,8 @@ foreach my $endpoint (@endpoints) {
             }
         } elsif ($line =~ /(userenv)\s+(.+)$/) {
             $$endpoint{'userenv'} = $2;
-            printf "Clients/servers for endpoint %s will have userenv %s\n",
-                   $$endpoint{'label'}, $$endpoint{'userenv'};
+            debug_log(sprintf("Clients/servers for endpoint %s will have userenv %s\n",
+                   $$endpoint{'label'}, $$endpoint{'userenv'}));
             my %userenv_info = ( 'image' => '' );
             $userenvs{$$endpoint{'userenv'}} = \%userenv_info;
         } else {
@@ -1068,7 +1068,7 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
         # Endpoints should return for each client and server started:
         # - the ID of the client/server
         # - the roadblock client ID
-        printf "Going to run endpoint command:\n%s\n\n", $cmd;
+        debug_log(sprintf "Going to run endpoint command:\n%s\n\n", $cmd);
         if ($endpoint_roadblock_opt eq "") {
             # There is only one client and no synchronization, so we wait for the endpoint to finish
             debug_log(sprintf "going to run and wait for: %s\n", $cmd);
@@ -1116,7 +1116,6 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
     }
     while ($sample_complete == 0 and $sample_failures[$iter_array_idx] <= $run{'max-sample-failures'}) {
         my $this_attempt_fail = 0;
-        printf "Iteration %d sample %d (test %d of %d) attempt number %d\n", $iter_id, $samp_id, $tid+1, scalar(@tests), $this_attempt_num;
         my @syncs;
         my @stop_syncs;
         for my $start_stop (qw(start stop)) {
@@ -1140,7 +1139,9 @@ for (my $tid = 0; $tid < scalar @tests; $tid++) {
                         printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
                         $this_attempt_fail = 1;
                         $sample_failures[$iter_array_idx]++;
+                        printf "sample_failures[%d] is now: %d\n", $iter_array_idx, $sample_failures[$iter_array_idx];
                         if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
+                            printf "setting sample_complete to 1\n";
                             $sample_complete = 1;
                             printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
                                 "reached, failing this iteration\n", $run{'max-sample-failures'},
@@ -1202,7 +1203,7 @@ for my $sync (qw(endpoint-finish endpoint-really-finish)) {
 }
 
 
-print "Moving per-client/server/tool data into common iterations and tool-data directories\n";
+debug_log("Moving per-client/server/tool data into common iterations and tool-data directories\n");
 # Organize the data from the clients/servers into a common directory structure, organized by
 # iteration, then by sample, then finally by client/server.  This is needed to have
 # the benchmark's postprocessing script work.
