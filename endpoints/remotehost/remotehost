@@ -305,6 +305,11 @@ function launch_osruntime() {
             cs_cmd="nohup chroot $container_mount $base_cmd >$remote_logs_dir/$this_cs_log_file &"
             echo -e "About to run:\n$cs_cmd\n"
             do_ssh $user@$host "$cs_cmd"
+            ssh_rc=$?
+            if [ $ssh_rc -gt 0 ]; then
+                echo "running chroot failed"
+                exit 1
+            fi
         elif [ "$osruntime" == "podman" ]; then
             echo doing podman runtime
             cs_rb_env=`echo "$cs_rb_opts" | sed -e 's/ --/,/g'`
@@ -331,15 +336,18 @@ function move_remotehost_logs() {
     done
 }
 
+function endpoint_remotehost_cleanup() {
+    move_remotehost_logs
+    cleanup_osruntime
+}
+
 process_opts $@
 process_remotehost_opts $endpoint_opts
 init_common_dirs
 remotehost_req_check
 base_req_check
 launch_osruntime
-process_prebench_roadblocks
-process_bench_roadblocks remotehost
-process_postbench_roadblocks
-move_remotehost_logs
-cleanup_osruntime
-process_final_roadblocks
+# process_prebench_roadblocks
+# process_bench_roadblocks remotehost
+# process_postbench_roadblocks
+process_roadblocks k8s

@@ -14,7 +14,7 @@ PATH="/usr/local/bin:$PATH"
 function exit_error() {
     local message=$1; shift
     local code=$1; shift
-    echo -e "[ERROR]$message\n"
+    echo -e "[ERROR]bootstrap: $message\n"
     echo "Exiting"
     if [ -z "$code" ]; then
         exit 1
@@ -72,7 +72,7 @@ echo "bootstrap params:"
 echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
-longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max_sample_failures:"
+longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $1\n\n"
