@@ -89,6 +89,11 @@ my $roadblock_exit_abort = 4;
 my $roadblock_exit_nofile = 5;
 my $max_rb_attempts = 5;
 
+my @tests;
+my %clients_servers;
+my @rb_cs_ids; # unique IDs for roadblock
+my $abort_test_id;
+
 sub usage {
     print "\nusage:\n\n";
     print "--json-validator        Path to json schema validation utility\n";
@@ -176,13 +181,14 @@ sub roadblock_leader {
                 printf "roadblock output END\n";
             }
         }
-        #printf "total attempts: %d\n", $attempts;
-
-        #$date = `date`;
-        chomp $date;
-        #printf "Completed roadblock [%s]\n\n\n", $date;
-        $_[0] = get_json_file($msgs_file);
-        return $rc;
+        if ($rc == $roadblock_exit_abort or $rc == 0) {
+            $_[0] = get_json_file($msgs_file);
+            return $rc;
+        } else {
+            # These fatal errors where we can't clean up with sending roadblocks.
+            # TODO: try to signal endpoints to clean up what they can.
+            exit 1;
+        }
     } else {
         return 0;
     }
@@ -457,6 +463,95 @@ sub build_container_image {
     return $image_url;
 }
 
+sub run_tests {
+    my $quit = 0;
+    my $abort_run_on_iter_fail = 0;
+    my @sample_failures;
+    for (my $tid = 0; $tid < scalar @tests; $tid++) {
+        last if ($quit > 0);
+        my $iter_id = $tests[$tid]{'iteration-id'};
+        my $samp_id = $tests[$tid]{'sample-id'};
+        my $iter_array_idx = $iter_id - 1;
+        my $test_id = $iter_id . "-" . $samp_id;
+        my $timeout = $default_rb_timeout;
+        my $this_attempt_num = 1;
+        my $sample_complete = 0;
+        if (! defined $sample_failures[$iter_array_idx]) {
+            $sample_failures[$iter_array_idx] = 0;
+        }
+        while ($sample_complete == 0 and $sample_failures[$iter_array_idx] < $run{'max-sample-failures'}) {
+            my $this_attempt_fail = 0;
+            my @syncs;
+            my @stop_syncs;
+            for my $start_stop (qw(start stop)) {
+                if ($start_stop eq "start") {
+                    @syncs = (qw(infra server endpoint client));
+                } else {
+                    @syncs = @stop_syncs;
+                }
+                for my $sync (@syncs) {
+                    my $sync_point = $sync . "-" . $start_stop;
+                    if ($start_stop eq "start") {
+                        # Build the stop syncs as we go.  If during the start syncs we abort early,
+                        # we will only have to do a portion of stop syncs.
+                        unshift(@stop_syncs, $sync);
+                    }
+                    my $messages_ref;
+                    my $label = $test_id . "-" . $this_attempt_num . ":" . $sync_point;
+                    my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+                    if ($rc > 0) {
+                        if ($rc == $roadblock_exit_abort) {
+                            printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
+                            $this_attempt_fail = 1;
+                            $sample_failures[$iter_array_idx]++;
+                            printf "sample_failures[%d] is now: %d\n", $iter_array_idx, $sample_failures[$iter_array_idx];
+                            if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
+                                printf "setting sample_complete to 1\n";
+                                $sample_complete = 1;
+                                printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
+                                    "reached, failing this iteration\n", $run{'max-sample-failures'},
+                                    $iter_id;
+                            }
+                            if ($abort_run_on_iter_fail == 1) {
+                                $abort_test_id = $tid;
+                                $tid = scalar @tests; # Force break from outer loop
+                                        $quit = 1;
+                            }
+                            # Don't continue with remaining syncs if this is start.
+                            # Stop syncs are automatically reduced because that array is built
+                            # as progression is made with start syncs.
+                            last if ($start_stop eq "start");
+                        } else {
+                            # If a roadblock fails, this is fatal and the run cannot continue
+                            printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
+                            exit 1;
+                        }
+                    } else {
+                        if ($this_attempt_fail == 0 and $sync_point eq "server-stop") {
+                            $sample_complete = 1;
+                            printf "Sample %d completed successfully with %d failed attempts " .
+                                "(%d total sample failures for this iteration)\n",
+                                $samp_id, $this_attempt_num - 1, $sample_failures[$iter_array_idx];
+                        }
+                        $timeout = $default_rb_timeout;
+                        my %messages = %{ $messages_ref };
+                        if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
+                            for my $message (@{ $messages{'received'} }) {
+                                if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
+                                    printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                                    $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
+                                    printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            $this_attempt_num++;
+        }
+    }
+}
+
 # Apply envinronment variables
 foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REG_AUTH RS_REG_REPO)) {
     if (exists $ENV{$e}) {
@@ -667,8 +762,6 @@ if (scalar @endpoints == 0) {
 # not used, this endpoint assumes both clients and servers (for IDs 1-5) will be deployed. 
 # This ensures the format of the specific endpoint option string is completely up to that endpoint
 # and not rickshaw.
-my %clients_servers;
-my @rb_cs_ids; # unique IDs for roadblock
 my $min_id;
 my $max_id;
 printf "Confirming the endpoints will satisfy the benchmark-client ";
@@ -777,7 +870,6 @@ $run{'endpoints'} = \@endpoints;
 
 printf "Building test execution order\n";
 # Build test execution order (and the iteration/sample dirs)
-my @tests;
 if ($run{'test-order'} eq 's') {
     for (my $iid = 1; $iid <= scalar @{ $run{'iterations'} }; $iid++) {
         for (my $sid = 1; $sid <= $run{'num-samples'}; $sid++) {
@@ -1090,125 +1182,34 @@ for (my $i = 0; $i < scalar @endpoints; $i++) {
     }
 }
 
-if (roadblock_leader("endpoint-deploy", $endpoint_deploy_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
-    printf "[ERROR]roadblock failed\n";
-    exit 1;
-}
+# Work progresses in the following way: pre-test-setup, tests, post-tests-cleanup
+# The number of actions taken in post-tests-cleanup depends on how far pre-test-setup
+# progressed.  If at any point the pre-test-setup aborts, it is important to 
+# cleanup properly.  All roadblock particpants need the same conditional approach.
 
-# Cycle through the list of tests using roadblock to kick them off
-if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
-    printf "[ERROR]roadblock failed, exiting\n";
-    exit 1;
-}
-if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
-    printf "[ERROR]roadblock failed, exiting\n";
-    exit 1;
-}
-
-my $abort_test_id;
-my $quit = 0;
-my $abort_run_on_iter_fail = 0;
-my @sample_failures;
-for (my $tid = 0; $tid < scalar @tests; $tid++) {
-    last if ($quit > 0);
-    my $iter_id = $tests[$tid]{'iteration-id'};
-    my $samp_id = $tests[$tid]{'sample-id'};
-    my $iter_array_idx = $iter_id - 1;
-    my $test_id = $iter_id . "-" . $samp_id;
-    my $timeout = $default_rb_timeout;
-    my $this_attempt_num = 1;
-    my $sample_complete = 0;
-    if (! defined $sample_failures[$iter_array_idx]) {
-        $sample_failures[$iter_array_idx] = 0;
-    }
-    while ($sample_complete == 0 and $sample_failures[$iter_array_idx] < $run{'max-sample-failures'}) {
-        my $this_attempt_fail = 0;
-        my @syncs;
-        my @stop_syncs;
-        for my $start_stop (qw(start stop)) {
-            if ($start_stop eq "start") {
-                @syncs = (qw(infra server endpoint client));
-            } else {
-                @syncs = @stop_syncs;
-            }
-            for my $sync (@syncs) {
-                my $sync_point = $sync . "-" . $start_stop;
-                if ($start_stop eq "start") {
-                    # Build the stop syncs as we go.  If during the start syncs we abort early,
-                    # we will only have to do a portion of stop syncs.
-                    unshift(@stop_syncs, $sync);
+# First confirm endpoints are deployed (all osruntimes have launched client-server-script)
+if (roadblock_leader("endpoint-deploy", $endpoint_deploy_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) == 0) {
+    # Next step all client-servers through pre-test preparation
+    if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+        if (roadblock_leader("client-server-get-data", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+            if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                if (roadblock_leader("client-server-start-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                    # Now cycle through all tests
+                    printf "Running tests:\n";
+                    run_tests;
                 }
-                my $messages_ref;
-                my $label = $test_id . "-" . $this_attempt_num . ":" . $sync_point;
-                my $rc = roadblock_leader($label, $timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
-                if ($rc > 0) {
-                    if ($rc == $roadblock_exit_abort) {
-                        printf "[WARNING]iteration %d sample %d had an abort from %s\n", $iter_id, $samp_id, $sync_point;
-                        $this_attempt_fail = 1;
-                        $sample_failures[$iter_array_idx]++;
-                        printf "sample_failures[%d] is now: %d\n", $iter_array_idx, $sample_failures[$iter_array_idx];
-                        if ($sample_failures[$iter_array_idx] >= $run{'max-sample-failures'}) {
-                            printf "setting sample_complete to 1\n";
-                            $sample_complete = 1;
-                            printf "[ERROR]All A maximum of %d failures for iteration %d have been " .
-                                "reached, failing this iteration\n", $run{'max-sample-failures'},
-                                $iter_id;
-                        }
-                        if ($abort_run_on_iter_fail == 1) {
-                            $abort_test_id = $tid;
-                            $tid = scalar @tests; # Force break from outer loop
-                                    $quit = 1;
-                        }
-                        # Don't continue with remaining syncs if this is start.
-                        # Stop syncs are automatically reduced because that array is built
-                        # as progression is made with start syncs.
-                        last if ($start_stop eq "start");
-                    } else {
-                        # If a roadblock fails, this is fatal and the run cannot continue
-                        printf "[ERROR]roadblock for %s failed, exiting\n", $sync_point;
-                        exit 1;
-                    }
-                } else {
-                    if ($this_attempt_fail == 0 and $sync_point eq "server-stop") {
-                        $sample_complete = 1;
-                        printf "Sample %d completed successfully with %d failed attempts " .
-                            "(%d total sample failures for this iteration)\n",
-                            $samp_id, $this_attempt_num - 1, $sample_failures[$iter_array_idx];
-                    }
-                    $timeout = $default_rb_timeout;
-                    my %messages = %{ $messages_ref };
-                    if ( $sync_point eq "client-start" and exists $messages{'received'} ) {
-                        for my $message (@{ $messages{'received'} }) {
-                            if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
-                                printf "found new timeout value: %s\n", $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                                $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                                printf "Assigning new timeout with padding for next roadblock: %d\n", $timeout;
-                            }
-                        }
-                    }
-                }
+                # Finally step through shutdown, cleanup, and sending data back
+                roadblock_leader("client-server-stop-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+                roadblock_leader("client-server-stop-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
             }
+            roadblock_leader("client-server-send-data", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         }
-        $this_attempt_num++;
+        roadblock_leader("client-server-script-stop", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
     }
+    # Endpoints can now "un"-deploy, removing osruntimes
+    roadblock_leader("endpoint-move-data", $endpoint_move_data_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints));
 }
-for my $sync (qw(client-server-stop-tools client-server-send-data client-server-script-finish)) {
-    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) > 0) {
-        printf "[ERROR]roadblock failed, exiting\n";
-        exit 1;
-    }
-}
-if (roadblock_leader("endpoint-move-data", $endpoint_move_data_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
-    printf "[ERROR]roadblock failed, exiting\n";
-    exit 1;
-}
-for my $sync (qw(endpoint-finish endpoint-really-finish)) {
-    if (roadblock_leader($sync, $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) > 0) {
-        printf "[ERROR]roadblock failed, exiting\n";
-        exit 1;
-    }
-}
-
+roadblock_leader("endpoint-finish", $default_rb_timeout, $messages_ref, dump_endpoint_labels(\@endpoints));
 
 debug_log("Moving per-client/server/tool data into common iterations and tool-data directories\n");
 # Organize the data from the clients/servers into a common directory structure, organized by
