@@ -350,4 +350,4 @@ launch_osruntime
 # process_prebench_roadblocks
 # process_bench_roadblocks remotehost
 # process_postbench_roadblocks
-process_roadblocks k8s
+process_roadblocks remotehost
