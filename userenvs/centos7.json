@@ -1,0 +1,104 @@
+{
+  "workshop": {
+    "schema": {
+      "version": "2020.03.02"
+    }
+  },
+  "userenv": {
+    "name": "centos7",
+    "label": "CentOS 7",
+    "origin": {
+      "image": "registry.centos.org/centos/centos",
+      "tag": "7"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "yum"
+      }
+    }
+  },
+  "requirements": [
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    },
+    {
+      "name": "epel",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "epel-release"
+        ]
+      }
+    },
+    {
+      "name": "utils",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "curl",
+          "tar",
+          "cpio",
+          "xz",
+          "gzip",
+          "jq",
+          "git",
+          "cpio",
+          "findutils",
+          "hostname",
+          "iputils"
+        ]
+      }
+    },
+    {
+      "name": "core-compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "diffutils",
+          "gcc",
+          "libtool",
+          "autoconf",
+          "automake",
+          "make"
+        ]
+      }
+    },
+    {
+      "name": "extra-compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "flex",
+          "bison"
+        ]
+      }
+    },
+    {
+      "name": "iproute_src",
+      "type": "source",
+      "source_info": {
+        "url": "https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-5.9.0.tar.xz",
+        "filename": "iproute2-5.9.0.tar.xz",
+        "commands": {
+          "unpack": "tar -xJf iproute2-5.9.0.tar.xz",
+          "get_dir": "tar -tJf iproute2-5.9.0.tar.xz| head -n 1",
+          "commands": [
+            "./configure",
+            "make",
+            "make install",
+            "ldconfig",
+            "/usr/sbin/ip -V"
+          ]
+        }
+      }
+    }
+  ]
+}

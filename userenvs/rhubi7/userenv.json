@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "rhubi7",
+    "label": "Red Hat UBI 7",
+    "origin": {
+      "image": "registry.access.redhat.com/ubi7/ubi",
+      "tag": "latest"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "yum"
+      }
+    }
+  },

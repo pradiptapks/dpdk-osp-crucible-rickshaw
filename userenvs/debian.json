@@ -1,0 +1,67 @@
+{
+  "workshop": {
+    "schema": {
+      "version": "2020.03.02"
+    }
+  },
+  "userenv": {
+    "name": "debian",
+    "label": "Debian",
+    "origin": {
+      "image": "docker.io/library/debian",
+      "tag": "stable-slim"
+    },
+    "properties": {
+      "packages": {
+        "type": "pkg",
+        "manager": "apt"
+      }
+    }
+  },
+  "requirements": [
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    },
+    {
+      "name": "utils",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "curl",
+          "tar",
+          "cpio",
+          "xz-utils",
+          "gzip",
+          "jq",
+          "git",
+          "cpio",
+          "findutils",
+          "hostname",
+          "iputils-ping",
+          "iproute"
+        ]
+      }
+    },
+    {
+      "name": "compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "diffutils",
+          "gcc",
+          "libtool",
+          "autoconf",
+          "automake",
+          "make"
+        ]
+      }
+    }
+  ]
+}

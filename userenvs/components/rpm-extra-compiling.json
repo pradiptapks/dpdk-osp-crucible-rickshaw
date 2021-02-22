@@ -1,0 +1,9 @@
+    {
+      "name": "extra-compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "flex", "bison"
+        ]
+      }
+    }

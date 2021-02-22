@@ -1,0 +1,18 @@
+The json files found in this directory can be built with build.sh:
+
+./build.sh $userenv
+
+where $userenv can be any directory name other than "components".
+
+For example:
+
+./build.sh fedora32
+
+Since there is lot of commonality among these user environemts,
+parts of their json come from common files under components.
+Each user env directory requires a schema.json, a userenv.json,
+and a requirements subdirectory with files for requirements.
+Any of these files can be symlinks to shared files in the
+components subdirectory.  Instaed of hand-editing a $userenv.json,
+change or add files in the ./$userenv directory and rerun the
+build command.
