@@ -9,7 +9,7 @@
           "properties": {
             "version": {
               "type": "string",
-              "pattern": "^2020\\.03\\.18$"
+              "pattern": "^2021\\.03\\.02$"
             }
           },
           "required": [
@@ -87,9 +87,11 @@
                                   "type": "string",
                                   "pattern": "^.+$"
                                 },
-                                "name-format": {
-                                  "type": "string",
-                                  "pattern": "^.*$"
+                                "names-list": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
                                 },
                                 "value-format": {
                                   "type": "string",
@@ -107,7 +109,6 @@
                               "required": [
                                 "source",
                                 "class",
-                                "name-format",
                                 "type"
                               ],
                               "additionalProperties": false
