@@ -244,11 +244,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                 # Add the client/server info to the metric desc
                                 $$metric{'names'}{'cstype'} = $cs_name;
                                 $$metric{'names'}{'csid'} = $cs_id;
-                                if ($$metric{'desc'}{'name-format'} eq "") {
-                                    $$metric{'desc'}{'name-format'} = '%cstype%-%csid%';
-                                } else {
-                                    $$metric{'desc'}{'name-format'} = '%cstype%-%csid%-' . $$metric{'desc'}{'name-format'};
-                                }
+                                my @names_list = (keys %{ $$metric{'names'} });
+                                $$metric{'desc'}{'names-list'} = \@names_list;
                                 if (! defined $cons_period_id) {
                                     my @metrics;
                                     my %period = ('name' => $period_name, 'metrics' => \@metrics);
@@ -307,11 +304,8 @@ for my $collector (@collectors) {
                     # Add the client/server info to the metric desc
                     $$metric_ref{'names'}{'cstype'} = $collector;
                     $$metric_ref{'names'}{'csid'} = $num;
-                    if ($$metric_ref{'desc'}{'name-format'} eq "") {
-                        $$metric_ref{'desc'}{'name-format'} = '%cstype%-%csid%';
-                    } else {
-                        $$metric_ref{'desc'}{'name-format'} = '%cstype%-%csid%-' . $$metric_ref{'desc'}{'name-format'};
-                    }
+                    my @names_list = (keys %{ $$metric_ref{'names'} });
+                    $$metric_ref{'desc'}{'names-list'} = \@names_list;
                     (my $begin, my $end) = dedup_metric($metric_ref);
                     if ($begin > 0 and $end > 0) {
                         push(@{ $run{'tool-data'} }, $metric_ref);
