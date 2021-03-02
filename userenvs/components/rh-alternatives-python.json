@@ -1,0 +1,10 @@
+    {
+      "name": "post-python",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "alternatives --install /usr/bin/python3 python3 /opt/rh/rh-python36/root/usr/bin/python3 1",
+          "alternatives --install /usr/bin/pip3 pip3 /opt/rh/rh-python36/root/usr/bin/pip3 1"
+        ]
+      }
+    }

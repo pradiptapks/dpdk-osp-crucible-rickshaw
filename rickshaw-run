@@ -353,7 +353,7 @@ sub build_container_image {
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
             # " --skip-update=true " .
             " --config " . $cs_conf_file .
-            " --userenv " . $run{'workshop-dir'} . "/userenvs/" . $userenv . ".json" .
+            " --userenv " . $rickshaw_project_dir . "/userenvs/" . $userenv . ".json" .
             " --requirements " . $run{'bench-dir'} . "/workshop.json" .
             " --requirements " . $cs_req_file .
             $workshop_roadblock_opt .
@@ -363,7 +363,7 @@ sub build_container_image {
                 $$tool_entry{'tool'} . "/workshop.json ";
         }
         my @config_analysis_output = `$workshop_cmd --label config-analysis --dump-config true`;
-        my $break_line;
+        my $break_line = 0;
         for (my $i=0; $i<scalar(@config_analysis_output); $i++) {
             if ($config_analysis_output[$i] =~ /Config dump:/) {
                 $break_line = $i;

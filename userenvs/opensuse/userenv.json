@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "opensuse",
+    "label": "OpenSUSE Leap",
+    "origin": {
+      "image": "registry.opensuse.org/opensuse/leap",
+      "tag": "15"
+    },
+    "properties": {
+      "packages": {
+        "type": "pkg",
+        "manager": "zypper"
+      }
+    }
+  },

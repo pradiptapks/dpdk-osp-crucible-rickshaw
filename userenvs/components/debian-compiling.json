@@ -1,0 +1,9 @@
+    {
+      "name": "compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "flex", "bison", "gcc", "libtool", "autoconf", "automake", "make", "libnuma-dev", "libnuma1"
+        ]
+      }
+    }

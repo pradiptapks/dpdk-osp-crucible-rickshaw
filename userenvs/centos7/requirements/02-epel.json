@@ -1,0 +1,9 @@
+    {
+      "name": "epel",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "epel-release"
+        ]
+      }
+    }

@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "fedora33",
+    "label": "Fedora 33",
+    "origin": {
+      "image": "registry.fedoraproject.org/fedora",
+      "tag": "33"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },

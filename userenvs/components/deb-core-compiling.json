@@ -1,0 +1,9 @@
+    {
+      "name": "compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "diffutils", "gcc", "libtool", "autoconf", "automake", "make"
+        ]
+      }
+    }

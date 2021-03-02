@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "fedora32",
+    "label": "Fedora 32",
+    "origin": {
+      "image": "registry.fedoraproject.org/fedora",
+      "tag": "32"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },

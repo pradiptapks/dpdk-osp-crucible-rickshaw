@@ -1,0 +1,10 @@
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    }

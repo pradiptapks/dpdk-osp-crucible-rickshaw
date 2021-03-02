@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "debian",
+    "label": "Debian",
+    "origin": {
+      "image": "docker.io/library/debian",
+      "tag": "stable-slim"
+    },
+    "properties": {
+      "packages": {
+        "type": "pkg",
+        "manager": "apt"
+      }
+    }
+  },

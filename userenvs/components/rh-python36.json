@@ -1,0 +1,10 @@
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "rh-python36",
+          "rh-python36-python-pip"
+        ]
+      }
+    }

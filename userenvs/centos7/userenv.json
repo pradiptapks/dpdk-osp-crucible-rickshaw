@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "centos7",
+    "label": "CentOS 7",
+    "origin": {
+      "image": "registry.centos.org/centos/centos",
+      "tag": "7"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "yum"
+      }
+    }
+  },

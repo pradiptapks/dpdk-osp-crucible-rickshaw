@@ -1,0 +1,67 @@
+{
+  "workshop": {
+    "schema": {
+      "version": "2020.03.02"
+    }
+  },
+  "userenv": {
+    "name": "rhubi8",
+    "label": "Red Hat UBI 8",
+    "origin": {
+      "image": "registry.access.redhat.com/ubi8/ubi",
+      "tag": "latest"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "yum"
+      }
+    }
+  },
+  "requirements": [
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    },
+    {
+      "name": "utils",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "curl",
+          "tar",
+          "cpio",
+          "xz",
+          "gzip",
+          "jq",
+          "git",
+          "cpio",
+          "findutils",
+          "hostname",
+          "iputils",
+          "iproute"
+        ]
+      }
+    },
+    {
+      "name": "compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "diffutils",
+          "gcc",
+          "libtool",
+          "autoconf",
+          "automake",
+          "make"
+        ]
+      }
+    }
+  ]
+}
