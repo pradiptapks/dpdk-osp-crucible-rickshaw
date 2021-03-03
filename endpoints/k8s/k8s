@@ -59,6 +59,7 @@ annotations=""
 resources=""
 hugepage="0"
 osruntime="pod"
+runtimeClassName=""
 declare -A nodeSelector
 
 function endpoint_k8s_test_stop() {
@@ -359,6 +360,9 @@ function process_k8s_opts() {
             hostNetwork)
                 hostNetwork="$val"
                 ;;
+            runtimeClassName)
+                runtimeClassName="$val"
+                ;;
             nodeSelector)
                 # nodeSelector is per pod:
                 # option format::  nodeSelector:<pod-name>:<full-path-to-json-with-nodeSelector>
@@ -424,7 +428,11 @@ function build_pod_spec() {
     fi
     echo "  }," >>$json
     echo "  \"spec\": {" >>$json
-    if [ "$type" == "cs" -a "$osruntime" == "kata" ]; then
+    # Support override of runtimeCLassName
+    # This can be used for Perf Addon Profiles
+    if [ "$type" == "cs" -a ! -z "$runtimeClassName" ]; then
+        echo "    \"runtimeClassName\": \"$runtimeClassName\"," >>$json
+    elif [ "$type" == "cs" -a "$osruntime" == "kata" ]; then
         echo "    \"runtimeClassName\": \"kata\"," >>$json
     fi
     echo "    \"restartPolicy\": \"Never\"," >>$json
