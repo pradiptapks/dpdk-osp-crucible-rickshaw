@@ -240,12 +240,13 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                     last;
                                 }
                             }
-                            for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
+                            #for my $metric (@{ $data{'periods'}[$k]{'metrics'} }) {
+                            for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metrics'} }); $j++) {
                                 # Add the client/server info to the metric desc
-                                $$metric{'names'}{'cstype'} = $cs_name;
-                                $$metric{'names'}{'csid'} = $cs_id;
-                                my @names_list = (keys %{ $$metric{'names'} });
-                                $$metric{'desc'}{'names-list'} = \@names_list;
+                                $data{'periods'}[$k]{'metrics'}[$j]{'names'}{'cstype'} = $cs_name;
+                                $data{'periods'}[$k]{'metrics'}[$j]{'names'}{'csid'} = $cs_id;
+                                my @names_list = (keys %{ $data{'periods'}[$k]{'metrics'}[$j]{'names'} });
+                                $data{'periods'}[$k]{'metrics'}[$j]{'desc'}{'names-list'} = \@names_list;
                                 if (! defined $cons_period_id) {
                                     my @metrics;
                                     my %period = ('name' => $period_name, 'metrics' => \@metrics);
@@ -253,10 +254,13 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                     $cons_period_id = scalar @cons_periods - 1;
                                 }
                                 ($cons_periods[$cons_period_id]{'begin'},
-                                 $cons_periods[$cons_period_id]{'end'}) = dedup_metric($metric);
-                                if ($cons_periods[$cons_period_id]{'begin'} > 0 and
-                                    $cons_periods[$cons_period_id]{'end'} > 0) {
-                                    push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $metric);
+                                $cons_periods[$cons_period_id]{'end'}) = dedup_metric($data{'periods'}[$k]{'metrics'}[$j]);
+                                my $num_samples = scalar @{ $data{'periods'}[$k]{'metrics'}[$j]{'data'} };
+                                if ( !($num_samples <= 1 and $data{'periods'}[$k]{'metrics'}[$j]{'data'}[0]{'value'}  == 0 )
+                                     and $cons_periods[$cons_period_id]{'begin'} > 0
+                                     and $cons_periods[$cons_period_id]{'end'} > 0
+                                    ) {
+                                    push(@{ $cons_periods[$cons_period_id]{'metrics'} }, $data{'periods'}[$k]{'metrics'}[$j]);
                                 }
                             }
                         }
@@ -281,6 +285,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
 }
 
 # Next, any tool data found is added
+print "Waiting for consolidation of tool data into sample data to complete\n";
 my $tool_dir = $run_dir . "/tool-data";
 opendir(TOOLDIR, $tool_dir);
 my @collectors = grep(/\w+/, readdir(TOOLDIR));
@@ -300,15 +305,17 @@ for my $collector (@collectors) {
 	    }
             if (-e $metric_data_file) {
                 my $metrics_ref = get_json_file($metric_data_file);
-                for my $metric_ref (@{ $metrics_ref }) {
+                #for my $metric_ref (@{ $metrics_ref }) {
+                for (my $j = 0; $j < scalar @{ $metrics_ref }; $j++) {
                     # Add the client/server info to the metric desc
-                    $$metric_ref{'names'}{'cstype'} = $collector;
-                    $$metric_ref{'names'}{'csid'} = $num;
-                    my @names_list = (keys %{ $$metric_ref{'names'} });
-                    $$metric_ref{'desc'}{'names-list'} = \@names_list;
-                    (my $begin, my $end) = dedup_metric($metric_ref);
-                    if ($begin > 0 and $end > 0) {
-                        push(@{ $run{'tool-data'} }, $metric_ref);
+                    $$metrics_ref[$j]{'names'}{'cstype'} = $collector;
+                    $$metrics_ref[$j]{'names'}{'csid'} = $num;
+                    my @names_list = (keys %{ $$metrics_ref[$j]{'names'} });
+                    $$metrics_ref[$j]{'desc'}{'names-list'} = \@names_list;
+                    (my $begin, my $end) = dedup_metric($$metrics_ref[$j]);
+                    my $num_samples = scalar @{ $$metrics_ref[$j]{'data'} };
+                    if ( !($num_samples == 1 and $$metrics_ref[$j]{'data'}[0]{'value'} == 0) and $begin > 0 and $end > 0) {
+                        push(@{ $run{'tool-data'} }, $$metrics_ref[$j]);
                     }
                 }
             }
