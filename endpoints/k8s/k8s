@@ -60,6 +60,7 @@ resources=""
 hugepage="0"
 osruntime="pod"
 runtimeClassName=""
+cpu_partitioning=0
 declare -A nodeSelector
 
 function endpoint_k8s_test_stop() {
@@ -354,6 +355,9 @@ function process_k8s_opts() {
             hugepage)
                 hugepage=$val
                 ;;
+            cpu-partitioning)
+                cpu_partitioning=$val
+                ;;
             osruntime)
                 osruntime=$val
                 ;;
@@ -466,6 +470,12 @@ function build_pod_spec() {
     echo "        \"image\": \"$image\"," >>$json
     echo "        \"imagePullPolicy\": \"Always\"," >>$json
     echo "        \"env\": [" >>$json
+    if [ "$type" == "cs" ]; then
+	echo "          {" >>$json
+	echo "            \"name\": \"cpu_partitioning\"," >>$json
+	echo "            \"value\": \"$cpu_partitioning\"" >>$json
+	echo "          }," >>$json
+    fi
     echo "          {" >>$json
     echo "            \"name\": \"rickshaw_host\"," >>$json
     echo "            \"value\": \"$controller_ipaddr\"" >>$json

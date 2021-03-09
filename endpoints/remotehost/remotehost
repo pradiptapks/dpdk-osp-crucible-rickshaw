@@ -45,6 +45,7 @@ osruntime="chroot"
 userenv="rhubi8"
 user="root"
 ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
+cpu_partitioning=0
 
 function endpoint_remotehost_test_stop() {
     echo "Running endpoint_remotehost_test_stop"
@@ -214,6 +215,9 @@ function process_remotehost_opts() {
             user)
                 user=$val
                 ;;
+            cpu-partitioning)
+                cpu_partitioning=$val
+                ;;
             *)
                 if echo $arg | grep -q -- "="; then
                     echo "You can't use a \"=\" for assignment in endpoint options"
@@ -293,6 +297,7 @@ function launch_osruntime() {
         base_cmd+=" --endpoint=remotehost"
         base_cmd+=" --osruntime=$osruntime"
         base_cmd+=" --max-sample-failures=$max_sample_failures"
+        base_cmd+=" --cpu-partitioning=$cpu_partitioning"
         if [ $count -gt 1 ]; then
             # Only the first client/server needs to run tools
             echo "Skipping tools execution on $this_cs_label because a previous client/server is running tools on this host"
@@ -315,6 +320,7 @@ function launch_osruntime() {
             cs_rb_env=`echo "$cs_rb_opts" | sed -e 's/ --/,/g'`
             env_opts="--env rickshaw-host=localhost,endpoint-run-dir=$endpoint_run_dir"
             env_opts+=",cs-label=$this_cs_label,base-run-dir=$base_run_dir"
+            env_opts+=",cpu-partitioning=$cpu_partitioning"
             env_opts+="$cs_rb_env"
             podman run -t $env_opts $image
         fi

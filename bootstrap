@@ -73,6 +73,7 @@ echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
+longopts+=",cpu-partitioning:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $1\n\n"
@@ -80,6 +81,11 @@ fi
 eval set -- "$opts";
 while true; do
     case "$1" in
+        --cpu-partitioning)
+            shift;
+            export cpu_partitioning="$1"
+            shift;
+            ;;
         --osruntime)
             shift;
             export osruntime="$1"

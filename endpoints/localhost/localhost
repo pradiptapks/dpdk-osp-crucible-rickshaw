@@ -28,6 +28,7 @@ fi
 endpoint_name="local"
 osruntime="chroot"
 userenv="rhubi8"
+cpu_partitioning=0
 
 function cleanup_osruntime() {
     if [ "$osruntime" == "chroot" ]; then
@@ -63,6 +64,9 @@ function process_localhost_opts() {
                 ;;
             userenv)
                 userenv=$val
+                ;;
+            cpu-partitioning)
+                cpu_partitioning=$val
                 ;;
             *)
                 if echo $arg | grep -q -- "="; then
@@ -128,6 +132,7 @@ function launch_osruntime() {
         base_cmd+=" --endpoint=remotehost"
         base_cmd+=" --osruntime=$osruntime"
         base_cmd+=" --max-sample-failures=$max_sample_failures"
+        base_cmd+=" --cpu-partitioning=$cpu_partitioning"
         if [ "$osruntime" == "builtin" ]; then
             cmd="$base_cmd"
             if [ -e "$bootstrap_script" ]; then
