@@ -168,6 +168,34 @@ if [ ! -e $ssh_id_file ]; then
 fi
 export config_dir="$base_run_dir/config"
 export client_server_config_dir="$config_dir/client-server"
+
+echo "cpu-partitioning:"
+if [ "${cpu_partitioning}" == "1" ]; then
+    echo "Enabled"
+
+    environment="process"
+    if [ "${endpoint}" == "k8s" ]; then
+	environment="container"
+    fi
+    cpu_data=$(/usr/local/bin/discover-cpu-partitioning.py --environment=${environment})
+
+    # log the data returned
+    echo -e "${cpu_data}"
+
+    housekeeping_cpus=$(echo -e "${cpu_data}" | grep housekeeping | awk '{ print $3 }')
+    export HK_CPUS=${housekeeping_cpus}
+
+    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
+    export WORKLOAD_CPUS=${isolated_cpus}
+
+    # pin myself to the housekeeping cpus so that I and my children
+    # are contained there
+    taskset --cpu-list --pid ${HK_CPUS} $$
+else
+    echo "Disabled"
+fi
+echo
+
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
 if [ -e /usr/local/bin/client-server-script ]; then
     /usr/local/bin/client-server-script

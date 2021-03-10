@@ -326,6 +326,14 @@ sub build_container_image {
                                         {
                                             'src' => $rickshaw_project_dir . "/bootstrap",
                                             'dst' => '/usr/local/bin'
+                                        },
+                                        {
+                                            'src' => $rickshaw_project_dir . "/discover-cpu-partitioning.py",
+                                            'dst' => '/usr/local/bin'
+                                        },
+                                        {
+                                            'src' => $rickshaw_project_dir . "/system_cpu_topology.py",
+                                            'dst' => '/usr/local/bin'
                                         }
                                     ]
                                 }
@@ -374,10 +382,12 @@ sub build_container_image {
         # The rest of the requirements come from the user-environment (base Linux OS),
         # the benchmark, and tools
         my @files = ($run{'workshop-dir'} . "/workshop.pl",
-                     $rickshaw_project_dir . "/bootstrap");
-	if ($use_roadblock) {
-	    push(@files, $run{'roadblock-dir'} . "/roadblock.py");
-	}
+                     $rickshaw_project_dir . "/bootstrap",
+                     $rickshaw_project_dir . "/discover-cpu-partitioning.py",
+                     $rickshaw_project_dir . "/system_cpu_topology.py");
+        if ($use_roadblock) {
+            push(@files, $run{'roadblock-dir'} . "/roadblock.py");
+        }
         foreach my $tool_entry (@tools_params) {
             push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
         }
