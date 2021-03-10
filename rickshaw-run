@@ -400,6 +400,7 @@ sub build_container_image {
         debug_log(sprintf "running: %s\n", $cmd);
         my $output = `$cmd`;
         my $push_cmd = "buildah --authfile " . $run{'reg-auth'} . " push localhost/workshop/$workshop_image $image_url";
+        my $rmi_cmd = "buildah rmi localhost/workshop/$workshop_image";
         my $rc = $?;
         if ($rc ==  0) {
             printf "Image was found at %s:\n", $image_url;
@@ -457,6 +458,14 @@ sub build_container_image {
             if ($buildah_rc > 0) {
                 printf "Pushing workshop image failed:\n%s\n", $output;
                 exit 1;
+            } else {
+                printf "Removing local container with this command:\n%s\n", $rmi_cmd;
+                $output = `$rmi_cmd`;
+                $buildah_rc = $?;
+                if ($buildah_rc > 0) {
+                    printf "Removing workshop image failed:\n%s\n", $output;
+                    exit 1;
+                }
             }
         }
     }
