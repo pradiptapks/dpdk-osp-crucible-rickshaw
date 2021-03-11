@@ -73,6 +73,7 @@ echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
+longopts+=",cpu-partitioning:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 if [ $? -ne 0 ]; then
     exit_error "\nUnrecognized option specified: $1\n\n"
@@ -80,6 +81,11 @@ fi
 eval set -- "$opts";
 while true; do
     case "$1" in
+        --cpu-partitioning)
+            shift;
+            export cpu_partitioning="$1"
+            shift;
+            ;;
         --osruntime)
             shift;
             export osruntime="$1"
@@ -162,6 +168,34 @@ if [ ! -e $ssh_id_file ]; then
 fi
 export config_dir="$base_run_dir/config"
 export client_server_config_dir="$config_dir/client-server"
+
+echo "cpu-partitioning:"
+if [ "${cpu_partitioning}" == "1" ]; then
+    echo "Enabled"
+
+    environment="process"
+    if [ "${endpoint}" == "k8s" ]; then
+	environment="container"
+    fi
+    cpu_data=$(/usr/local/bin/discover-cpu-partitioning.py --environment=${environment})
+
+    # log the data returned
+    echo -e "${cpu_data}"
+
+    housekeeping_cpus=$(echo -e "${cpu_data}" | grep housekeeping | awk '{ print $3 }')
+    export HK_CPUS=${housekeeping_cpus}
+
+    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
+    export WORKLOAD_CPUS=${isolated_cpus}
+
+    # pin myself to the housekeeping cpus so that I and my children
+    # are contained there
+    taskset --cpu-list --pid ${HK_CPUS} $$
+else
+    echo "Disabled"
+fi
+echo
+
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
 if [ -e /usr/local/bin/client-server-script ]; then
     /usr/local/bin/client-server-script
