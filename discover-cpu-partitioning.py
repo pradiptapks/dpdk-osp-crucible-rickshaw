@@ -154,8 +154,22 @@ def main():
             housekeeping_cpus = copy.deepcopy(cpus_allowed)
             isolated_cpus = copy.deepcopy(cpus_allowed)
         else:
-            housekeeping_cpus.append(cpus_allowed.pop(0))
+            hk_cpu = cpus_allowed.pop(0)
+            if t_global.args.debug:
+                debug("using first cpu '%d' from cpus_allowed as housekeeping" % (hk_cpu))
+            housekeeping_cpus.append(hk_cpu)
             isolated_cpus = copy.deepcopy(cpus_allowed)
+
+            hk_siblings = []
+            for cpu in housekeeping_cpus:
+                for sibling in system_cpus.get_thread_siblings(cpu):
+                    try:
+                        isolated_cpus.remove(sibling)
+                        housekeeping_cpus.append(sibling)
+                        if t_global.args.debug:
+                            debug("moving cpu '%d' from isolated to housekeeping because it is a thread sibling of the housekeeping cpu" % (sibling))
+                    except ValueError as e:
+                        pass
 
         output_cpu_info("housekeeping", housekeeping_cpus)
 
