@@ -598,7 +598,7 @@ function process_roadblocks() {
             if [ $# -gt 0 ]; then # If there are no followers then no leader roadblocks
                 for (( i=0; i<${#collector_stop_syncs[*]}; i++ )); do
                     this_sync="${collector_stop_syncs[$i]}"
-                    do_roadblock "collector-$this_sync" "leader" $client_server_start_timeout "" $@
+                    do_roadblock "collector-$this_sync" "leader" 86400 "" $@
                 done
             fi
 
@@ -621,7 +621,7 @@ function process_roadblocks() {
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
         if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" 86400 "" $@
+            do_roadblock "collector-$sub_label" "leader" $default_timeout "" $@
         fi
         do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done
