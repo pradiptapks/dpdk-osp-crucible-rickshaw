@@ -1,0 +1,78 @@
+{
+  "workshop": {
+    "schema": {
+      "version": "2020.03.02"
+    }
+  },
+  "userenv": {
+    "name": "stream",
+    "label": "CentOS Stream",
+    "origin": {
+      "image": "registry.centos.org/centos/centos",
+      "tag": "8"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },
+  "requirements": [
+    {
+      "name": "stream-conversion",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "dnf -v -y install centos-release-stream",
+          "dnf -v -y swap centos-{linux,stream}-repos",
+          "dnf -v -y distro-sync"
+        ]
+      }
+    },
+    {
+      "name": "python3",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python3",
+          "python3-pip"
+        ]
+      }
+    },
+    {
+      "name": "utils",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "curl",
+          "tar",
+          "cpio",
+          "xz",
+          "gzip",
+          "jq",
+          "git",
+          "cpio",
+          "findutils",
+          "hostname",
+          "iputils",
+          "iproute"
+        ]
+      }
+    },
+    {
+      "name": "core-compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "diffutils",
+          "gcc",
+          "libtool",
+          "autoconf",
+          "automake",
+          "make"
+        ]
+      }
+    }
+  ]
+}
