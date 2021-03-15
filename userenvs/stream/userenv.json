@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "stream",
+    "label": "CentOS Stream",
+    "origin": {
+      "image": "registry.centos.org/centos/centos",
+      "tag": "8"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },
