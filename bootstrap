@@ -169,6 +169,10 @@ fi
 export config_dir="$base_run_dir/config"
 export client_server_config_dir="$config_dir/client-server"
 
+if [ -z "${TOOLBOX_HOME}" ]; then
+    export TOOLBOX_HOME="/opt/toolbox"
+fi
+
 echo "cpu-partitioning:"
 if [ "${cpu_partitioning}" == "1" ]; then
     echo "Enabled"
