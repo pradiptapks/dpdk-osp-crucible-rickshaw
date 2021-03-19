@@ -3,6 +3,7 @@
 import argparse
 import copy
 import re
+import logging
 from pathlib import Path
 
 import sys
@@ -24,20 +25,19 @@ from toolbox.system_cpu_topology import *
 # define some global variables
 class t_global(object):
     args = None
-
-def debug(log_msg):
-    return(print("DEBUG: %s" % (log_msg)))
-
-def error(log_msg):
-    return(print("ERROR: %s" % (log_msg)))
+    log_debug_format =    '[%(asctime)s %(levelname)s %(module)s %(funcName)s:%(lineno)d] %(message)s'
+    log_verbose_format =  '[%(asctime)s %(levelname)s] %(message)s'
+    log_normal_format =   '%(message)s'
+    log = None
 
 def process_options():
     parser = argparse.ArgumentParser(description="Discover CPU Partitioning configuration (if any)")
 
-    parser.add_argument("--debug",
-                        dest = "debug",
-                        help = "Turn on debug output",
-                        action = "store_true")
+    parser.add_argument("--log-level",
+                        dest = "log_level",
+                        help = "Control how much logging output should be generated",
+                        default = "normal",
+                        choices = [ "normal", "verbose", "debug" ])
 
     parser.add_argument("--environment",
                         dest = "environment",
@@ -46,6 +46,15 @@ def process_options():
                         choices = [ "container", "process" ])
 
     t_global.args = parser.parse_args()
+
+    if t_global.args.log_level == 'debug':
+        logging.basicConfig(level = logging.DEBUG, format = t_global.log_debug_format, stream = sys.stdout)
+    elif t_global.args.log_level == 'verbose':
+        logging.basicConfig(level = logging.INFO, format = t_global.log_verbose_format, stream = sys.stdout)
+    elif t_global.args.log_level == 'normal':
+        logging.basicConfig(level = logging.INFO, format = t_global.log_normal_format, stream = sys.stdout)
+
+    t_global.log = logging.getLogger(__file__)
 
     return(0)
 
@@ -59,8 +68,7 @@ def get_rcu_nocbs():
     if path.exists() and path.is_file():
         with path.open() as fh:
             kernel_cli = fh.readline().rstrip()
-            if t_global.args.debug:
-                debug("get_rcu_nocbs: kernel_cli: %s" % (kernel_cli))
+            t_global.log.debug("get_rcu_nocbs: kernel_cli: %s" % (kernel_cli))
 
             # find 'rcu_nocbs=<cpu-list>' if it exists in the kernel command line
             match = re.search(r"rcu_nocbs=[0-9\-,]+", kernel_cli)
@@ -71,8 +79,7 @@ def get_rcu_nocbs():
                     # kernel command line but without a <cpu-list>
                     pass
                 else:
-                    if t_global.args.debug:
-                        debug("get_rcu_nocbs: found rcu_nocbs=%s" % (partition[2]))
+                    t_global.log.debug("get_rcu_nocbs: found rcu_nocbs=%s" % (partition[2]))
                     rcu_nocbs = system_cpu_topology.parse_cpu_list(partition[2])
     else:
         raise FileNotFoundError("get_rcu_nocbs: Could not find '%s'" % (input_file))
@@ -90,15 +97,13 @@ def get_pid_cpus_allowed(pid):
                 match = re.search(r"Cpus_allowed_list", line)
                 if match:
                     line = line.rstrip()
-                    if t_global.args.debug:
-                        debug("get_pid_cpus_allowed: found '%s'" % (line))
+                    t_global.log.debug("get_pid_cpus_allowed: found '%s'" % (line))
                     pieces = line.split()
                     if len(pieces) != 2:
                         raise AttributeError("get_pid_cpus_allowed: Could not extract cpus_allowed from '%s'" % (line))
                     else:
                         cpus_allowed = system_cpu_topology.parse_cpu_list(pieces[1])
-                        if t_global.args.debug:
-                            debug("get_pid_cpus_allowed: extracted cpus_allowed=%s" % (cpus_allowed))
+                        t_global.log.debug("get_pid_cpus_allowed: extracted cpus_allowed=%s" % (cpus_allowed))
     else:
         raise FileNotFoundError("get_pid_cpus_allowed: Requested pid '%s' probably does not exist" % (pid))
 
@@ -108,16 +113,15 @@ def get_pid_cpus_allowed(pid):
     return(cpus_allowed)
 
 def output_cpu_info(label, cpu_list):
-    if t_global.args.debug:
-        debug("%s cpus: %d" % (label, len(cpu_list)))
-        short_cpu_list = system_cpu_topology.formatted_cpu_list(cpu_list)
-        formatted_short_cpu_list = ','.join(short_cpu_list)
-        debug("%s cpus: %s" % (label, formatted_short_cpu_list))
+    t_global.log.debug("%s cpus: %d" % (label, len(cpu_list)))
+    short_cpu_list = system_cpu_topology.formatted_cpu_list(cpu_list)
+    formatted_short_cpu_list = ','.join(short_cpu_list)
+    t_global.log.debug("%s cpus: %s" % (label, formatted_short_cpu_list))
 
     cpu_list = ','.join(map(str, cpu_list))
-    print("%s cpus: %s" % (label, cpu_list))
+    t_global.log.info("%s cpus: %s" % (label, cpu_list))
 
-    print("")
+    t_global.log.info("")
 
     return(0)
 
@@ -125,7 +129,7 @@ def main():
     process_options()
 
     if t_global.args.environment == "process":
-        system_cpus = system_cpu_topology(debug = t_global.args.debug)
+        system_cpus = system_cpu_topology(log = t_global.log)
 
         all_cpus = system_cpus.get_all_cpus()
         output_cpu_info("all", all_cpus)
@@ -138,17 +142,17 @@ def main():
 
         odd_list = list(set(rcu_nocbs_cpus) - set(online_cpus))
         if len(odd_list) > 0:
-            print("this is odd, rcu_nocbs contains cpus that are not online: %s" % (odd_list))
+            t_global.log.warning("this is odd, rcu_nocbs contains cpus that are not online: %s" % (odd_list))
 
         housekeeping_cpus = list(set(online_cpus) - set(rcu_nocbs_cpus))
         if len(housekeeping_cpus) == 0:
-            print("this is odd, there are no housekeeping cpus")
+            t_global.log.warning("this is odd, there are no housekeeping cpus")
         else:
             output_cpu_info("housekeeping", housekeeping_cpus)
 
             output_cpu_info("isolated", rcu_nocbs_cpus)
     elif t_global.args.environment == "container":
-        system_cpus = system_cpu_topology(debug = t_global.args.debug)
+        system_cpus = system_cpu_topology(log = t_global.log)
 
         all_cpus = system_cpus.get_all_cpus()
         output_cpu_info("all", all_cpus)
@@ -159,19 +163,18 @@ def main():
         try:
             cpus_allowed = get_pid_cpus_allowed('self')
         except Exception as e:
-            print(e)
+            t_global.log.error(e)
             return(1)
 
         housekeeping_cpus = []
         isolated_cpus = []
         if len(cpus_allowed) == 1:
-            print("this is odd, there really needs to be more than 1 CPU in the cpus_allowed list for proper functionality")
+            t_global.log.warning("this is odd, there really needs to be more than 1 CPU in the cpus_allowed list for proper functionality")
             housekeeping_cpus = copy.deepcopy(cpus_allowed)
             isolated_cpus = copy.deepcopy(cpus_allowed)
         else:
             hk_cpu = cpus_allowed.pop(0)
-            if t_global.args.debug:
-                debug("using first cpu '%d' from cpus_allowed as housekeeping" % (hk_cpu))
+            t_global.log.debug("using first cpu '%d' from cpus_allowed as housekeeping" % (hk_cpu))
             housekeeping_cpus.append(hk_cpu)
             isolated_cpus = copy.deepcopy(cpus_allowed)
 
@@ -181,8 +184,7 @@ def main():
                     try:
                         isolated_cpus.remove(sibling)
                         housekeeping_cpus.append(sibling)
-                        if t_global.args.debug:
-                            debug("moving cpu '%d' from isolated to housekeeping because it is a thread sibling of the housekeeping cpu" % (sibling))
+                        t_global.log.debug("moving cpu '%d' from isolated to housekeeping because it is a thread sibling of the housekeeping cpu" % (sibling))
                     except ValueError as e:
                         pass
 
