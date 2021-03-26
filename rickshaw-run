@@ -110,6 +110,37 @@ sub usage {
     print "                        'r' = run a sample from a random iteration one at a time (ie. chaos mode)\n\n";
 }
 
+sub find_files {
+    my $path = shift;
+
+    my @files;
+
+    if (-d $path) {
+        opendir(DH, $path);
+        my @entries = readdir(DH);
+        close(DH);
+        foreach my $entry (@entries) {
+            my $entry_path = $path . '/' . $entry;
+
+            if (($entry =~ /^\.$/) ||
+                ($entry =~ /^\.\.$/) ||
+                ($entry =~ /^\.git$/)) {
+                next;
+            }
+
+            if (-d $entry_path) {
+                push(@files, @{find_files($entry_path)})
+            } elsif (-e $entry_path) {
+                push (@files, $entry_path);
+            }
+        }
+    } elsif (-e $path) {
+        push (@files, $path);
+    }
+
+    return(\@files);
+}
+
 sub roadblock_leader {
     if ($use_roadblock) {
         my $attempts = 0;
@@ -301,7 +332,8 @@ sub build_container_image {
                         'config' => {
                             #'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/client-server-script" ]
                             'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ],
-                            'labels' => [ 'quay.expires-after=2w' ]
+                            'labels' => [ 'quay.expires-after=2w' ],
+                            'envs' => [ 'TOOLBOX_HOME=/opt/toolbox' ]
                         }
                     );
         my $cs_req_file = $config_dir . "/cs-req.json";
@@ -314,7 +346,10 @@ sub build_container_image {
                         'userenvs' => [
                             {
                                 'name' => 'default',
-                                'requirements' => [ 'bootstrap' ]
+                                    'requirements' => [
+                                        'bootstrap',
+                                        'toolbox'
+                                    ]
                             }
                         ],
                         'requirements' => [
@@ -330,10 +365,18 @@ sub build_container_image {
                                         {
                                             'src' => $rickshaw_project_dir . "/discover-cpu-partitioning.py",
                                             'dst' => '/usr/local/bin'
-                                        },
+                                        }
+                                    ]
+                                }
+                            },
+                            {
+                                'name' => 'toolbox',
+                                'type' => 'files',
+                                'files_info' => {
+                                    'files' => [
                                         {
-                                            'src' => $rickshaw_project_dir . "/system_cpu_topology.py",
-                                            'dst' => '/usr/local/bin'
+                                            'src' => $ENV{'TOOLBOX_HOME'},
+                                            'dst' => '/opt/toolbox'
                                         }
                                     ]
                                 }
@@ -383,11 +426,11 @@ sub build_container_image {
         # the benchmark, and tools
         my @files = ($run{'workshop-dir'} . "/workshop.pl",
                      $rickshaw_project_dir . "/bootstrap",
-                     $rickshaw_project_dir . "/discover-cpu-partitioning.py",
-                     $rickshaw_project_dir . "/system_cpu_topology.py");
+                     $rickshaw_project_dir . "/discover-cpu-partitioning.py");
         if ($use_roadblock) {
             push(@files, $run{'roadblock-dir'} . "/roadblock.py");
         }
+        push(@files, @{find_files($ENV{'TOOLBOX_HOME'})});
         foreach my $tool_entry (@tools_params) {
             push(@files, $run{'tools-dir'} . "/" . $$tool_entry{'tool'} . "/workshop.json");
         }
