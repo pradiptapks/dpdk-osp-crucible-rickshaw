@@ -87,6 +87,7 @@ my $bench_params_schema_file = $rickshaw_project_dir . "/schema/bench-params.jso
 my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
 my $roadblock_exit_nofile = 5;
+my $roadblock_exit_critical = 6;
 my $max_rb_attempts = 5;
 
 my @tests;
@@ -195,18 +196,25 @@ sub roadblock_leader {
                     }
                 }
             }
-            if ( my $g_output = grep(/(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)/, $output) ) {
+	    my $g_output;
+            if ( $g_output = grep(/(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
                 #printf "%s", $output;
                 $rc = $roadblock_exit_timeout;
                 printf "roadblock output BEGIN\n";
                 printf "%s", $output;
                 printf "roadblock output END\n";
-            }
-            if ( my $g_output = grep(/(Could\snot\sopen\smessage\slog)/, $output) ) {
+            } elsif ( $g_output = grep(/(Could\snot\sopen\smessage\slog)/, $output) ) {
                 #printf "Found:\n%s\n", $g_output;
                 #printf "%s", $output;
                 $rc = $roadblock_exit_nofile;
+                printf "roadblock output BEGIN\n";
+                printf "%s", $output;
+                printf "roadblock output END\n";
+            } elsif ( $g_output = grep(/(CRITICAL)/, $output) ) {
+                #printf "Found:\n%s\n", $g_output;
+                #printf "%s", $output;
+                $rc = $roadblock_exit_critical;
                 printf "roadblock output BEGIN\n";
                 printf "%s", $output;
                 printf "roadblock output END\n";
