@@ -91,7 +91,7 @@ function do_roadblock() {
             elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)'; then
                 rc=$rb_exit_timeout
                 #rb_exit_msg="Roadblock error: $output"
-            elif echo $output | grep -q -p -- '(CRITICAL)'; then
+            elif echo $output | grep -q -P -- '(CRITICAL)'; then
                 rc=$rb_exit_critical
                 #rb_exit_msg="Roadblock error: $output"
             fi
