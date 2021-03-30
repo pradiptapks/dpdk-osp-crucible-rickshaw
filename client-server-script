@@ -747,7 +747,7 @@ if [ $abort -eq 0 -a $? -eq 0 ]; then
             if [ $abort -eq 0 -a $? -eq 0 ]; then # start-tests rb passed
                 run_tests
             fi
-            do_roadblock $sync_prefix-stop-tests $leader $default_timeout
+            do_roadblock $sync_prefix-stop-tests $leader 86400
             do_roadblock $sync_prefix-stop-tools $leader $default_timeout
             stop_tools
         fi
