@@ -11,6 +11,7 @@ controller_ipaddr=""
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
+rb_exit_critical=6
 default_timeout=240
 max_rb_attempts=5
 endpoint_deploy_timeout=360
@@ -275,7 +276,7 @@ function do_roadblock() {
         output=`$cmd --uuid $attempts:$uuid 2>&1`
         rc=$?
         echo "roadblock output BEGIN"
-        printf "%s" "$output"
+        printf "%s\n" "$output"
         echo "roadblock output END"
         echo "roadblock exit code: $rc"
 
@@ -283,8 +284,10 @@ function do_roadblock() {
             rc=$rb_exit_nonet
         elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
             rc=$rb_exit_abort
-        elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+        elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)'; then
             rc=$rb_exit_timeout
+        elif echo $output | grep -q -P -- '(CRITICAL)'; then
+            rc=$rc_exit_critical
         fi
     done
     echo "total attempts: $attempts"

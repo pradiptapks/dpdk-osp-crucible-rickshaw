@@ -13,6 +13,7 @@ max_rb_attempts=5
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
+rb_exit_critical=6
 default_timeout=240
 client_server_script_timeout=720
 runtime_padding=180
@@ -78,7 +79,7 @@ function do_roadblock() {
             local output=`$cmd --uuid=$attempts:$uuid 2>&1`
             rc=$?
             echo "roadblock output BEGIN"
-            printf "%s" "$output"
+            printf "%s\n" "$output"
             echo "roadblock output END"
             echo "roadblock exit code: $rc"
             if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
@@ -87,8 +88,11 @@ function do_roadblock() {
             elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
                 rc=$rb_exit_abort
                 #rb_exit_msg="Roadblock error: $output"
-            elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|ERROR:\sRoadblock\sfailed\swith\stimeout)'; then
+            elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)'; then
                 rc=$rb_exit_timeout
+                #rb_exit_msg="Roadblock error: $output"
+            elif echo $output | grep -q -P -- '(CRITICAL)'; then
+                rc=$rb_exit_critical
                 #rb_exit_msg="Roadblock error: $output"
             fi
             #if [ $rc -gt 0 ]; then
