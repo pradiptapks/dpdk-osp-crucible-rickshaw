@@ -91,23 +91,31 @@ function endpoint_remotehost_test_start() {
                 fi
                 let count=$count+1
             done
-            # TODO: if this is a message from a benchmark-server that is *not* hosted
-            # by this endpoint, then nothing should be done
-            local server_outside_endpoint=1
 
-            # TODO: If the client is on this [remotehost] endpoint, opening
-            # up the firewall shold not be necessary, and the message should
-            # not be forwarded, as another endpoint (the one hosting the server)
-            # is already processing and fowarding the message.
-            local client_outside_endpoint=0
+            local server_outside_endpoint=1
+            echo "servers from this endpoint: ${servers[@]}"
+            if echo ${servers[@]} | grep -q $name; then
+                echo "This server, $name, is running from this endpoint"
+                server_outside_endpoint=0
+            fi
+
+            local client_outside_endpoint=1
+            matching_client=`echo $name | sed -e s/server/client/`
+            if echo ${clients[@]} | grep -q $matching_client; then
+                echo "Matching client, $matching_client, is running from this endpoint"
+                client_outside_endpoint=0
+            fi
+
             if [ $client_outside_endpoint -eq 1 -a $server_outside_endpoint -eq 0 ]; then
                 echo "Going to punch hole through firewall (some day...)"
+                # TODO: actually punch hole through firewall (also undo on endpoint_remotehost_test_stop)
                 # Now we can construct a message to be sent to the client about the IP and ports for the server
+                echo "Creating a message to send to the client ($matching_client) with IP and port info"
                 echo -n '{"recipient":{"type":"follower","id":"client-' >"$tx_msgs_dir/service-ip-$name.json"
                 echo $name | awk -F- '{print $2}' | tr -d "\n" >>"$tx_msgs_dir/service-ip-$name.json"
                 echo -n '"},"user-object":{"svc":{"ip": "'$ip'", ' >>"$tx_msgs_dir/service-ip-$name.json"
                 echo '"ports": ['$port_list']}}}' >>"$tx_msgs_dir/service-ip-$name.json"
-            fi # client is outside endpoint
+            fi
         done 9< "$endpoint_run_dir/ip-ports.txt"
     else
         echo "Could not find $this_msg_file"
