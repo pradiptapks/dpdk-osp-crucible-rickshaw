@@ -9,7 +9,7 @@
           "properties": {
             "version": {
               "type": "string",
-              "pattern": "^2021\\.03\\.02$"
+              "pattern": "^2021\\.04\\.12$"
             }
           },
           "required": [
@@ -38,82 +38,10 @@
             "type": "string",
             "pattern": "^.+$"
           },
-          "metrics": {
+          "metric-files": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "desc": {
-                  "type": "object",
-                  "properties": {
-                    "source": {
-                      "type": "string",
-                      "pattern": "^.+$"
-                    },
-                    "type": {
-                      "type": "string",
-                      "pattern": "^.+$"
-                    },
-                    "value-format": {
-                      "type": "string",
-                      "pattern": "^.*$"
-                    },
-                    "class": {
-                      "type": "string",
-                      "enum": [
-                        "throughput",
-                        "count",
-                        "pass/fail"
-                      ]
-                    }
-                  },
-                  "required": [
-                    "source",
-                    "class",
-                    "type"
-                  ],
-                  "additionalProperties": false
-                },
-                "names": {
-                  "type": "object",
-                  "propertyNames": {
-                     "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
-                   }
-                },
-                "values": {
-                  "type": "object",
-                  "propertyNames": {
-                     "pattern": "^[A-Za-z_-][A-Za-z0-9_\\-]*$"
-                   }
-                },
-                "data": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "value": {
-                        "type": "number"
-                      },
-                      "end": {
-                        "type": "number"
-                      },
-                      "begin": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "value",
-                      "end"
-                    ],
-                    "additionalProperties": false
-                  },
-                  "additionalItem": false
-                }
-              },
-              "required": [
-                "desc",
-                "data"
-              ],
+              "type": "string",
               "additionalProperties": false
             },
             "additionalItems": false
@@ -121,7 +49,7 @@
         },
         "required": [
           "name",
-          "metrics"
+          "metric-files"
         ],
         "additionalProperties": false
       },
