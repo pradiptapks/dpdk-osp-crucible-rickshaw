@@ -1,0 +1,469 @@
+#!/usr/bin/perl
+# -*- mode: perl; indent-tabs-mode: t; perl-indent-level: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=perl
+#
+# Author: Andrew Theurer
+#
+# Rickshaw will run a benhcmark for you.  Please see README.md for instructions.
+
+use strict;
+use warnings;
+use Cwd;
+use Data::UUID;
+use File::pushd;
+use File::Basename;
+use File::Temp qw(tempdir);
+use File::Copy;
+use File::Path qw(make_path);
+use JSON::XS;
+use JSON::Validator;
+use Data::Dumper;
+use REST::Client;
+
+BEGIN {
+    if (!(exists $ENV{'TOOLBOX_HOME'} && -d "$ENV{'TOOLBOX_HOME'}/perl")) {
+        print "This script requires libraries that are provided by the toolbox project.\n";
+        print "Toolbox can be acquired from https://github.com/perftool-incubator/toolbox and\n";
+        print "then use 'export TOOLBOX_HOME=/path/to/toolbox' so that it can be located.\n";
+        exit 1;
+    }
+}
+use lib "$ENV{'TOOLBOX_HOME'}/perl";
+use toolbox::json;
+use toolbox::logging;
+
+$toolbox::logging::debug = 0;
+
+my %result;
+my $base_run_dir;
+my %cdm = ( 'ver' => 'v5dev' );
+my $coder = JSON::XS->new->canonical;
+my $result_schema_file;
+my $bench_metric_schema_file;
+
+sub usage {
+    print "\nusage:\n\n";
+    print "--base-run-dir <dir>  (this is a result-file in json that rickshaw-post-process generates)\n";
+}
+
+sub index_metrics {
+    my $metr_file = shift; # filename without .json or .csv
+    my $cstype = shift;
+    my $csid = shift;
+    my $base_doc_ref = shift; # metric_desc doc gets populated with this, usually a run doc or period doc
+    my $primary_metric = shift; # optional, for reporting earliest-begin and latest-end from all
+                                # metrics processed with type matching $primary_metric
+                                #
+    my $earliest_begin;
+    my $latest_end;
+    my $coder = JSON::XS->new->canonical;
+    # Copy data from 'parent' doc so querying directly for metric_desc with
+    # run data is possible
+    my $metr_json_file = $metr_file . ".json";
+    my $metr_csv_file = $metr_file . ".csv";
+    if (! -e $metr_json_file) {
+        $metr_json_file .= ".xz";
+    }
+    if (! -e $metr_json_file) {
+        printf "Could not find %s, exiting\n", $metr_json_file;
+        exit 1;
+    }
+    if (! -e $metr_csv_file) {
+        $metr_csv_file .= ".xz";
+    }
+    if (! -e $metr_csv_file) {
+        printf "Could not find %s, exiting\n", $metr_csv_file;
+        exit 1;
+    }
+    my $metr_ref = get_json_file($metr_json_file);
+    my %uuid;
+    my %type;
+    for my $this_metr ( @$metr_ref ) {
+        my $idx = $$this_metr{'idx'};
+        $uuid{$idx} = Data::UUID->new->create_str();
+        my %metr_desc_doc = %$base_doc_ref;
+        if (defined $$this_metr{'desc'} and defined $$this_metr{'desc'}{'class'} and
+            defined $$this_metr{'desc'}{'source'} and defined $$this_metr{'desc'}{'type'}) {
+            $metr_desc_doc{'metric_desc'} = $$this_metr{'desc'};
+        } else {
+            printf "ERROR: A metric must have source, class, and type defined\n";
+            exit 1;
+        }
+        $type{$idx} = $$this_metr{'desc'}{'type'};
+        $metr_desc_doc{'metric_desc'}{'id'} = $uuid{$idx};
+        if ( exists $$this_metr{'names'} ) {
+            $metr_desc_doc{'metric_desc'}{'names'} = $$this_metr{'names'};
+        }
+        if ( exists $$this_metr{'values'} ) {
+            $metr_desc_doc{'metric_desc'}{'values'} = $$this_metr{'values'};
+        }
+        $metr_desc_doc{'metric_desc'}{'names'}{'cstype'} = $cstype;
+        $metr_desc_doc{'metric_desc'}{'names'}{'csid'} = $csid;
+        my @names_list = sort(keys(%{ $metr_desc_doc{'metric_desc'}{'names'} }));
+        $metr_desc_doc{'metric_desc'}{'names-list'} = \@names_list;
+        my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
+        http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
+    }
+    my $count = 0;
+    my $ndjson = "";
+    my $metr_csv_fh = new IO::Uncompress::UnXz $metr_csv_file, Transparent => 1 || die "[ERROR]could not open file " . $metr_csv_file;
+    while (<$metr_csv_fh>) {
+        my %metr_data_doc = ( 'cdm' => \%cdm );
+        if (/^(\d+),(\d+),(\d+),(.*)$/) {
+            my $idx = $1;
+            my $begin = $2;
+            my $end = $3;
+            my $value = $4;
+            my %data = ( 'begin' => $begin, 'end' => $end, 'value' => $value, 'duration' => $end - $begin + 1 );
+            my %desc = ( 'id' => $uuid{$1} );
+            $metr_data_doc{'metric_desc'} = \%desc;
+            $metr_data_doc{'metric_data'} = \%data;
+            my $metr_data_doc_json = $coder->encode(\%metr_data_doc);
+            $ndjson .= sprintf "%s\n", '{ "index": {} }';
+            $ndjson .= sprintf "%s\n", $metr_data_doc_json;
+            $count++;
+            if ($count >= 1000) {
+                http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
+                $ndjson = "";
+                $count = 0;
+            }
+            if (defined $primary_metric) {
+                if ($type{$idx} eq $primary_metric) {
+                    if (not defined $earliest_begin or $earliest_begin > $metr_data_doc{'metric_data'}{'begin'}) {
+                        $earliest_begin = $metr_data_doc{'metric_data'}{'begin'};
+                    }
+                    if (not defined $latest_end or $latest_end < $metr_data_doc{'metric_data'}{'end'}) {
+                        $latest_end = $metr_data_doc{'metric_data'}{'end'};
+                    }
+                }
+            }
+        }
+    }
+    if ($count > 0) {
+        http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
+    }
+    close $metr_csv_fh;
+    if (defined $primary_metric) {
+        return ($earliest_begin, $latest_end);
+    }
+}
+
+sub http_request {
+    my $method = shift;
+    my $host = shift;
+    my $req = shift;
+    my $body = shift;
+    my $client = REST::Client->new();
+    $client->setHost($host);
+    my %req_header = ("Content-Type" => "application/json");
+    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
+    $client->request($method, $req, $body, \%req_header);
+    my $response = $client->responseContent();
+    debug_log(sprintf "Response:\n%s\n\n", $response);
+    return $response;
+}
+
+sub http_ndjson_request {
+    my $method = shift;
+    my $host = shift;
+    my $req = shift;
+    my $body = shift;
+    my $client = REST::Client->new();
+    $client->setHost($host);
+    my %req_header = ("Content-Type" => "application/x-ndjson");
+    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
+    $client->request($method, $req, $body, \%req_header);
+    my $response = $client->responseContent();
+    #debug_log($response);
+    return $response;
+}
+
+# Process the cmdline params
+while (scalar @ARGV > 0) {
+    my $p = shift @ARGV;
+    debug_log(sprintf "processing \@ARGV, param: [%s]\n", $p);
+    my $arg;
+    my $val;
+
+    if ( $p =~ /^\-\-(\S+)/ ) {
+        $arg = $1;
+        if ( $arg =~ /^(\S+)=(.*)/ ) { # '--arg=val'
+            $arg = $1;
+            $val = $2;
+        } else { # '--arg val'
+            $val = shift @ARGV;
+        }
+    } else {
+        print "[ERROR]malformed cmdline parameter: %s\n";
+        usage;
+        exit 1;
+    }
+    debug_log(sprintf "processing \@ARGV, arg is: [%s], val is: [%s]\n", $arg, $val);
+    if ($arg =~ /^help$/) {
+        usage;
+        exit 0;
+    } elsif ($arg =~ /^base-run-dir$/) {
+        debug_log(sprintf "argument: [%s]\n", $arg);
+        $base_run_dir = $val;
+    } else {
+        printf "[ERROR]argument not valid: [%s]\n", $arg;
+        usage;
+        exit 1;
+    }
+}
+
+# Ensure the run-dir hase absolute path
+{
+    my $dir = pushd($base_run_dir);
+    debug_log(sprintf "pushd to [%s]\n", $base_run_dir);
+    my $cwd = getcwd();
+    debug_log(sprintf "cwd [%s]\n", $cwd);
+    $base_run_dir = $cwd;
+}
+my $rickshaw_project_dir; # We need the project dir to load schemas to validate json
+{
+    # Get the absolute path of the rickshaw project directory
+    my $dir = pushd(dirname($0));
+    $rickshaw_project_dir = getcwd();
+}
+my $config_dir = $base_run_dir . "/config";
+my $run_dir = $base_run_dir . "/run";
+my $iter_dir = $run_dir . "/iterations";
+my $tool_dir = $run_dir . "/tool-data";
+$result_schema_file = $rickshaw_project_dir . "/schema/run.json";
+$bench_metric_schema_file = $rickshaw_project_dir . "/schema/bench-metric.json";
+
+my $result_file = $run_dir . "/rickshaw-run.json";
+if (! -e $result_file) {
+    $result_file = $run_dir . "/rickshaw-run.json.xz";
+}
+if (-e $result_file) {
+    debug_log(sprintf "Opening %s\n", $result_file);
+    my $result_ref = get_json_file($result_file, $result_schema_file);
+    %result = %{ $result_ref };
+    # TODO checks for minimum fileds for valid run
+} else {
+    printf "Could not find rickshaw-run.json in %s, exiting\n", $run_dir;
+    exit 1;
+}
+
+
+# Start by creating what will be the CDM run document for elasticsearch
+my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
+            'host' => 'localhost', 'name' => $result{'name'}, 'email' => $result{'email'} );
+for my $field (qw(host name email desc)) {
+    if (defined $result{$field}) {
+        $run{$field} = $result{$field};
+    }
+}
+
+printf "Exporting from %s to elasticsearch documents and POSTing to localhost:9200\n", $result_file;
+printf "Run ID: %s\n", $result{'run-id'};
+my $response = http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
+
+debug_log(sprintf("response:\n%s\n", $response));
+my $response_ref = $coder->decode($response);
+debug_log(sprintf "response" . Dumper $response_ref);
+if ($$response_ref{'hits'}{'total'}{'value'} > 0) {
+    print "Run ID already exists, so will not POST to elasticsearch\n";
+    print "Either delete existing run from ES or regenerate rickshaw-result.json\n";
+    exit 1;
+}
+my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
+my $run_doc_json = $coder->encode(\%run_doc);
+my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
+http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/", $run_doc_json);
+if (-e $tool_dir) {
+    my $run_doc_ref = $coder->decode($run_doc_json);
+    opendir(TOOLDIR, $tool_dir);
+    my @collectors = grep(/\w+/, readdir(TOOLDIR));
+    for my $collector (@collectors) {
+        my $collector_dir = $tool_dir . "/" . $collector;  # $run_dir/tool-data/[client|server|worker|master]
+        opendir(COLLECTORDIR, $collector_dir);
+        my @numbers = grep (/\d+/, readdir(COLLECTORDIR));
+        for my $num (@numbers) {
+            my $cd_id = $collector . "-" . $num;
+            my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
+            opendir(NUMDIR, $num_dir);
+            my @tools = grep(/\w+/, readdir(NUMDIR));
+            for my $tool (@tools) {
+                my $tool_dir = $num_dir . "/" . $tool;
+                opendir(TOOLDIR, $tool_dir);
+                my @tool_files = grep(/metric-data-\d+\.json/, readdir(TOOLDIR));
+                for my $tool_file (@tool_files) {
+                    $tool_file =~ s/(metric-data-\d+)\.json.*/$1/;
+                    index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
+                }
+            }
+        }
+    }
+}
+if (exists $result{'tags'}) {
+    for my $tag (@{ $result{'tags'} }) {
+        # Copy data from 'parent' doc so querying directly for tags with
+        # run/iteration data is possible
+        my $tag_doc_ref = $coder->decode($run_doc_json);
+        my %tag_doc = %$tag_doc_ref;
+        $tag_doc{'tag'}{'id'} = Data::UUID->new->create_str();
+        $tag_doc{'tag'}{'name'} = $$tag{'name'};
+        $tag_doc{'tag'}{'val'} = $$tag{'val'};
+        my $tag_doc_json = $coder->encode(\%tag_doc);
+        http_request("POST", "localhost:9200", "/cdmv5dev-tag/_doc/", $tag_doc_json);
+    }
+}
+if (exists $result{'iterations'}) {
+    my $iter_num = 1;
+    for my $iter (@{ $result{'iterations'} }) {
+        my $iter_doc_ref = $coder->decode($run_doc_json);
+        my %iter_doc = %$iter_doc_ref;
+        $iter_doc{'iteration'}{'id'} = Data::UUID->new->create_str();
+        my $iter_doc_json = $coder->encode(\%iter_doc);
+        #$iter_doc{'iteration'}{'primary-metric'} = $$iter{'primary-metric'};
+        #$iter_doc{'iteration'}{'primary-period'} = $$iter{'primary-period'};
+        for my $param (@{ $$iter{'params'} }) {
+            # Copy data from 'parent' doc so querying directly for params with
+            # run/iteration data is possible
+            my $param_doc_ref = $coder->decode($iter_doc_json);
+            my %param_doc = %$param_doc_ref;
+            $param_doc{'param'}{'id'} = Data::UUID->new->create_str();
+            $param_doc{'param'}{'arg'} = $$param{'arg'};
+            $param_doc{'param'}{'val'} = $$param{'val'};
+            my $param_doc_json = $coder->encode(\%param_doc);
+            http_request("POST", "localhost:9200", "/cdmv5dev-param/_doc/", $param_doc_json);
+        }
+        my $this_iter_dir = $iter_dir . "/iteration-" . $iter_num;
+        opendir(my $iter_dh, $this_iter_dir);
+        my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
+        my $iter_array_idx = $iter_num -1;
+        my @samples;
+        my $primary_metric;
+        my $primary_period;
+        my $sample_num = 1;
+        for my $samp_dir (@samp_dirs) {
+            my $samp_status = "pass";
+            if ($samp_dir =~ /fail\d+/) {
+                $samp_status = "fail";
+            }
+            my %sample; # sample data from all clients/servers
+            $sample{'status'} = $samp_status;
+            my $samp_doc_ref = $coder->decode($iter_doc_json);
+            my %samp_doc = %$samp_doc_ref;
+            $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
+            $samp_doc{'sample'}{'num'} = $sample_num;
+            $samp_doc{'sample'}{'status'} = $sample{'status'};
+            my $samp_doc_json = $coder->encode(\%samp_doc);
+            http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
+            my @cons_periods; # periods [of the same name] from clients/servers get merged here
+            my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
+            debug_log("Working on " . $this_samp_dir . "\n");
+            opendir(my $samp_dh, $this_samp_dir);
+            my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
+            for my $cs_name (@cs_names) { 
+                my $cs_name_dir = $this_samp_dir . "/" . $cs_name;
+                opendir(my $cs_name_dh, $cs_name_dir);
+                my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
+                for my $cs_id (@cs_ids) {
+                    my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
+                    my $data_file = $cs_id_dir . "/" . "post-process-data.json";
+                    if (! -e $data_file) {
+                        $data_file = $cs_id_dir . "/" . "post-process-data.json.xz";
+                    }
+                    if (-e $data_file) {
+                        my $data_ref = get_json_file($data_file, $bench_metric_schema_file);
+                        my %data = %$data_ref;
+                        if (! defined $primary_metric and exists $data{'primary-metric'}) {
+                            $primary_metric = $data{'primary-metric'};
+                        }
+                        if (! defined $primary_period and exists $data{'primary-period'}) {
+                            $primary_period = $data{'primary-period'};
+                        }
+                        if (defined $data{'periods'}) {
+                            for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
+                                my $period_name = $data{'periods'}[$k]{'name'};
+                                my $cons_period_id;
+                                my $per_doc_ref = $coder->decode($samp_doc_json);
+                                my %per_doc = %$per_doc_ref;
+                                $per_doc{'period'}{'id'} = Data::UUID->new->create_str();
+                                $per_doc{'period'}{'name'} = $period_name;
+                                my $per_doc_json = $coder->encode(\%per_doc);
+                                #http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $per_doc_json);
+                                # Match the $cons_period_id to an existing consolidated-period if it exists
+                                for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
+                                    if ($cons_periods[$cons_id]{'name'} eq $period_name) {
+                                        $cons_period_id = $cons_id;
+                                        last;
+                                    }
+                                }
+                                # If there is no match this is the first time a period of this name
+                                # has been processed, so add it to @cons_periods.
+                                if (! defined $cons_period_id) {
+                                    my $per_doc_ref = $coder->decode($samp_doc_json);
+                                    my %period = ('id' => $per_doc{'period'}{'id'}, 'name' => $period_name, 'begin', 'end');
+                                    $$per_doc_ref{'period'} = \%period;
+                                    #push(@cons_periods, \%period);
+                                    push(@cons_periods, $per_doc_ref);
+                                    $cons_period_id = scalar @cons_periods - 1;
+                                }
+                                # When we consolidate the same period from many clients/servers, we need to find
+                                # the time period where there are samples from all clients/servers, in order to
+                                # ensure we are measuring a period with "full participation".i
+                                my $earliest_begin;
+                                my $latest_end;
+                                for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metric-files'} }); $j++) {
+                                    # Metric data is still in other file(s).  For each member in 'metric-files' array,
+                                    # there should be a 2 files with the same prefix
+                                    my $metric_file_prefix = $cs_id_dir . "/" . $data{'periods'}[$k]{'metric-files'}[$j];
+                                    my $this_begin;
+                                    my $this_end;
+                                    # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
+                                    ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, \%per_doc, $primary_metric);
+                                    # From processing all metric files, get the very-earliest-begin and very-latest-end
+                                    if (not defined $earliest_begin or $earliest_begin > $this_begin) {
+                                        $earliest_begin = $this_begin;
+                                    }
+                                    if (not defined $latest_end or $latest_end < $this_end) {
+                                        $latest_end = $this_end;
+                                    }
+                                }
+                                # Now if this client/server's earliest_begin is *later* than a defined begin for the consolidated period, 
+                                # we need to adjust the begin for the consolidated period to match this client/server's earliest_begin.
+                                # This ensures the consolidated period always has samples from every single client/server for the entire
+                                # period.
+                                if (not defined $cons_periods[$cons_period_id]{'begin'} or $cons_periods[$cons_period_id]{'begin'} < $earliest_begin) {
+                                    $cons_periods[$cons_period_id]{'period'}{'begin'} = $earliest_begin;
+                                }
+                                if (not defined $cons_periods[$cons_period_id]{'end'} or $cons_periods[$cons_period_id]{'end'} > $latest_end) {
+                                    $cons_periods[$cons_period_id]{'period'}{'end'} = $latest_end;
+                                }
+                            }
+                        }
+                    }
+                } #cs_ids
+            } #cs_names
+            $sample_num++;
+            $sample{'periods'} = \@cons_periods;
+            foreach my $per (@cons_periods) {
+                my $this_per_doc_json = $coder->encode($per);
+                http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $this_per_doc_json);
+            }
+            push(@samples, \%sample);
+        } #samp_dirs
+        $result{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
+        if (defined $primary_metric) {
+            $result{'iterations'}[$iter_array_idx]{'primary-metric'} = $primary_metric;
+        } else {
+            printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
+        }
+        if (defined $primary_period) {
+            $result{'iterations'}[$iter_array_idx]{'primary-period'} = $primary_period;
+        } else {
+            printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
+        }
+        $iter_doc{'iteration'}{'primary-metric'} = $primary_metric;
+        $iter_doc{'iteration'}{'primary-period'} = $primary_period;
+        $iter_doc_json = $coder->encode(\%iter_doc);
+        http_request("POST", "localhost:9200", "/cdmv5dev-iteration/_doc/", $iter_doc_json);
+        $iter_num++;
+    } #iterations
+} # if iterations
+print "Indexing to ES complete\n";
