@@ -213,7 +213,6 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                            printf "'%s%s' exited with non-zero value %d\n", $pp_cmd, $iter_params, $rc;
                         }
                     }
-
                     exit;
                 }
             }
