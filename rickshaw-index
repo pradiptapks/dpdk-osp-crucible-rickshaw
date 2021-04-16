@@ -377,6 +377,9 @@ if (exists $result{'iterations'}) {
                         if (! defined $primary_period and exists $data{'primary-period'}) {
                             $primary_period = $data{'primary-period'};
                         }
+                        # For any sample, every client/server has information that contributes to one
+                        # or more benchmark-sample-periods.  This data needs to be consolidated into
+                        # 1 period doc for each common period across the clients/servers.
                         if (defined $data{'periods'}) {
                             for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
                                 my $period_name = $data{'periods'}[$k]{'name'};
@@ -386,10 +389,9 @@ if (exists $result{'iterations'}) {
                                 $per_doc{'period'}{'id'} = Data::UUID->new->create_str();
                                 $per_doc{'period'}{'name'} = $period_name;
                                 my $per_doc_json = $coder->encode(\%per_doc);
-                                #http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $per_doc_json);
                                 # Match the $cons_period_id to an existing consolidated-period if it exists
                                 for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
-                                    if ($cons_periods[$cons_id]{'name'} eq $period_name) {
+                                    if (defined $cons_periods[$cons_id]{'name'} and $cons_periods[$cons_id]{'name'} eq $period_name) {
                                         $cons_period_id = $cons_id;
                                         last;
                                     }
