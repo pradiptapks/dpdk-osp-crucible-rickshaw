@@ -382,16 +382,10 @@ if (exists $result{'iterations'}) {
                         # 1 period doc for each common period across the clients/servers.
                         if (defined $data{'periods'}) {
                             for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
-                                my $period_name = $data{'periods'}[$k]{'name'};
                                 my $cons_period_id;
-                                my $per_doc_ref = $coder->decode($samp_doc_json);
-                                my %per_doc = %$per_doc_ref;
-                                $per_doc{'period'}{'id'} = Data::UUID->new->create_str();
-                                $per_doc{'period'}{'name'} = $period_name;
-                                my $per_doc_json = $coder->encode(\%per_doc);
                                 # Match the $cons_period_id to an existing consolidated-period if it exists
                                 for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
-                                    if (defined $cons_periods[$cons_id]{'name'} and $cons_periods[$cons_id]{'name'} eq $period_name) {
+                                    if (defined $cons_periods[$cons_id]{'period'}{'name'} and $cons_periods[$cons_id]{'period'}{'name'} eq $data{'periods'}[$k]{'name'}) {
                                         $cons_period_id = $cons_id;
                                         last;
                                     }
@@ -399,16 +393,23 @@ if (exists $result{'iterations'}) {
                                 # If there is no match this is the first time a period of this name
                                 # has been processed, so add it to @cons_periods.
                                 if (! defined $cons_period_id) {
+                                    # Always start the doc with the info from its "parent"
                                     my $per_doc_ref = $coder->decode($samp_doc_json);
-                                    my %period = ('id' => $per_doc{'period'}{'id'}, 'name' => $period_name, 'begin', 'end');
+                                    my %period = ('id' => Data::UUID->new->create_str(), 'name' => $data{'periods'}[$k]{'name'});
+                                    if (defined $data{'periods'}[$k]{'begin'}) {
+                                        $period{'begin'} = $data{'periods'}[$k]{'begin'};
+                                    }
+                                    if (defined $data{'periods'}[$k]{'end'}) {
+                                        $period{'end'} = $data{'periods'}[$k]{'end'};
+                                    }
                                     $$per_doc_ref{'period'} = \%period;
-                                    #push(@cons_periods, \%period);
                                     push(@cons_periods, $per_doc_ref);
                                     $cons_period_id = scalar @cons_periods - 1;
                                 }
                                 # When we consolidate the same period from many clients/servers, we need to find
                                 # the time period where there are samples from all clients/servers, in order to
-                                # ensure we are measuring a period with "full participation".i
+                                # ensure we are measuring a period with "full participation".  We can do this
+                                # while indexing the metrics.
                                 my $earliest_begin;
                                 my $latest_end;
                                 for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metric-files'} }); $j++) {
@@ -418,7 +419,7 @@ if (exists $result{'iterations'}) {
                                     my $this_begin;
                                     my $this_end;
                                     # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                    ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, \%per_doc, $primary_metric);
+                                    ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $cons_periods[$cons_period_id], $primary_metric);
                                     # From processing all metric files, get the very-earliest-begin and very-latest-end
                                     if (not defined $earliest_begin or $earliest_begin > $this_begin) {
                                         $earliest_begin = $this_begin;
