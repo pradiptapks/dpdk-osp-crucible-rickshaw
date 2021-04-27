@@ -174,7 +174,6 @@ my $pp_cmd = $bench_config{'controller'}{'post-script'};
 $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
 $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
 $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
-my @pids;
 for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
     my $iter_dh;
@@ -186,6 +185,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my $primary_metric;
     my $primary_period;
     for my $samp_dir (@samp_dirs) {
+        my @pids;
         my %sample; # sample data from all clients/servers
         my @cons_periods; # consolidated periods across clients/servers get merged here
         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
@@ -202,7 +202,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     push(@pids, $pid);
                 } else {
                     my $pushd_dir = pushd($cs_id_dir);
-                    my $rc = system("RS_CS_LABEL=" . $cs_name . "-" . $cs_id . " " . $pp_cmd . " " . $iter_params);
+                    my $full_cmd = "RS_CS_LABEL=" . $cs_name . "-" . $cs_id . " " . $pp_cmd . " " . $iter_params . ">post-process-output.txt 2>&1";
+                    my $rc = system($full_cmd);
                     if ($rc == -1) {
                         printf "Failed to execute '%s%s'!\n", $pp_cmd, $iter_params;
                     } elsif ($rc & 127) {
@@ -217,8 +218,8 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                 }
             }
         }
+        printf "Waiting for %d post-processing jobs to complete\n", scalar @pids;
+        while (wait() > -1) {}
+        print "Post-processing complete\n";
     }
 }
-printf "Waiting for %d post-processing jobs to complete\n", scalar @pids;
-while (wait() > -1) {}
-print "Post-processing complete\n";
