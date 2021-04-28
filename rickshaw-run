@@ -551,6 +551,7 @@ sub run_tests {
         }
         while ($sample_complete == 0 and $sample_failures[$iter_array_idx] < $run{'max-sample-failures'}) {
             my $this_attempt_fail = 0;
+            printf "Iteration %d sample %d (test %d of %d) attempt number %d\n", $iter_id, $samp_id, $tid+1, scalar(@tests), $this_attempt_num;
             my @syncs;
             my @stop_syncs;
             for my $start_stop (qw(start stop)) {
