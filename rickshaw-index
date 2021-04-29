@@ -284,6 +284,8 @@ if (-e $tool_dir) {
         for my $num (@numbers) {
             my $cd_id = $collector . "-" . $num;
             my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
+            printf "Indexing of tool data for %s starting\n", $cd_id;
+            my @pids;
             opendir(NUMDIR, $num_dir);
             my @tools = grep(/\w+/, readdir(NUMDIR));
             for my $tool (@tools) {
@@ -292,9 +294,17 @@ if (-e $tool_dir) {
                 my @tool_files = grep(/metric-data-\d+\.json/, readdir(TOOLDIR));
                 for my $tool_file (@tool_files) {
                     $tool_file =~ s/(metric-data-\d+)\.json.*/$1/;
-                    index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
+                    if (my $pid = fork) {
+                        push(@pids, $pid);
+                    } else {
+                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
+                        exit;
+                    }
                 }
             }
+            printf "Waiting for %d post-processing jobs to complete\n", scalar @pids;
+            while (wait() > -1) {}
+            printf "Indexing of tool data for %s complete\n", $cd_id;
         }
     }
 }
@@ -312,14 +322,13 @@ if (exists $result{'tags'}) {
     }
 }
 if (exists $result{'iterations'}) {
+    print "Indexing of benchmark data starting\n";
     my $iter_num = 1;
     for my $iter (@{ $result{'iterations'} }) {
         my $iter_doc_ref = $coder->decode($run_doc_json);
         my %iter_doc = %$iter_doc_ref;
         $iter_doc{'iteration'}{'id'} = Data::UUID->new->create_str();
         my $iter_doc_json = $coder->encode(\%iter_doc);
-        #$iter_doc{'iteration'}{'primary-metric'} = $$iter{'primary-metric'};
-        #$iter_doc{'iteration'}{'primary-period'} = $$iter{'primary-period'};
         for my $param (@{ $$iter{'params'} }) {
             # Copy data from 'parent' doc so querying directly for params with
             # run/iteration data is possible
@@ -468,5 +477,6 @@ if (exists $result{'iterations'}) {
         http_request("POST", "localhost:9200", "/cdmv5dev-iteration/_doc/", $iter_doc_json);
         $iter_num++;
     } #iterations
+    print "Indexing of benchmark data complete\n";
 } # if iterations
 print "Indexing to ES complete\n";
