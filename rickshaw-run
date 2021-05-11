@@ -411,6 +411,7 @@ sub build_container_image {
 
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
             # " --skip-update=true " .
+            " --log-level verbose " .
             " --config " . $cs_conf_file .
             " --userenv " . $rickshaw_project_dir . "/userenvs/" . $userenv . ".json" .
             " --requirements " . $run{'bench-dir'} . "/workshop.json" .
@@ -495,6 +496,12 @@ sub build_container_image {
             printf "This may take a few minutes\n";
             my @workshop_output = `$workshop_cmd`;
             my $workshop_rc = $?;
+            if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop.out")) {
+                printf WORKSHOP_LOG_FH "%s\n", join("", @workshop_output);
+                close(WORKSHOP_LOG_FH);
+            } else {
+                printf "Failed to open " . $run_dir . "/workshop.out for writing\n";
+            }
             if ($workshop_rc > 0) {
                 printf "Workshop build failed:\n";
                 printf "%s\n", join("", @workshop_output);
