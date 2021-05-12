@@ -291,9 +291,9 @@ if (-e $tool_dir) {
             for my $tool (@tools) {
                 my $tool_dir = $num_dir . "/" . $tool;
                 opendir(TOOLDIR, $tool_dir);
-                my @tool_files = grep(/metric-data-\d+\.json/, readdir(TOOLDIR));
+                my @tool_files = grep(/metric-data-\S+\.json/, readdir(TOOLDIR));
                 for my $tool_file (@tool_files) {
-                    $tool_file =~ s/(metric-data-\d+)\.json.*/$1/;
+                    $tool_file =~ s/(metric-data-\S+)\.json.*/$1/;
                     if (my $pid = fork) {
                         push(@pids, $pid);
                     } else {
