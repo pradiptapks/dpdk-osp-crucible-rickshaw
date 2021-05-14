@@ -18,6 +18,14 @@
         "val": {
           "type": "string",
           "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "client",
+            "server",
+            "all"
+          ]
         }
       },
       "required": [
