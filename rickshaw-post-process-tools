@@ -201,7 +201,7 @@ for my $collector (@collectors) {
                 $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
                 $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
                 if (-e $pp_cmd) {
-                    system($pp_cmd);
+                    system($pp_cmd . " >post-process-output.txt 2>&1");
                 }
                 exit; # Child exits after post-processing
             }
