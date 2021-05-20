@@ -124,6 +124,9 @@
             "pattern": "^.+$"
           },
           "additionalItems": false
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
