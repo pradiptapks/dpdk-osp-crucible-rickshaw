@@ -57,7 +57,7 @@ hostNetwork="0"
 hugepage="0"
 osruntime="pod"
 runtimeClassName=""
-cpu_partitioning=0
+declare -A cpuPartitioning
 declare -A nodeSelector
 declare -A securityContext
 declare -A resources
@@ -356,7 +356,17 @@ function process_k8s_opts() {
                 hugepage=$val
                 ;;
             cpu-partitioning)
-                cpu_partitioning=$val
+                # cpu-partitioning is per pod:
+                # option format::  cpu-partitioning:<pod-name>:<value>
+                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                #TODO: validate correct format of <client-server-label>
+                name=`echo $val | awk -F: '{print $1}'`
+                value=`echo $val | awk -F: '{print $2}'`
+                if [ ! -z "$name" -a ! -z "$value" ]; then
+                    cpuPartitioning[$name]=$value
+                else
+                    exit_error "Could not properly decode cpu-partitioning for '$val'"
+                fi
                 ;;
             osruntime)
                 osruntime=$val
@@ -524,7 +534,15 @@ function build_pod_spec() {
     if [ "$type" == "cs" ]; then
         echo "          {" >>$json
         echo "            \"name\": \"cpu_partitioning\"," >>$json
-        echo "            \"value\": \"$cpu_partitioning\"" >>$json
+        set +u
+        if [ ! -z "${cpuPartitioning[$name]}" ]; then
+            echo -e "            \"value\": \"${cpuPartitioning[$name]}\"" >>$json
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            echo -e "            \"value\": \"${cpuPartitioning[default]}\"" >>$json
+        else
+            echo -e "            \"value\": \"0\"" >>$json
+        fi
+        set -u
         echo "          }," >>$json
     fi
     echo "          {" >>$json
