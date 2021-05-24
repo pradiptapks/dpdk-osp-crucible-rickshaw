@@ -221,19 +221,30 @@ sub roadblock_leader {
 }
 
 sub dump_params {
+    my $default_role = 'client';
     my $params_ref = shift;
     my $cs_id = shift;
+    # fallback to client engine by default when engine arg is undefined
+    # (dump_params might be called without engine arg)
+    my $engine = shift // $default_role;
     my $params_str = "";
+
     foreach my $param (@{ $params_ref }) {
-        my $arg = $$param{'arg'}; 
+        my $arg = $$param{'arg'};
         my $val = $$param{'val'};
-        if (defined $val && length $val) {
-            if (defined $cs_id) {
-                $val =~ s/\%client-id\%/$cs_id/;
+        # fallback to client role when role is undefined in json
+        my $role = $$param{'role'} // $default_role;
+
+        # only dump when role=engine or role=all
+        if ( $role eq $engine || $role eq 'all') {
+            if (defined $val && length $val) {
+                if (defined $cs_id) {
+                    $val =~ s/\%client-id\%/$cs_id/;
+                }
+                $params_str .= " --" . $arg . "=" . $val;
+            } else {
+                $params_str .= " --" . $arg;
             }
-            $params_str .= " --" . $arg . "=" . $val;
-        } else {
-            $params_str .= " --" . $arg;
         }
     }
     $params_str =~ s/^\s//;
@@ -1135,7 +1146,7 @@ sub prepare_bench_tool_engines() {
                     if (exists $bench_config{$cs_type}{$cmd_type} and
                         $bench_config{$cs_type}{$cmd_type} ne "") {
                         my $cmd = $bench_config{$cs_type}{$cmd_type} . " " .
-                                dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id);
+                                dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id, $cs_type);
                         debug_log(sprintf "cmd: [%s]\n", $cmd);
                         # Apply a regex from the benchmark config file to the command
                         # This is used to remove things like "--clients=" because the
