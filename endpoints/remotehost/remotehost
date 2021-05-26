@@ -45,7 +45,7 @@ osruntime="chroot"
 userenv="rhubi8"
 user="root"
 ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
-cpu_partitioning=0
+declare -A cpuPartitioning
 
 function endpoint_remotehost_test_stop() {
     echo "Running endpoint_remotehost_test_stop"
@@ -198,7 +198,8 @@ function process_remotehost_opts() {
     endpoint_opts="$1"
     for this_opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
         arg=`echo $this_opt | awk -F: '{print $1}'`
-        val=`echo $this_opt | awk -F: '{print $2}'`
+        # The $val may have : in it, so don't use awk to get only the second field
+        val=`echo $this_opt | sed -e s/^$arg://`
         case "$arg" in
             client|server|clients|servers)
                 addto_clients_servers "$arg" "$val"
@@ -229,7 +230,17 @@ function process_remotehost_opts() {
                 user=$val
                 ;;
             cpu-partitioning)
-                cpu_partitioning=$val
+                # cpu-partitioning is per engine:
+                # option format:: cpu-partitioning:<engine-name>:<value>
+                # <engine-name> can be 'default' to apply to any engine that is no explicitly specified
+                #TODO: validate correct format of <client-server-label>
+                name=`echo $val | awk -F: '{ print $1 }'`
+                value=`echo $val | awk -F: '{ print $2 }'`
+                if [ ! -z "$name}" -a ! -z "$value" ]; then
+                    cpuPartitioning[$name]=$value
+                else
+                    exit_error "Could not properly decode cpu-partitioning for '$val'"
+                fi
                 ;;
             *)
                 if echo $arg | grep -q -- "="; then
@@ -310,6 +321,14 @@ function launch_osruntime() {
         base_cmd+=" --endpoint=remotehost"
         base_cmd+=" --osruntime=$osruntime"
         base_cmd+=" --max-sample-failures=$max_sample_failures"
+        set +u
+        cpu_partitioning=0
+        if [ ! -z "${cpuPartitioning[$this_cs_label]}" ]; then
+            cpu_partitioning=${cpuPartitioning[$this_cs_label]}
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            cpu_partitioning=${cpuPartitioning[default]}
+        fi
+        set -u
         base_cmd+=" --cpu-partitioning=$cpu_partitioning"
         if [ $count -gt 1 ]; then
             # Only the first client/server needs to run tools
