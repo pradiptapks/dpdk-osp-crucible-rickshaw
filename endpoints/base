@@ -145,11 +145,9 @@ function addto_clients_servers() {
 }
 
 function echo_clients_servers() {
-    #if [ ${#clients[@]} -gt 0 ]; then
     if [ $num_clients -gt 0 ]; then
         echo "client ${!clients[@]}"
     fi
-    #if [ ${#servers[@]} -gt 0 ]; then
     if [ $num_servers -gt 0 ]; then
         echo "server ${!servers[@]}"
     fi
@@ -216,6 +214,7 @@ function do_roadblock() {
     local timeout=$1; shift
     if [ $# -gt 0 ]; then
         local message="$1"; shift # A file for user-messages or "" if none
+        echo "pwd: `/bin/pwd`"
         echo "Going to send this user message file: $message"
     else
         local message=""
@@ -305,43 +304,17 @@ function process_prebench_roadblocks() {
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
-
-    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-script-start" "leader" $client_server_start_timeout "" $@
-        if [ $? -eq $rb_exit_abort ]; then
-            exit_error "Exiting due to abort from another participant"
-        fi
-    fi
-
     do_roadblock "client-server-script-start" "follower" $client_server_start_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
-    fi
-
-    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-get-data" "leader" $client_server_start_timeout "" $@
-        if [ $? -eq $rb_exit_abort ]; then
-            exit_error "Exiting due to abort from another participant"
-        fi
     fi
     do_roadblock "client-server-get-data" "follower" $client_server_start_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
-
-    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-start-tools" "leader" $default_timeout "" $@
-    fi
     do_roadblock "client-server-start-tools" "follower" $default_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
-    fi
-
-    if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-        do_roadblock "collector-start-tests" "leader" $default_timeout "" $@
-        if [ $? -eq $rb_exit_abort ]; then
-            exit_error "Exiting due to abort from another participant"
-        fi
     fi
     do_roadblock "client-server-start-tests" "follower" $default_timeout
     if [ $? -eq $rb_exit_abort ]; then
@@ -511,8 +484,19 @@ function process_bench_roadblocks() {
 
 function process_roadblocks() {
     local endpoint_type=$1; shift
+    local new_followers="$@"
+    local msg_file=""
+    if [ ! -z "$new_followers" ]; then
+        echo "pwd: `/bin/pwd`"
+        msg_file="$endpoint_run_dir/new-followers.json"
+        echo "new_followers: $new_followers"
+        echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"new-followers":[' >$msg_file
+        echo $new_followers | sed  -re 's/^\s+//' -re 's/\s+$//' -re 's/\s+/,/g' -re 's/([^,]+)/"\1"/g' >>$msg_file
+        echo ']}}]' >>$msg_file
+        echo "ls: `/bin/ls`"
+    fi
     if [ $abort -eq 0 ]; then
-        do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout
+        do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout $msg_file
         d_rc=$?
         echo "endpoint-deploy complete"
         if [ $abort -eq 0 -a $d_rc -eq 0 ]; then
@@ -531,12 +515,12 @@ function process_roadblocks() {
                 echo "this_sync: $this_sync"
                 stop_sync="`echo $this_sync | sed -e s/start/stop/ -e s/get/send/`"
                 echo "stop_sync: $stop_sync"
-                if [ $# -gt 0 ]; then # If there are no other args then there are no leader roadblocks
-                    echo "about to run do_roadblock collector-$this_sync leader $client_server_start_timeout "" $@"
-                    do_roadblock "collector-$this_sync" "leader" $client_server_start_timeout "" $@
-                    a_rb=$?
-                    echo "rb exit code: $a_rb"
-                fi
+                #if [ $# -gt 0 ]; then # If there are no other args then there are no leader roadblocks
+                    #echo "about to run do_roadblock collector-$this_sync leader $client_server_start_timeout "" $@"
+                    #do_roadblock "collector-$this_sync" "leader" $client_server_start_timeout "" $@
+                    #a_rb=$?
+                    #echo "rb exit code: $a_rb"
+                #fi
                 echo "about to run do_roadblock client-server-$this_sync follower $client_server_start_timeout"
                 do_roadblock "client-server-$this_sync" "follower" $client_server_start_timeout
                 b_rb=$?
@@ -591,20 +575,7 @@ function process_roadblocks() {
                     echo "going to signal client-server $client_abort_sync to abort"
                     do_roadblock "client-server-$client_abort_sync" "follower" "abort"
                 fi
-                if [ ! -z "$collector_abort_sync" ]; then
-                    echo "going to signal collector $collector_abort_sync to abort"
-                    do_roadblock "collector-$collector_abort_sync" "leader" "abort" "" $@
-                fi
             fi
-
-            echo "about to process collector stop syncs"
-            if [ $# -gt 0 ]; then # If there are no followers then no leader roadblocks
-                for (( i=0; i<${#collector_stop_syncs[*]}; i++ )); do
-                    this_sync="${collector_stop_syncs[$i]}"
-                    do_roadblock "collector-$this_sync" "leader" 86400 "" $@
-                done
-            fi
-
             echo "about to process client-server stop syncs"
             for (( i=0; i<${#client_stop_syncs[*]}; i++ )); do
                 this_sync="${client_stop_syncs[$i]}"
@@ -619,15 +590,6 @@ function process_roadblocks() {
         do_roadblock "endpoint-move-data" "follower" $endpoint_deploy_timeout
     fi
     do_roadblock "endpoint-finish" "follower" $endpoint_deploy_timeout
-}
-
-function process_postbench_roadblocks() {
-    for sub_label in stop-tools send-data script-finish; do
-        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" $default_timeout "" $@
-        fi
-        do_roadblock "client-server-$sub_label" "follower" $default_timeout
-    done
 }
 
 function process_final_roadblocks() {
@@ -648,9 +610,6 @@ function get_controller_ip() {
 
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
-        if [ $# -gt 0 ]; then # followers were provided, so run these endpoint-leader syncs
-            do_roadblock "collector-$sub_label" "leader" 86400 "" $@
-        fi
         do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done
 }

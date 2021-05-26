@@ -1274,7 +1274,19 @@ sub process_roadblocks() {
     # progressed.  If at any point the pre-test-setup aborts, it is important to 
     # cleanup properly.  All roadblock particpants need the same conditional approach.
     # First confirm endpoints are deployed (all osruntimes have launched client-server-script)
+    my @new_followers;
     if (roadblock_leader("endpoint-deploy", $endpoint_deploy_timeout, $messages_ref, dump_endpoint_labels(\@endpoints)) == 0) {
+        # Endpoints may introduce new followers for remaining roadblocks.  These followers are typically osruntimes which
+        # are only running tools.
+        if (defined $messages_ref) {
+            foreach my $msg (@{ $$messages_ref{'received'} })  {
+                if (exists $$msg{'payload'}{'message'}{'user-object'}{'new-followers'}) {
+                    @new_followers = @{ $$msg{'payload'}{'message'}{'user-object'}{'new-followers'} };
+                    printf "New followers\n" . Dumper(\@new_followers);
+                    @rb_cs_ids = (@rb_cs_ids, @new_followers);
+                }
+            }
+        }
         # Next step all client-servers through pre-test preparation
         if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
             if (roadblock_leader("client-server-get-data", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
