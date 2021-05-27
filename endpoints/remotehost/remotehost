@@ -218,7 +218,12 @@ function process_remotehost_opts() {
                 ;;
             host)
                 host=$val
-                controller_ipaddr=`get_controller_ip $host`
+               if [ -z "$controller_ipaddr" ]; then
+                    controller_ipaddr=`get_controller_ip $host`
+               fi
+                ;;
+            controller-ip)
+                controller_ipaddr=$val
                 ;;
             user)
                 user=$val
