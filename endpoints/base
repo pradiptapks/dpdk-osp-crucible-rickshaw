@@ -597,26 +597,10 @@ function process_final_roadblocks() {
     do_roadblock endpoint-finish "follower" $default_timeout
 }
 
-function get_controller_ip() {
-    local host=$1; shift
-    local ip=`host $host | awk -F"address " '{print $2}'`
-    # TODO: confirm is valid ipv4 addr
-
-    # Now that we have the remote IP, figure out what IP this remote
-    # host will need to use to contact the controller
-    local controller_ipaddr=`ip route get $ip | head -1 | awk -F"src " '{print $2}' | awk '{print $1}'`
-    echo $controller_ipaddr
-}
-
 function process_postbench_roadblocks() {
     for sub_label in stop-tools send-data script-finish; do
         do_roadblock "client-server-$sub_label" "follower" $default_timeout
     done
-}
-
-function process_final_roadblocks() {
-    do_roadblock endpoint-move-data "follower" $endpoint_move_data_timeout
-    do_roadblock endpoint-finish "follower" $default_timeout
 }
 
 function get_controller_ip() {
