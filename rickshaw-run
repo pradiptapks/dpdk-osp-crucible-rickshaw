@@ -431,6 +431,7 @@ sub build_container_image {
         # The rest of the requirements come from the user-environment (base Linux OS),
         # the benchmark, and tools
         my @files = ($run{'workshop-dir'} . "/workshop.pl",
+                     $run{'workshop-dir'} . "/schema.json",
                      $rickshaw_project_dir . "/bootstrap",
                      $rickshaw_project_dir . "/discover-cpu-partitioning.py");
         if ($use_roadblock) {
