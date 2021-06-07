@@ -57,6 +57,7 @@ hostNetwork="0"
 hugepage="0"
 osruntime="pod"
 runtimeClassName=""
+masters_tool_collect="1"
 declare -A cpuPartitioning
 declare -A nodeSelector
 declare -A securityContext
@@ -359,6 +360,9 @@ function process_k8s_opts() {
                 ;;
             hugepage)
                 hugepage=$val
+                ;;
+            masters-tool-collect)
+                masters_tool_collect=$val
                 ;;
             cpu-partitioning)
                 # cpu-partitioning is per pod:
@@ -840,8 +844,12 @@ function get_k8s_config() {
 }
 
 function endpoint_k8s_cleanup() {
-    get_pod_logs $worker_tool_pods $master_tool_pods $cs_pods
-    delete_pods $worker_tool_pods $master_tool_pods $cs_pods
+    new_k8s_followers="${worker_tool_pods}"
+    if [ "${masters_tool_collect}" == "1" ]; then
+	new_k8s_followers+=" ${master_tool_pods}"
+    fi
+    get_pod_logs ${new_k8s_followers} $cs_pods
+    delete_pods ${new_k8s_followers} $cs_pods
 }
 
 process_opts "$@"
@@ -864,9 +872,15 @@ verify_pods_running tool_worker_nodes $worker_tool_pods
 echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
 master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
 echo "These nodes are masters: $master_nodes"
-echo "Working on creating these master-tool pods"
-create_pods master_tool_pods master $master_nodes
-echo "These master-tool pods were created: $master_tool_pods"
-verify_pods_running tool_master_nodes $master_tool_pods
-echo "These nodes are hosting the master-tool pods: $master_nodes"
-process_roadblocks k8s $worker_tool_pods $master_tool_pods
+if [ "${masters_tool_collect}" == "1" ]; then
+    echo "Working on creating these master-tool pods"
+    create_pods master_tool_pods master $master_nodes
+    echo "These master-tool pods were created: $master_tool_pods"
+    verify_pods_running tool_master_nodes $master_tool_pods
+    echo "These nodes are hosting the master-tool pods: $master_nodes"
+fi
+new_k8s_followers="${worker_tool_pods}"
+if [ "${masters_tool_collect}" == "1" ]; then
+    new_k8s_followers+=" ${master_tool_pods}"
+fi
+process_roadblocks k8s ${new_k8s_followers}
