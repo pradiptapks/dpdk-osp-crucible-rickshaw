@@ -412,6 +412,7 @@ sub build_container_image {
             " --config " . $cs_conf_file .
             " --userenv " . $rickshaw_project_dir . "/userenvs/" . $userenv . ".json" .
             " --requirements " . $run{'bench-dir'} . "/workshop.json" .
+            " --param %bench-dir%=" . $run{'bench-dir'} .
             " --requirements " . $cs_req_file .
             $workshop_roadblock_opt .
             " 2>&1";
@@ -431,6 +432,7 @@ sub build_container_image {
         # The rest of the requirements come from the user-environment (base Linux OS),
         # the benchmark, and tools
         my @files = ($run{'workshop-dir'} . "/workshop.pl",
+                     $run{'workshop-dir'} . "/schema.json",
                      $rickshaw_project_dir . "/bootstrap",
                      $rickshaw_project_dir . "/discover-cpu-partitioning.py");
         if ($use_roadblock) {
