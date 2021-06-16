@@ -159,22 +159,21 @@ function endpoint_k8s_test_start() {
                 echo '    "spec": {' >>$svc_json
                 echo '        "ports": [' >>$svc_json
                 local count=1
-                #local port_list=""
                 for port in $ports; do
-                    if [ $count -gt 1 ]; then
-                        #port_list+=", $port"
-                        echo '            ,{' >>$svc_json
-                    else
-                        #port_list="$port"
-                        echo '            {' >>$svc_json
-                    fi
-                    echo '                "name": "port-'$port'",' >>$svc_json
-                    echo '                "port": '$port',' >>$svc_json
-                    # TODO: Support UDP
-                    echo '                "protocol": "TCP",' >>$svc_json
-                    echo '                "targetPort": '$port >>$svc_json
-                    echo '            }' >>$svc_json
-                    let count=$count+1
+                    for proto in TCP UDP; do
+                        if [ $count -gt 1 ]; then
+                            echo '            ,{' >>$svc_json
+                        else
+                            echo '            {' >>$svc_json
+                        fi
+                        lcproto=`echo $proto | tr [A-Z] [a-z]`
+                        echo '                "name": "port-'$port'-'$lcproto'",' >>$svc_json
+                        echo '                "port": '$port',' >>$svc_json
+                        echo '                "protocol": "'$proto'",' >>$svc_json
+                        echo '                "targetPort": '$port >>$svc_json
+                        echo '            }' >>$svc_json
+                        let count=$count+1
+                    done
                 done
                 echo '        ]' >>$svc_json
                 echo '    }' >>$svc_json
@@ -199,13 +198,16 @@ function endpoint_k8s_test_start() {
                 echo '        "ports": [' >>$svc_endp_json
                 local count=1
                 for port in $ports; do
-                    if [ $count -gt 1 ]; then
-                        echo '            ,{' >>$svc_endp_json
-                    else
-                        echo '            {' >>$svc_endp_json
-                    fi
-                        echo '                "name": "port-'$port'", "port": '$port'}' >>$svc_endp_json
-                    let count=$count+1
+                    for proto in TCP UDP; do
+                        if [ $count -gt 1 ]; then
+                            echo '            ,{' >>$svc_endp_json
+                        else
+                            echo '            {' >>$svc_endp_json
+                        fi
+                        lcproto=`echo $proto | tr [A-Z] [a-z]`
+                        echo '                "name": "port-'$port'-'$lcproto'", "protocol": "'$proto'", "port": '$port'}' >>$svc_endp_json
+                        let count=$count+1
+                    done
                 done
                 echo '        ]' >>$svc_endp_json
                 echo '    }]' >>$svc_endp_json
@@ -846,7 +848,7 @@ function get_k8s_config() {
 function endpoint_k8s_cleanup() {
     new_k8s_followers="${worker_tool_pods}"
     if [ "${masters_tool_collect}" == "1" ]; then
-	new_k8s_followers+=" ${master_tool_pods}"
+        new_k8s_followers+=" ${master_tool_pods}"
     fi
     get_pod_logs ${new_k8s_followers} $cs_pods
     delete_pods ${new_k8s_followers} $cs_pods
