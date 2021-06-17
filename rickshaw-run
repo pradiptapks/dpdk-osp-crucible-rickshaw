@@ -1284,7 +1284,7 @@ sub process_roadblocks() {
             foreach my $msg (@{ $$messages_ref{'received'} })  {
                 if (exists $$msg{'payload'}{'message'}{'user-object'}{'new-followers'}) {
                     @new_followers = @{ $$msg{'payload'}{'message'}{'user-object'}{'new-followers'} };
-                    printf "New followers\n" . Dumper(\@new_followers);
+                    printf "Endpoint created followers: %s\n", join(" ", sort(@new_followers));
                     @rb_cs_ids = (@rb_cs_ids, @new_followers);
                 }
             }
