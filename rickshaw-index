@@ -160,6 +160,10 @@ sub http_request {
     $client->request($method, $req, $body, \%req_header);
     my $response = $client->responseContent();
     debug_log(sprintf "Response:\n%s\n\n", $response);
+    my $resp_ref = $coder->decode($response);
+        if (exists $$resp_ref{'error'}) {
+            printf "ERROR:\n%s\n", $response;
+        }
     return $response;
 }
 
