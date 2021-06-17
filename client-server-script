@@ -295,6 +295,8 @@ function setup_core_env() {
     tool_stop_cmds="$cs_dir/tool-stop"
     roadblock_msgs_dir="$cs_dir/roadblock-msgs"
     mkdir -p "$roadblock_msgs_dir"
+    sysinfo_dir="$cs_dir/sysinfo"
+    mkdir -p "$sysinfo_dir"
 
     # Directories on the controller
     config_dir="$base_run_dir/config"
@@ -371,6 +373,25 @@ function get_data() {
         scp_from_controller "$ssh_id_file" "$tool_cmds_dir/start" "$tool_start_cmds"
         scp_from_controller "$ssh_id_file" "$tool_cmds_dir/stop" "$tool_stop_cmds"
     fi
+}
+
+function collect_sysinfo() {
+    echo
+    echo "Collecting sysinfo"
+
+    packrat_bin=$(command -v packrat)
+    if [ ! -z "${packrat_bin}" ]; then
+        echo "Running packrat..."
+        ${packrat_bin} ${sysinfo_dir}
+        echo "Packrat is finished"
+    else
+        echo "Packrat is not available"
+    fi
+
+    echo "Contents of ${sysinfo_dir}:"
+    ls -l ${sysinfo_dir}
+
+    echo
 }
 
 function start_tools() {
@@ -743,25 +764,30 @@ if [ $abort -eq 0 -a $? -eq 0 ]; then
     pushd "$cs_dir" >/dev/null || abort_error "Could not chdir to $cs_dir" $sync $leader
     if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
     if [ $abort -eq 0 -a $? -eq 0 ]; then # get-data rb passed
-        sync=$sync_prefix-start-tools
         get_data
+        sync=$sync_prefix-collect-sysinfo
         if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-        if [ $? -eq 0 -a $abort -eq 0 ]; then # start-tools rb passed
-            sync=$sync_prefix-start-tests
-
-            #if [ "$cs_label" == "worker-1" ]; then
-                #abort_error "Fault injection from client-1 before $sync" $sync $leader
-            #fi
-            #echo "finished with fault injection"
-
-            start_tools
+        if [ $? -eq 0 -a $abort -eq 0 ]; then # collect-sysinfo rb passed
+            collect_sysinfo
+            sync=$sync_prefix-start-tools
             if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-            if [ $abort -eq 0 -a $? -eq 0 ]; then # start-tests rb passed
-                run_tests
+            if [ $? -eq 0 -a $abort -eq 0 ]; then # start-tools rb passed
+                sync=$sync_prefix-start-tests
+
+                #if [ "$cs_label" == "worker-1" ]; then
+                    #abort_error "Fault injection from client-1 before $sync" $sync $leader
+                #fi
+                #echo "finished with fault injection"
+
+                start_tools
+                if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
+                if [ $abort -eq 0 -a $? -eq 0 ]; then # start-tests rb passed
+                    run_tests
+                fi
+                do_roadblock $sync_prefix-stop-tests $leader $default_timeout
+                do_roadblock $sync_prefix-stop-tools $leader $default_timeout
+                stop_tools
             fi
-            do_roadblock $sync_prefix-stop-tests $leader $default_timeout
-            do_roadblock $sync_prefix-stop-tools $leader $default_timeout
-            stop_tools
         fi
         do_roadblock $sync_prefix-send-data $leader $default_timeout
         send_data

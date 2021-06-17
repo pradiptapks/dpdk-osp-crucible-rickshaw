@@ -1,0 +1,78 @@
+{
+  "type": "object",
+  "properties": {
+    "rickshaw-utility": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "pattern": "^2021\\.06\\.16$"
+            }
+          },
+          "required": [
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "additionalProperties": false
+    },
+    "utility": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "controller": {
+      "type": "object",
+      "properties": {
+        "pre-script": {
+          "type": "string",
+          "pattern": "^.+$"
+        },
+        "post-script": {
+          "type": "string",
+          "pattern": "^.+$"
+        }
+      },
+      "required": [
+        "post-script"
+      ],
+      "additionalProperties": false
+    },
+    "engine": {
+      "type": "object",
+      "properties": {
+        "files-from-controller": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "dest": {
+                "type": "string",
+                "pattern": "^.+$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "additionalItems": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "rickshaw-utility",
+    "engine",
+    "controller",
+    "utility"
+  ]
+}

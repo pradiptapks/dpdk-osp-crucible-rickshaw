@@ -312,6 +312,10 @@ function process_prebench_roadblocks() {
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
+    do_roadblock "client-server-collect-sysinfo" "follower" $client_server_start_timeout
+    if [ $? -eq $rb_exit_abort ]; then
+        exit_error "Exiting due to abort from another participant"
+    fi
     do_roadblock "client-server-start-tools" "follower" $default_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
@@ -507,14 +511,18 @@ function process_roadblocks() {
             collector_abort_sync=""
             collector_stop_syncs=()
             client_server_stop_syncs=()
-            start_syncs=("script-start" "get-data" "start-tools" "start-tests")
+            start_syncs=("script-start" "get-data" "collect-sysinfo" "start-tools" "start-tests")
             for (( i=0; i<${#start_syncs[*]}; i++ )); do
                 a_rb=0
                 b_rb=0
                 this_sync="${start_syncs[$i]}"
+                stop_sync=""
                 echo "this_sync: $this_sync"
-                stop_sync="`echo $this_sync | sed -e s/start/stop/ -e s/get/send/`"
-                echo "stop_sync: $stop_sync"
+                # collect-sysinfo does not require a stop sync
+                if [ "$this_sync" != "collect-sysinfo" ]; then
+                    stop_sync="`echo $this_sync | sed -e s/start/stop/ -e s/get/send/`"
+                    echo "stop_sync: $stop_sync"
+                fi
                 #if [ $# -gt 0 ]; then # If there are no other args then there are no leader roadblocks
                     #echo "about to run do_roadblock collector-$this_sync leader $client_server_start_timeout "" $@"
                     #do_roadblock "collector-$this_sync" "leader" $client_server_start_timeout "" $@

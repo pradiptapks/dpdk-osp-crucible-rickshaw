@@ -39,6 +39,8 @@ my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => 
                  "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
                  "max-sample-failures" => 1);
 
+my @utilities = ( "packrat" );
+
 my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
@@ -74,6 +76,7 @@ my $rickshaw_project_dir;
 my $roadblock_msgs_dir;
 my $endpoint_roadblock_opt = "";
 my $workshop_roadblock_opt = "";
+my %utility_configs;
 my %tools_configs;
 my @tools_params;
 {
@@ -84,6 +87,7 @@ my @tools_params;
 my $bench_schema_file = $rickshaw_project_dir . "/schema/benchmark.json";
 my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
+my $utility_schema_file = $rickshaw_project_dir . "/schema/utility.json";
 my $bench_params_schema_file = $rickshaw_project_dir . "/schema/bench-params.json";
 my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
@@ -100,6 +104,7 @@ sub usage {
     print "\nusage:\n\n";
     print "--json-validator        Path to json schema validation utility\n";
     print "--workshop-dir          Directory where workshop project exists\n";
+    print "--packrat-dir           Directory where the packrat project exists\n";
     print "--roadblock-dir         Directory where workshop project exists\n";
     print "--bench-dir             Directory where benchmark helper project exists\n";
     print "--bench-params          File with benchmark parameters to use\n";
@@ -416,6 +421,14 @@ sub build_container_image {
             " --requirements " . $cs_req_file .
             $workshop_roadblock_opt .
             " 2>&1";
+        foreach my $utility (@utilities) {
+            if (exists $run{$utility . '-dir'}) {
+                my $utility_req_file = $run{$utility . '-dir'} . "/workshop.json";
+                if (-e $utility_req_file) {
+                    $workshop_cmd .= " --requirements " . $utility_req_file . " ";
+                }
+            }
+        }
         foreach my $tool_entry (@tools_params) {
             $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
                 $$tool_entry{'tool'} . "/workshop.json ";
@@ -669,7 +682,7 @@ sub process_cmdline() {
         } elsif ($arg =~ /^help$/) {
             usage;
             exit 0;
-        } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
+        } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^packrat-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$/ or
                 $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$/ or
                 $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$/ or
                 $arg =~ /^reg-(auth|repo)$/ or
@@ -775,6 +788,27 @@ sub load_tool_params() {
             exit 1;
         }
         $tools_configs{$$json_ref{'tool'}} = $json_ref;
+    }
+}
+
+sub load_utility_params() {
+    foreach my $utility (@utilities) {
+        if (exists $run{$utility . '-dir'}) {
+            my $this_utility_config = $run{$utility . '-dir'} . "/rickshaw.json";
+            my $json_ref = get_json_file($this_utility_config, $utility_schema_file);
+            if (! exists $$json_ref{'utility'} or $$json_ref{'utility'} ne $utility) {
+                printf "In the following utility config, found in %s, the value for key \"utility\" ", $this_utility_config;
+                printf "does not match the utility name, '%s'\n", $utility;
+                printf "Please correct the utility config\n";
+                my $coder = JSON::XS->new->canonical->pretty;
+                printf "%s", $coder->encode($json_ref);
+                exit 1;
+            }
+            $utility_configs{$$json_ref{'utility'}} = $json_ref;
+        } else {
+            printf "Could not determine utility location for '%s'\n", $utility;
+            exit 1;
+        }
     }
 }
 
@@ -1206,6 +1240,17 @@ sub prepare_bench_tool_engines() {
                 }
             }
         }
+        foreach my $utility (@utilities) {
+            my $utility_dir = $run{$utility . '-dir'};
+            if (exists $utility_configs{$utility}{'engine'}{'files-from-controller'}) {
+                for my $file_spec (@{ $utility_configs{$utility}{'engine'}{'files-from-controller'} }) {
+                    my $src_file = $$file_spec{'src'};
+                    $src_file =~ s/\%utility-dir\%/$utility_dir/g;
+                    my $dest_file = $$file_spec{'dest'};
+                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                }
+            }
+        }
         close FH;
     }
 }
@@ -1284,7 +1329,7 @@ sub process_roadblocks() {
             foreach my $msg (@{ $$messages_ref{'received'} })  {
                 if (exists $$msg{'payload'}{'message'}{'user-object'}{'new-followers'}) {
                     @new_followers = @{ $$msg{'payload'}{'message'}{'user-object'}{'new-followers'} };
-                    printf "New followers\n" . Dumper(\@new_followers);
+                    printf "Endpoint created followers: %s\n", join(" ", sort(@new_followers));
                     @rb_cs_ids = (@rb_cs_ids, @new_followers);
                 }
             }
@@ -1292,17 +1337,19 @@ sub process_roadblocks() {
         # Next step all client-servers through pre-test preparation
         if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
             if (roadblock_leader("client-server-get-data", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
-                if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
-                    if (roadblock_leader("client-server-start-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
-                        # Now cycle through all tests
-                        printf "Running tests:\n";
-                        run_tests;
+                if (roadblock_leader("client-server-collect-sysinfo", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                    if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                        if (roadblock_leader("client-server-start-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                            # Now cycle through all tests
+                            printf "Running tests:\n";
+                            run_tests;
+                        }
+                        # Finally step through shutdown, cleanup, and sending data back
+                        roadblock_leader("client-server-stop-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+                        roadblock_leader("client-server-stop-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
                     }
-                    # Finally step through shutdown, cleanup, and sending data back
-                    roadblock_leader("client-server-stop-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
-                    roadblock_leader("client-server-stop-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
+                    roadblock_leader("client-server-send-data", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
                 }
-                roadblock_leader("client-server-send-data", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
             }
             roadblock_leader("client-server-script-stop", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints)));
         }
@@ -1364,6 +1411,13 @@ sub organize_run_data() {
                 my $mv_cmd = "/bin/mv * " . $cs_tool_dest_path;
                 my $mv_output = `$mv_cmd`;
             }
+            if (scalar dir_entries("sysinfo", qr/\w+/) > 0) {
+                my $sysinfo_dir = pushd("sysinfo");
+                my $cs_sysinfo_dest_path = $run_dir . "/sysinfo/" . $cs_type . "/" . $cs_id;
+                make_path($cs_sysinfo_dest_path);
+                my $mv_cmd = "/bin/mv * " . $cs_sysinfo_dest_path;
+                my $mv_output = `$mv_cmd`;
+            }
             # Must be cleaned up in every loop iteraiton
             system("/bin/rm -rf " . $tmp_data_dir . "/*");
         }
@@ -1377,6 +1431,7 @@ process_cmdline();
 validate_controller_env();
 load_bench_params();
 load_tool_params();
+load_utility_params();
 make_run_dirs();
 validate_endpoints();
 build_test_order();
