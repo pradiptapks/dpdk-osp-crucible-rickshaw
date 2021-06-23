@@ -611,8 +611,22 @@ function process_postbench_roadblocks() {
     done
 }
 
+function is_ip() {
+    local ip=$1; shift
+
+    if echo "$ip" | egrep --silent '[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}'; then
+	return 0
+    else
+	return 1
+    fi
+}
+
 function get_controller_ip() {
     local host=$1; shift
+    if is_ip $host; then
+	echo $host
+	return
+    fi
     local ip=`host $host | awk -F"address " '{print $2}'`
     # TODO: confirm is valid ipv4 addr
 
