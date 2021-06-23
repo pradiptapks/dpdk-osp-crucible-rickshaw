@@ -1,4 +1,5 @@
 #!/bin/bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 set -u
 
@@ -219,9 +220,9 @@ function process_remotehost_opts() {
                 ;;
             host)
                 host=$val
-               if [ -z "$controller_ipaddr" ]; then
+                if [ -z "$controller_ipaddr" ]; then
                     controller_ipaddr=`get_controller_ip $host`
-               fi
+                fi
                 ;;
             controller-ip)
                 controller_ipaddr=$val
