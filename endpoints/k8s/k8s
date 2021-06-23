@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 
 # This script implements the 'k8s' endpoint for rickshaw.  It runs 1 or more
