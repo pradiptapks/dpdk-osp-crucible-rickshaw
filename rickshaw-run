@@ -31,6 +31,7 @@ BEGIN {
 use lib "$ENV{'TOOLBOX_HOME'}/perl";
 use toolbox::json;
 use toolbox::logging;
+use toolbox::run;
 
 $toolbox::logging::debug = 0;
 
@@ -56,7 +57,8 @@ my $default_rb_timeout = 240;
 my $endpoint_deploy_timeout = 360;
 my $client_server_script_timeout = 720;
 my $endpoint_move_data_rb_timeout = 300;
-chomp (my $hostname = `hostname`);
+(my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
+chomp ($hostname);
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost" .
@@ -162,7 +164,7 @@ sub roadblock_leader {
             $follower_param .= " --followers=" . $_[$i];
         }
         my $msgs_file = $roadblock_msgs_dir . "/" . $label . ".json";
-        my $date = `date`;
+        (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
         chomp $date;
         printf "Roadblock: %s ", $date;
         while ($attempts < $max_rb_attempts and $rc != 0 and $rc != $roadblock_exit_abort) {
@@ -178,8 +180,7 @@ sub roadblock_leader {
                     " --message-log=" . $msgs_file .
                     $follower_param;
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
-            my $output = `$cmd`;
-            $rc = $? & 127;
+            ($cmd, my $output, $rc) = run_cmd($cmd);
             $_[0] = get_json_file($msgs_file);
             # Becasue roadblock leader does not exit with right code
             if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
@@ -260,7 +261,8 @@ sub file_newer_than {
     my $file = shift;
     my $epoch_sec = shift;
     {
-        chomp(my $file_time=`/bin/ls -l --time-style=+%s $file`);
+        (my $cmd, my $file_time, my $cmd_rc) = run_cmd("/bin/ls -l --time-style=+%s $file");
+        chomp($file_time);
         # -rwxrwxr-x. 1 someuser somegroup 4656 1582742663 client-server-script
         if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
             if ($1 > $epoch_sec) {
@@ -433,7 +435,8 @@ sub build_container_image {
             $workshop_cmd .= " --requirements " . $run{'tools-dir'} . "/" .
                 $$tool_entry{'tool'} . "/workshop.json ";
         }
-        my @config_analysis_output = `$workshop_cmd --label config-analysis --dump-config true`;
+        (my $cmd, my $cmd_output, my $cmd_rc) = run_cmd("$workshop_cmd --label config-analysis --dump-config true");
+        my @config_analysis_output = split(/\n/, $cmd_output);
         my $break_line = 0;
         for (my $i=0; $i<scalar(@config_analysis_output); $i++) {
             if ($config_analysis_output[$i] =~ /Config dump:/) {
@@ -470,9 +473,9 @@ sub build_container_image {
         my $image_tag = $image_md5;
         $image_url = $run{'reg-repo'} . ":" . $image_tag;
         my $image_found = 0;
-        my $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
+        $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
         debug_log(sprintf "running: %s\n", $cmd);
-        my $output = `$cmd`;
+        ($cmd, my $output, $cmd_rc) = run_cmd($cmd);
         my $push_cmd = "buildah --authfile " . $run{'reg-auth'} . " push localhost/workshop/$workshop_image $image_url";
         my $rmi_cmd = "buildah rmi localhost/workshop/$workshop_image";
         my $rc = $?;
@@ -485,8 +488,7 @@ sub build_container_image {
             debug_log(sprintf "%s\n", $output) if defined $output;
             printf "Checking for local workhop image\n";
             # TODO: get json from buildah and search properly instead of this:
-            my $output = `buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- "^localhost/workshop/$workshop_image"`;
-            my $rc = $?;
+            ($cmd, $output, my $rc) = run_cmd("buildah images | grep -v REPOSITORY | awk '{print \$1}' | grep -- \"^localhost/workshop/$workshop_image\"");
             if ($rc > 0) {
                 printf "Local workshop image was also not found:\n";
                 printf "%s\n", $output;
@@ -494,8 +496,7 @@ sub build_container_image {
                 printf "Found local workshop image, pushing to %s\n", $image_url;
                 $image_found = 1;
                 print $push_cmd . "\n";
-                my $output = `$push_cmd`;
-                my $rc = $?;
+                ($push_cmd, my $output, my $rc) = run_cmd($push_cmd);
                 if ($rc > 0) {
                     die "Pushing workshop image localhost/workshop/$workshop_image to $image_url failed:\n" . $output;
                 }
@@ -506,8 +507,8 @@ sub build_container_image {
             $workshop_cmd .= " --label " . $image_md5;
             printf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_cmd;
             printf "This may take a few minutes\n";
-            my @workshop_output = `$workshop_cmd`;
-            my $workshop_rc = $?;
+            ($workshop_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_cmd);
+            my @workshop_output = split(/\n/, $workshop_output);
             if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop.out")) {
                 printf WORKSHOP_LOG_FH "%s\n", join("", @workshop_output);
                 close(WORKSHOP_LOG_FH);
@@ -527,21 +528,19 @@ sub build_container_image {
                 $workshop_json = $workshop_output[$i] . $workshop_json;
                 # Break out if we found all of the JSON
                 # In this case the JSON begins with an array '['
-                last if ($workshop_output[$i] eq "[\n");
+                last if ($workshop_output[$i] eq "[");
             }
             my $coder = JSON::XS->new;
             my $workshop_ref = $coder->decode($workshop_json);
             $workshop_image_id = $$workshop_ref[0]{'id'};
             printf "Workshop complete.  Now pushing to container registry with this command:\n%s\n", $push_cmd;
-            my $output = `$push_cmd`;
-            my $buildah_rc = $?;
+            ($push_cmd, my $output, my $buildah_rc) = run_cmd($push_cmd);
             if ($buildah_rc > 0) {
                 printf "Pushing workshop image failed:\n%s\n", $output;
                 exit 1;
             } else {
                 printf "Removing local container with this command:\n%s\n", $rmi_cmd;
-                $output = `$rmi_cmd`;
-                $buildah_rc = $?;
+                ($rmi_cmd, $output, $buildah_rc) = run_cmd($rmi_cmd);
                 if ($buildah_rc > 0) {
                     printf "Removing workshop image failed:\n%s\n", $output;
                     exit 1;
@@ -882,8 +881,9 @@ sub validate_endpoints() {
                 " --endpoint-opts=" . $$endpoint{'opts'} .
                 " --validate";
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
-        my @output = grep(!/^#/, `$cmd`);
-        if ($? > 0) {
+        ($cmd, my $output, my $cmd_rc) = run_cmd($cmd);
+        my @output = grep(!/^#/, split(/\n/, $output));
+        if ($cmd_rc > 0) {
             die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
                 " validation returned non-zero exit code:\n" . join("\n", @output);
         }
@@ -1059,7 +1059,7 @@ sub prepare_bench_tool_engines() {
         $cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
         $cmd =~ s/\%run-dir\%/$run_dir/g;
         debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
-        my $pre_cmd_output = `$cmd . '2>&1'`;
+        ($cmd, my $pre_cmd_output, my $cmd_rc) = run_cmd($cmd);
         debug_log(sprintf "controller pre-script output:\n%s\n", $pre_cmd_output);
     }
     copy($rickshaw_project_dir . "/client-server-script", $client_server_run_script)
@@ -1258,7 +1258,7 @@ sub prepare_bench_tool_engines() {
 sub add_ssh_keys() {
     # Create temporary ssh keys so endpoint clients/servers can pull/push data
     my $keygen_cmd = 'ssh-keygen -f ' . $config_dir . '/rickshaw_id.rsa -P "" 2>&1';
-    my $keygen_output = `$keygen_cmd`;
+    ($keygen_cmd, my $keygen_output, my $keygen_cmd_rc) = run_cmd($keygen_cmd);
     system('cat ' . $config_dir . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 }
 
@@ -1381,7 +1381,7 @@ sub organize_run_data() {
             my $cs_type = $1;
             my $cs_id = $2;
             my $tar_cmd = "tar zmxf " . $archive_full_path;
-            my $tar_output = `$tar_cmd`;
+            ($tar_cmd, my $tar_output, my $tar_cmd_rc) = run_cmd($tar_cmd);
             if ($1 =~ /^(client|server)$/) {
                 for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     my $iter_dir = "iteration-" . $i;
@@ -1398,7 +1398,7 @@ sub organize_run_data() {
                             if (-e $iter_sampl_subpath) {
                                 my $iter_sampl_dir = pushd($iter_sampl_subpath);
                                 my $mv_cmd = "/bin/mv * " . $cs_dest_sampl_path;
-                                my $mv_output = `$mv_cmd`;
+                                ($mv_cmd, my $mv_output, my $mv_cmd_rc) = run_cmd($mv_cmd);
                             }
                         }
                     }
@@ -1409,14 +1409,14 @@ sub organize_run_data() {
                 my $cs_tool_dest_path = $run_dir . "/tool-data/" . $cs_type . "/" . $cs_id;
                 make_path($cs_tool_dest_path);
                 my $mv_cmd = "/bin/mv * " . $cs_tool_dest_path;
-                my $mv_output = `$mv_cmd`;
+                ($mv_cmd, my $mv_output, my $mv_cmd_rc) = run_cmd($mv_cmd);
             }
             if (scalar dir_entries("sysinfo", qr/\w+/) > 0) {
                 my $sysinfo_dir = pushd("sysinfo");
                 my $cs_sysinfo_dest_path = $run_dir . "/sysinfo/" . $cs_type . "/" . $cs_id;
                 make_path($cs_sysinfo_dest_path);
                 my $mv_cmd = "/bin/mv * " . $cs_sysinfo_dest_path;
-                my $mv_output = `$mv_cmd`;
+                ($mv_cmd, my $mv_output, my $mv_cmd_rc) = run_cmd($mv_cmd);
             }
             # Must be cleaned up in every loop iteraiton
             system("/bin/rm -rf " . $tmp_data_dir . "/*");
