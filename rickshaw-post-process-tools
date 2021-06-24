@@ -144,13 +144,13 @@ my $iter_dir = $run_dir . "/iterations";
 
 # Load the existing rickshaw-run.json
 $run_file = $run_dir . "/rickshaw-run.json";
-if (-e $run_file) {
-    debug_log(sprintf "Opening %s\n", $run_file);
-    my $run_ref = get_json_file($run_file, $run_schema_file);
+debug_log(sprintf "Opening %s\n", $run_file);
+my $run_ref = get_json_file($run_file, $run_schema_file);
+if (defined $run_ref) {
     %run = %{ $run_ref };
     # TODO checks for minimum fileds for valid run
 } else {
-    printf "Could not find rickshaw-run.json in %s, exiting\n", $run_dir;
+    printf "Could not find or load rickshaw-run.json in %s, exiting\n", $run_dir;
     exit 1;
 }
 

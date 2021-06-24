@@ -238,16 +238,13 @@ $result_schema_file = $rickshaw_project_dir . "/schema/run.json";
 $bench_metric_schema_file = $rickshaw_project_dir . "/schema/bench-metric.json";
 
 my $result_file = $run_dir . "/rickshaw-run.json";
-if (! -e $result_file) {
-    $result_file = $run_dir . "/rickshaw-run.json.xz";
-}
-if (-e $result_file) {
-    debug_log(sprintf "Opening %s\n", $result_file);
-    my $result_ref = get_json_file($result_file, $result_schema_file);
+debug_log(sprintf "Opening %s\n", $result_file);
+my $result_ref = get_json_file($result_file, $result_schema_file);
+if (defined $result_ref) {
     %result = %{ $result_ref };
     # TODO checks for minimum fileds for valid run
 } else {
-    printf "Could not find rickshaw-run.json in %s, exiting\n", $run_dir;
+    printf "Could not find ror load ickshaw-run.json in %s, exiting\n", $run_dir;
     exit 1;
 }
 
