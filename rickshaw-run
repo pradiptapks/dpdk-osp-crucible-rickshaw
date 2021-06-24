@@ -409,6 +409,7 @@ sub build_container_image {
             push(@{ $cs_req{'requirements'} }, \%rb_req);
             push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
         }
+        printf "XXXXX\nwriting cs-req.json.xz\nXXXXX\n";
         put_json_file($cs_req_file, \%cs_req);
         put_json_file($cs_conf_file, \%cs_conf);
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
@@ -1420,6 +1421,9 @@ sub organize_run_data() {
             }
             # Must be cleaned up in every loop iteraiton
             system("/bin/rm -rf " . $tmp_data_dir . "/*");
+            if ($toolbox::logging::debug == 0) {
+                system("/bin/rm -rf " .  $archive_full_path);
+            }
         }
     }
     rmdir($tmp_data_dir);
