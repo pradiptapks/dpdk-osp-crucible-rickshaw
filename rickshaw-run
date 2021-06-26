@@ -411,7 +411,6 @@ sub build_container_image {
             push(@{ $cs_req{'requirements'} }, \%rb_req);
             push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
         }
-        printf "XXXXX\nwriting cs-req.json.xz\nXXXXX\n";
         put_json_file($cs_req_file, \%cs_req);
         put_json_file($cs_conf_file, \%cs_conf);
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
