@@ -154,6 +154,7 @@ sub roadblock_leader {
     if ($use_roadblock) {
         my $attempts = 0;
         my $rc = 99;
+        my $file_rc;
         my $label = shift;
         my $timeout = shift;
         my $role = "leader";
@@ -181,7 +182,11 @@ sub roadblock_leader {
                     $follower_param;
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
             ($cmd, my $output, $rc) = run_cmd($cmd);
-            $_[0] = get_json_file($msgs_file);
+            ($file_rc, $_[0]) = get_json_file($msgs_file);
+            if ($file_rc > 0 or ! defined $json_ref) {
+                print "Could not open the message file\n";
+                exit 1;
+            }
             # Becasue roadblock leader does not exit with right code
             if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
                 $rc = $roadblock_exit_abort;
@@ -214,7 +219,11 @@ sub roadblock_leader {
             }
         }
         if ($rc == $roadblock_exit_abort or $rc == 0) {
-            $_[0] = get_json_file($msgs_file);
+            ($file_rc, $_[0]) = get_json_file($msgs_file);
+            if ($file_rc > 0 or ! defined $json_ref) {
+                print "Could not open the message file\n";
+                exit 1;
+            }
             return $rc;
         } else {
             # These fatal errors where we can't clean up with sending roadblocks.
@@ -417,8 +426,14 @@ sub build_container_image {
             push(@{ $cs_req{'requirements'} }, \%rb_req);
             push(@{ $cs_req{'userenvs'}[0]{'requirements'} }, "roadblock-client");
         }
-        put_json_file($cs_req_file, \%cs_req);
-        put_json_file($cs_conf_file, \%cs_conf);
+        if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
+            printf "build_container_image(): put_json_file() failed\n";
+            exit 1;
+        }
+        if (put_json_file($cs_req_file, \%cs_req) > 0) {
+            printf "build_container_image(): put_json_file() failed\n";
+            exit 1;
+        }
         my $workshop_cmd = $run{'workshop-dir'} . "/workshop.pl" .
             # " --skip-update=true " .
             " --log-level verbose " .
@@ -747,10 +762,11 @@ sub load_bench_params() {
     # Load the bench config and user params
     exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
     my $bench_config_file = $run{'bench-dir'} . "/rickshaw.json";
+    my $rc;
     if (-e $bench_config_file) {
-        (my $rc, my $bench_config_ref) = get_json_file($bench_config_file, $bench_schema_file);
+        ($rc, my $bench_config_ref) = get_json_file($bench_config_file, $bench_schema_file);
         if ($rc > 0 or ! defined $bench_config_ref) {
-            print "COuld not open the bench config file\n";
+            print "Could not open the bench config file\n";
             exit 1;
         }
         %bench_config = %$bench_config_ref;
@@ -767,7 +783,11 @@ sub load_bench_params() {
     }
     exists $run{'bench-params'} || die "[ERROR}You must use " .
                                     "--bench-params=/path/to/benchmark-params.json\n";
-    my $param_sets_ref = get_json_file($run{'bench-params'}, $bench_params_schema_file);
+    ($rc, my $param_sets_ref) = get_json_file($run{'bench-params'}, $bench_params_schema_file);
+    if ($rc > 0 or ! defined $param_sets_ref) {
+        print "Could not open the bench params file\n";
+        exit 1;
+    }
     my @param_sets = @{ $param_sets_ref };
     # TODO: verify user params schema
     $run{'iterations'} = ();
@@ -779,17 +799,26 @@ sub load_bench_params() {
 }
 
 sub load_tool_params() {
+    my $rc;
     if (not exists $run{'tool-params'} ) {
         $run{'tool-params'} = $rickshaw_project_dir . "/config/tool-params.json";
     }
     # TODO: need schema for tool-params
-    my $json_ref = get_json_file($run{'tool-params'});
+    ($rc, my $json_ref) = get_json_file($run{'tool-params'});
+    if ($rc > 0 or ! defined $json_ref) {
+        print "Could not open the tool params file\n";
+        exit 1;
+    }
     @tools_params = @{ $json_ref };
     # Load a tool configuration for every tool the user is asking for
     foreach my $tool_entry (@tools_params) {
         my $tool_name = $$tool_entry{'tool'};
         my $this_tool_config = $run{'tools-dir'} . "/" . $tool_name . "/rickshaw.json";
-        my $json_ref = get_json_file($this_tool_config, $tool_schema_file);
+        my ($rc, $json_ref) = get_json_file($this_tool_config, $tool_schema_file);
+        if ($rc > 0 or ! defined $json_ref) {
+            print "Could not open the tool config file\n";
+            exit 1;
+        }
         if (! exists $$json_ref{'tool'} or $$json_ref{'tool'} ne $tool_name) {
             printf "In the following tool config, found in %s, the value for key \"tool\" ", $this_tool_config;
             printf "does not match the tool name, '%s'\n", $tool_name;
@@ -803,10 +832,15 @@ sub load_tool_params() {
 }
 
 sub load_utility_params() {
+    my $rc;
     foreach my $utility (@utilities) {
         if (exists $run{$utility . '-dir'}) {
             my $this_utility_config = $run{$utility . '-dir'} . "/rickshaw.json";
-            my $json_ref = get_json_file($this_utility_config, $utility_schema_file);
+            ($rc, my $json_ref) = get_json_file($this_utility_config, $utility_schema_file);
+            if ($rc > 0 or ! defined $json_ref) {
+                print "Could not open the tool config file\n";
+                exit 1;
+            }
             if (! exists $$json_ref{'utility'} or $$json_ref{'utility'} ne $utility) {
                 printf "In the following utility config, found in %s, the value for key \"utility\" ", $this_utility_config;
                 printf "does not match the utility name, '%s'\n", $utility;
