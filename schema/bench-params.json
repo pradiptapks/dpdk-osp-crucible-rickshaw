@@ -26,6 +26,9 @@
             "server",
             "all"
           ]
+        },
+        "id": {
+          "type": "string"
         }
       },
       "required": [
