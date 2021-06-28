@@ -238,18 +238,24 @@ sub dump_params {
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'};
         my $val = $$param{'val'};
+        my $id;
+        if (exists $$param{'id'}) {
+            $id = $$param{'id'};
+        }
         # fallback to client role when role is undefined in json
         my $role = $$param{'role'} // $default_role;
 
-        # only dump when role=engine or role=all
-        if ( $role eq $engine || $role eq 'all') {
-            if (defined $val && length $val) {
-                if (defined $cs_id) {
-                    $val =~ s/\%client-id\%/$cs_id/;
+        if (! defined $id or (defined $cs_id and $id eq $cs_id)) {
+            # only dump when role=engine or role=all
+            if ( $role eq $engine || $role eq 'all') {
+                if (defined $val && length $val) {
+                    if (defined $cs_id) {
+                        $val =~ s/\%client-id\%/$cs_id/;
+                    }
+                    $params_str .= " --" . $arg . "=" . $val;
+                } else {
+                    $params_str .= " --" . $arg;
                 }
-                $params_str .= " --" . $arg . "=" . $val;
-            } else {
-                $params_str .= " --" . $arg;
             }
         }
     }
@@ -742,8 +748,12 @@ sub load_bench_params() {
     exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
     my $bench_config_file = $run{'bench-dir'} . "/rickshaw.json";
     if (-e $bench_config_file) {
-        my $bench_config_ref = get_json_file($bench_config_file, $bench_schema_file);
-        %bench_config = %{ $bench_config_ref };
+        (my $rc, my $bench_config_ref) = get_json_file($bench_config_file, $bench_schema_file);
+        if ($rc > 0 or ! defined $bench_config_ref) {
+            print "COuld not open the bench config file\n";
+            exit 1;
+        }
+        %bench_config = %$bench_config_ref;
         if (exists $bench_config{'benchmark'}) {
             printf "Preparing to run %s\n", $bench_config{'benchmark'};
             $run{'benchmark'} = $bench_config{'benchmark'};
@@ -757,7 +767,8 @@ sub load_bench_params() {
     }
     exists $run{'bench-params'} || die "[ERROR}You must use " .
                                     "--bench-params=/path/to/benchmark-params.json\n";
-    my @param_sets = @{ my $param_sets_ref = get_json_file($run{'bench-params'}, $bench_params_schema_file) };
+    my $param_sets_ref = get_json_file($run{'bench-params'}, $bench_params_schema_file);
+    my @param_sets = @{ $param_sets_ref };
     # TODO: verify user params schema
     $run{'iterations'} = ();
     my $iter_id = 0;
@@ -772,7 +783,8 @@ sub load_tool_params() {
         $run{'tool-params'} = $rickshaw_project_dir . "/config/tool-params.json";
     }
     # TODO: need schema for tool-params
-    @tools_params = @{ my $json_ref = get_json_file($run{'tool-params'}) };
+    my $json_ref = get_json_file($run{'tool-params'});
+    @tools_params = @{ $json_ref };
     # Load a tool configuration for every tool the user is asking for
     foreach my $tool_entry (@tools_params) {
         my $tool_name = $$tool_entry{'tool'};
@@ -1042,7 +1054,9 @@ sub build_test_order() {
         usage;
         exit 1;
     }
-    put_json_file($config_dir . "/test-order.json", \@tests);
+    if (put_json_file($config_dir . "/test-order.json", \@tests) > 0) {
+        printf "build_test_order(): put_json_file() failed for %s\n", $config_dir . "/test-order.json";
+    }
 }
 
 sub prepare_bench_tool_engines() {
@@ -1386,11 +1400,9 @@ sub organize_run_data() {
                 for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     my $iter_dir = "iteration-" . $i;
                     if (-d $iter_dir) {
-                        my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
                         opendir(DH, $iter_dir);
                         my @entries =  readdir(DH);
                         foreach my $samp_dir (grep(/^sample/, @entries)) {
-                            #printf "samp_dir: [%s]\n", $samp_dir;
                             my $iter_sampl_subpath = $iter_dir . "/" . $samp_dir;
                             my $cs_dest_sampl_path = $run_dir . "/iterations/" . $iter_sampl_subpath .
                                         "/" . $cs_type . "/" . $cs_id;
@@ -1449,7 +1461,9 @@ organize_run_data();
 # TODO: remove temporary ssh keys from local authorized_keys file
 my $run_file = $run_dir . "/rickshaw-run.json";
 $run{'rickshaw-run'}{'schema'}{'version'} = "2020.03.18";
-put_json_file($run_file, \%run, $run_schema_file);
+if (put_json_file($run_file, \%run, $run_schema_file) > 0) {
+    printf "main(): put_json_file() failed for %s\n", $run_file
+}
 if (defined $abort_test_id) {
     printf "WARNING: test %s was aborted. and all subsequent tests were not attempted.  " .
            "Run is incomplete\n", $abort_test_id;
