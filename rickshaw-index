@@ -40,6 +40,7 @@ my %cdm = ( 'ver' => 'v5dev' );
 my $coder = JSON::XS->new->canonical;
 my $result_schema_file;
 my $bench_metric_schema_file;
+my $file_rc;
 
 sub usage {
     print "\nusage:\n\n";
@@ -75,7 +76,11 @@ sub index_metrics {
         printf "Could not find %s, exiting\n", $metr_csv_file;
         exit 1;
     }
-    my $metr_ref = get_json_file($metr_json_file);
+    ($file_rc, my $metr_ref) = get_json_file($metr_json_file);
+    if ($file_rc > 0 or ! defined $metr_ref) {
+        print "Could not open the metric data  file\n";
+        exit 1;
+    }
     my %uuid;
     my %type;
     for my $this_metr ( @$metr_ref ) {
@@ -239,7 +244,11 @@ $bench_metric_schema_file = $rickshaw_project_dir . "/schema/bench-metric.json";
 
 my $result_file = $run_dir . "/rickshaw-run.json";
 debug_log(sprintf "Opening %s\n", $result_file);
-my $result_ref = get_json_file($result_file, $result_schema_file);
+($file_rc, my $result_ref) = get_json_file($result_file, $result_schema_file);
+if ($file_rc > 0 or ! defined $result_ref) {
+    print "Could not open the rickshaw-run  file\n";
+    exit 1;
+}
 if (defined $result_ref) {
     %result = %{ $result_ref };
     # TODO checks for minimum fileds for valid run
@@ -276,36 +285,40 @@ my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
 http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/", $run_doc_json);
 if (-e $tool_dir) {
     my $run_doc_ref = $coder->decode($run_doc_json);
-    opendir(TOOLDIR, $tool_dir);
-    my @collectors = grep(/\w+/, readdir(TOOLDIR));
-    for my $collector (@collectors) {
-        my $collector_dir = $tool_dir . "/" . $collector;  # $run_dir/tool-data/[client|server|worker|master]
-        opendir(COLLECTORDIR, $collector_dir);
-        my @numbers = grep (/\d+/, readdir(COLLECTORDIR));
-        for my $num (@numbers) {
-            my $cd_id = $collector . "-" . $num;
-            my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
-            printf "Indexing of tool data for %s starting\n", $cd_id;
-            my @pids;
-            opendir(NUMDIR, $num_dir);
-            my @tools = grep(/\w+/, readdir(NUMDIR));
-            for my $tool (@tools) {
-                my $tool_dir = $num_dir . "/" . $tool;
-                opendir(TOOLDIR, $tool_dir);
-                my @tool_files = grep(/metric-data-\S+\.json/, readdir(TOOLDIR));
-                for my $tool_file (@tool_files) {
-                    $tool_file =~ s/(metric-data-\S+)\.json.*/$1/;
-                    if (my $pid = fork) {
-                        push(@pids, $pid);
-                    } else {
-                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
-                        exit;
+    if (opendir(TOOLDIR, $tool_dir)) {
+        my @collectors = grep(/\w+/, readdir(TOOLDIR));
+        for my $collector (@collectors) {
+                my $collector_dir = $tool_dir . "/" . $collector;  # $run_dir/tool-data/[client|server|worker|master]
+            if (opendir(COLLECTORDIR, $collector_dir)) {
+                my @numbers = grep (/\d+/, readdir(COLLECTORDIR));
+                for my $num (@numbers) {
+                    my $cd_id = $collector . "-" . $num;
+                    my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
+                    printf "Indexing of tool data for %s starting\n", $cd_id;
+                    my @pids;
+                    if (opendir(NUMDIR, $num_dir)) {
+                        my @tools = grep(/\w+/, readdir(NUMDIR));
+                        for my $tool (@tools) {
+                            my $tool_dir = $num_dir . "/" . $tool;
+                            if (opendir(TOOLDIR, $tool_dir)) {
+                                my @tool_files = grep(/metric-data-\S+\.json/, readdir(TOOLDIR));
+                                for my $tool_file (@tool_files) {
+                                    $tool_file =~ s/(metric-data-\S+)\.json.*/$1/;
+                                    if (my $pid = fork) {
+                                        push(@pids, $pid);
+                                    } else {
+                                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
+                                        exit;
+                                    }
+                                }
+                            }
+                        }
                     }
+                    printf "Waiting for %d post-processing jobs to complete\n", scalar @pids;
+                    while (wait() > -1) {}
+                    printf "Indexing of tool data for %s complete\n", $cd_id;
                 }
             }
-            printf "Waiting for %d post-processing jobs to complete\n", scalar @pids;
-            while (wait() > -1) {}
-            printf "Indexing of tool data for %s complete\n", $cd_id;
         }
     }
 }
@@ -326,6 +339,7 @@ if (exists $result{'iterations'}) {
     print "Indexing of benchmark data starting\n";
     my $iter_num = 1;
     for my $iter (@{ $result{'iterations'} }) {
+        my $iter_array_idx = $iter_num - 1;
         my $iter_doc_ref = $coder->decode($run_doc_json);
         my %iter_doc = %$iter_doc_ref;
         $iter_doc{'iteration'}{'id'} = Data::UUID->new->create_str();
@@ -342,141 +356,147 @@ if (exists $result{'iterations'}) {
             http_request("POST", "localhost:9200", "/cdmv5dev-param/_doc/", $param_doc_json);
         }
         my $this_iter_dir = $iter_dir . "/iteration-" . $iter_num;
-        opendir(my $iter_dh, $this_iter_dir);
-        my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
-        my $iter_array_idx = $iter_num -1;
-        my @samples;
-        my $primary_metric;
-        my $primary_period;
-        my $sample_num = 1;
-        for my $samp_dir (@samp_dirs) {
-            my $samp_status = "pass";
-            if ($samp_dir =~ /fail\d+/) {
-                $samp_status = "fail";
-            }
-            my %sample; # sample data from all clients/servers
-            $sample{'status'} = $samp_status;
-            my $samp_doc_ref = $coder->decode($iter_doc_json);
-            my %samp_doc = %$samp_doc_ref;
-            $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
-            $samp_doc{'sample'}{'num'} = $sample_num;
-            $samp_doc{'sample'}{'status'} = $sample{'status'};
-            my $samp_doc_json = $coder->encode(\%samp_doc);
-            http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
-            my @cons_periods; # periods [of the same name] from clients/servers get merged here
-            my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
-            debug_log("Working on " . $this_samp_dir . "\n");
-            opendir(my $samp_dh, $this_samp_dir);
-            my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
-            for my $cs_name (@cs_names) { 
-                my $cs_name_dir = $this_samp_dir . "/" . $cs_name;
-                opendir(my $cs_name_dh, $cs_name_dir);
-                my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
-                for my $cs_id (@cs_ids) {
-                    my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
-                    my $data_file = $cs_id_dir . "/" . "post-process-data.json";
-                    if (! -e $data_file) {
-                        $data_file = $cs_id_dir . "/" . "post-process-data.json.xz";
+        if (opendir(my $iter_dh, $this_iter_dir)) {
+            my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
+            my @samples;
+            my $primary_metric;
+            my $primary_period;
+            my $sample_num = 1;
+            for my $samp_dir (@samp_dirs) {
+                my $samp_status = "pass";
+                if ($samp_dir =~ /fail\d+/) {
+                    $samp_status = "fail";
+                }
+                my %sample; # sample data from all clients/servers
+                $sample{'status'} = $samp_status;
+                my $samp_doc_ref = $coder->decode($iter_doc_json);
+                my %samp_doc = %$samp_doc_ref;
+                $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
+                $samp_doc{'sample'}{'num'} = $sample_num;
+                $samp_doc{'sample'}{'status'} = $sample{'status'};
+                my $samp_doc_json = $coder->encode(\%samp_doc);
+                http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
+                my @cons_periods; # periods [of the same name] from clients/servers get merged here
+                my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
+                debug_log("Working on " . $this_samp_dir . "\n");
+                if (opendir(my $samp_dh, $this_samp_dir)) {
+                    my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
+                    for my $cs_name (@cs_names) { 
+                        my $cs_name_dir = $this_samp_dir . "/" . $cs_name;
+                        if (opendir(my $cs_name_dh, $cs_name_dir)) {
+                            my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
+                            for my $cs_id (@cs_ids) {
+                                my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
+                                my $data_file = $cs_id_dir . "/" . "post-process-data.json";
+                                if (! -e $data_file) {
+                                    $data_file = $cs_id_dir . "/" . "post-process-data.json.xz";
+                                }
+                                if (-e $data_file) {
+                                    ($file_rc, my $data_ref) = get_json_file($data_file, $bench_metric_schema_file);
+                                    if ($file_rc > 0 or ! defined $data_ref) {
+                                        print "Could not open the post-process-data.json file\n";
+                                        exit 1;
+                                    }
+                                    my %data = %$data_ref;
+                                    if (! defined $primary_metric and exists $data{'primary-metric'}) {
+                                        $primary_metric = $data{'primary-metric'};
+                                    }
+                                    if (! defined $primary_period and exists $data{'primary-period'}) {
+                                        $primary_period = $data{'primary-period'};
+                                    }
+                                    # For any sample, every client/server has information that contributes to one
+                                    # or more benchmark-sample-periods.  This data needs to be consolidated into
+                                    # 1 period doc for each common period across the clients/servers.
+                                    if (defined $data{'periods'}) {
+                                        for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
+                                            my $cons_period_id;
+                                            # Match the $cons_period_id to an existing consolidated-period if it exists
+                                            for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
+                                                if (defined $cons_periods[$cons_id]{'period'}{'name'} and $cons_periods[$cons_id]{'period'}{'name'} eq $data{'periods'}[$k]{'name'}) {
+                                                    $cons_period_id = $cons_id;
+                                                    last;
+                                                }
+                                            }
+                                            # If there is no match this is the first time a period of this name
+                                            # has been processed, so add it to @cons_periods.
+                                            if (! defined $cons_period_id) {
+                                                # Always start the doc with the info from its "parent"
+                                                my $per_doc_ref = $coder->decode($samp_doc_json);
+                                                my %period = ('id' => Data::UUID->new->create_str(), 'name' => $data{'periods'}[$k]{'name'});
+                                                if (defined $data{'periods'}[$k]{'begin'}) {
+                                                    $period{'begin'} = $data{'periods'}[$k]{'begin'};
+                                                }
+                                                if (defined $data{'periods'}[$k]{'end'}) {
+                                                    $period{'end'} = $data{'periods'}[$k]{'end'};
+                                                }
+                                                $$per_doc_ref{'period'} = \%period;
+                                                push(@cons_periods, $per_doc_ref);
+                                                $cons_period_id = scalar @cons_periods - 1;
+                                            }
+                                            # When we consolidate the same period from many clients/servers, we need to find
+                                            # the time period where there are samples from all clients/servers, in order to
+                                            # ensure we are measuring a period with "full participation".  We can do this
+                                            # while indexing the metrics.
+                                            my $earliest_begin;
+                                            my $latest_end;
+                                            for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metric-files'} }); $j++) {
+                                                # Metric data is still in other file(s).  For each member in 'metric-files' array,
+                                                # there should be a 2 files with the same prefix
+                                                my $metric_file_prefix = $cs_id_dir . "/" . $data{'periods'}[$k]{'metric-files'}[$j];
+                                                my $this_begin;
+                                                my $this_end;
+                                                # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
+                                                ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $cons_periods[$cons_period_id], $primary_metric);
+                                                # From processing all metric files, get the very-earliest-begin and very-latest-end
+                                                if (not defined $earliest_begin or $earliest_begin > $this_begin) {
+                                                    $earliest_begin = $this_begin;
+                                                }
+                                                if (not defined $latest_end or $latest_end < $this_end) {
+                                                    $latest_end = $this_end;
+                                                }
+                                            }
+                                            # Now if this client/server's earliest_begin is *later* than a defined begin for the consolidated period, 
+                                            # we need to adjust the begin for the consolidated period to match this client/server's earliest_begin.
+                                            # This ensures the consolidated period always has samples from every single client/server for the entire
+                                            # period.
+                                            if (not defined $cons_periods[$cons_period_id]{'begin'} or $cons_periods[$cons_period_id]{'begin'} < $earliest_begin) {
+                                                $cons_periods[$cons_period_id]{'period'}{'begin'} = $earliest_begin;
+                                            }
+                                            if (not defined $cons_periods[$cons_period_id]{'end'} or $cons_periods[$cons_period_id]{'end'} > $latest_end) {
+                                                $cons_periods[$cons_period_id]{'period'}{'end'} = $latest_end;
+                                            }
+                                        }
+                                    }
+                                }
+                            } #cs_ids
+                        } #opendir csnames
+                    } #cs_names
+                    $sample_num++;
+                    $sample{'periods'} = \@cons_periods;
+                    foreach my $per (@cons_periods) {
+                        my $this_per_doc_json = $coder->encode($per);
+                        http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $this_per_doc_json);
                     }
-                    if (-e $data_file) {
-                        my $data_ref = get_json_file($data_file, $bench_metric_schema_file);
-                        my %data = %$data_ref;
-                        if (! defined $primary_metric and exists $data{'primary-metric'}) {
-                            $primary_metric = $data{'primary-metric'};
-                        }
-                        if (! defined $primary_period and exists $data{'primary-period'}) {
-                            $primary_period = $data{'primary-period'};
-                        }
-                        # For any sample, every client/server has information that contributes to one
-                        # or more benchmark-sample-periods.  This data needs to be consolidated into
-                        # 1 period doc for each common period across the clients/servers.
-                        if (defined $data{'periods'}) {
-                            for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
-                                my $cons_period_id;
-                                # Match the $cons_period_id to an existing consolidated-period if it exists
-                                for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
-                                    if (defined $cons_periods[$cons_id]{'period'}{'name'} and $cons_periods[$cons_id]{'period'}{'name'} eq $data{'periods'}[$k]{'name'}) {
-                                        $cons_period_id = $cons_id;
-                                        last;
-                                    }
-                                }
-                                # If there is no match this is the first time a period of this name
-                                # has been processed, so add it to @cons_periods.
-                                if (! defined $cons_period_id) {
-                                    # Always start the doc with the info from its "parent"
-                                    my $per_doc_ref = $coder->decode($samp_doc_json);
-                                    my %period = ('id' => Data::UUID->new->create_str(), 'name' => $data{'periods'}[$k]{'name'});
-                                    if (defined $data{'periods'}[$k]{'begin'}) {
-                                        $period{'begin'} = $data{'periods'}[$k]{'begin'};
-                                    }
-                                    if (defined $data{'periods'}[$k]{'end'}) {
-                                        $period{'end'} = $data{'periods'}[$k]{'end'};
-                                    }
-                                    $$per_doc_ref{'period'} = \%period;
-                                    push(@cons_periods, $per_doc_ref);
-                                    $cons_period_id = scalar @cons_periods - 1;
-                                }
-                                # When we consolidate the same period from many clients/servers, we need to find
-                                # the time period where there are samples from all clients/servers, in order to
-                                # ensure we are measuring a period with "full participation".  We can do this
-                                # while indexing the metrics.
-                                my $earliest_begin;
-                                my $latest_end;
-                                for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metric-files'} }); $j++) {
-                                    # Metric data is still in other file(s).  For each member in 'metric-files' array,
-                                    # there should be a 2 files with the same prefix
-                                    my $metric_file_prefix = $cs_id_dir . "/" . $data{'periods'}[$k]{'metric-files'}[$j];
-                                    my $this_begin;
-                                    my $this_end;
-                                    # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                    ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $cons_periods[$cons_period_id], $primary_metric);
-                                    # From processing all metric files, get the very-earliest-begin and very-latest-end
-                                    if (not defined $earliest_begin or $earliest_begin > $this_begin) {
-                                        $earliest_begin = $this_begin;
-                                    }
-                                    if (not defined $latest_end or $latest_end < $this_end) {
-                                        $latest_end = $this_end;
-                                    }
-                                }
-                                # Now if this client/server's earliest_begin is *later* than a defined begin for the consolidated period, 
-                                # we need to adjust the begin for the consolidated period to match this client/server's earliest_begin.
-                                # This ensures the consolidated period always has samples from every single client/server for the entire
-                                # period.
-                                if (not defined $cons_periods[$cons_period_id]{'begin'} or $cons_periods[$cons_period_id]{'begin'} < $earliest_begin) {
-                                    $cons_periods[$cons_period_id]{'period'}{'begin'} = $earliest_begin;
-                                }
-                                if (not defined $cons_periods[$cons_period_id]{'end'} or $cons_periods[$cons_period_id]{'end'} > $latest_end) {
-                                    $cons_periods[$cons_period_id]{'period'}{'end'} = $latest_end;
-                                }
-                            }
-                        }
-                    }
-                } #cs_ids
-            } #cs_names
-            $sample_num++;
-            $sample{'periods'} = \@cons_periods;
-            foreach my $per (@cons_periods) {
-                my $this_per_doc_json = $coder->encode($per);
-                http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $this_per_doc_json);
+                    push(@samples, \%sample);
+                } #opendir samp
+            } #samp_dirs
+            $result{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
+            if (defined $primary_metric) {
+                $result{'iterations'}[$iter_array_idx]{'primary-metric'} = $primary_metric;
+            } else {
+                printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
             }
-            push(@samples, \%sample);
-        } #samp_dirs
-        $result{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
-        if (defined $primary_metric) {
-            $result{'iterations'}[$iter_array_idx]{'primary-metric'} = $primary_metric;
-        } else {
-            printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
-        }
-        if (defined $primary_period) {
-            $result{'iterations'}[$iter_array_idx]{'primary-period'} = $primary_period;
-        } else {
-            printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
-        }
-        $iter_doc{'iteration'}{'primary-metric'} = $primary_metric;
-        $iter_doc{'iteration'}{'primary-period'} = $primary_period;
-        $iter_doc_json = $coder->encode(\%iter_doc);
-        http_request("POST", "localhost:9200", "/cdmv5dev-iteration/_doc/", $iter_doc_json);
-        $iter_num++;
+            if (defined $primary_period) {
+                $result{'iterations'}[$iter_array_idx]{'primary-period'} = $primary_period;
+            } else {
+                printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
+            }
+            $iter_doc{'iteration'}{'primary-metric'} = $primary_metric;
+            $iter_doc{'iteration'}{'primary-period'} = $primary_period;
+            $iter_doc_json = $coder->encode(\%iter_doc);
+            http_request("POST", "localhost:9200", "/cdmv5dev-iteration/_doc/", $iter_doc_json);
+            $iter_num++;
+        } #opendir iter
     } #iterations
     print "Indexing of benchmark data complete\n";
 } # if iterations
