@@ -510,7 +510,7 @@ sub build_container_image {
             ($workshop_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_cmd);
             my @workshop_output = split(/\n/, $workshop_output);
             if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop.out")) {
-                printf WORKSHOP_LOG_FH "%s\n", join("", @workshop_output);
+                printf WORKSHOP_LOG_FH "%s", join("\n", @workshop_output);
                 close(WORKSHOP_LOG_FH);
             } else {
                 printf "Failed to open " . $run_dir . "/workshop.out for writing\n";
