@@ -183,7 +183,7 @@ sub roadblock_leader {
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
             ($cmd, my $output, $rc) = run_cmd($cmd);
             ($file_rc, $_[0]) = get_json_file($msgs_file);
-            if ($file_rc > 0 or ! defined $json_ref) {
+            if ($file_rc > 0 or ! defined $_[0]) {
                 print "Could not open the message file\n";
                 exit 1;
             }
@@ -220,7 +220,7 @@ sub roadblock_leader {
         }
         if ($rc == $roadblock_exit_abort or $rc == 0) {
             ($file_rc, $_[0]) = get_json_file($msgs_file);
-            if ($file_rc > 0 or ! defined $json_ref) {
+            if ($file_rc > 0 or ! defined $_[0]) {
                 print "Could not open the message file\n";
                 exit 1;
             }

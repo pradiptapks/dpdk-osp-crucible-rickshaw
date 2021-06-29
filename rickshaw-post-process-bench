@@ -183,8 +183,17 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
     my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
     my $iter_dh;
     my $this_iter_dir = $iter_subdir . "/iteration-" . $i;
+    if (! -d $run_dir . "/" . $this_iter_dir) {
+        printf "The directory [%s] does not exist\n", $run_dir . "/" . $this_iter_dir;
+        next;
+    }
     if (opendir($iter_dh, $run_dir . "/" . $this_iter_dir)) {
-        my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
+        my @samp_dirs = grep(/^sample-\d+$/, readdir($iter_dh));
+        if (scalar @samp_dirs < $run{'num-samples'}) {
+            printf "Iteration %d, [%s] is considered failed because there were not enough passing samples (%d)\n",
+                   $i, $this_iter_dir, $run{'num-samples'};
+            system("/bin/mv " . $run_dir . "/" . $this_iter_dir . " " . $run_dir . "/" . $this_iter_dir . "-fail");
+        }
         my $iter_array_idx = $i -1;
         my @samples;
         my $primary_metric;
