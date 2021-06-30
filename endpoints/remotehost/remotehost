@@ -359,7 +359,7 @@ function launch_osruntime() {
         fi
         let count=$count+1
     done
-    echo "This endpiont deployed"
+    echo "This endpoint deployed"
 }
 
 function move_remotehost_logs() {
@@ -390,3 +390,4 @@ launch_osruntime
 # process_bench_roadblocks remotehost
 # process_postbench_roadblocks
 process_roadblocks remotehost
+endpoint_remotehost_cleanup
