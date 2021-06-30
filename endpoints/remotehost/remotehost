@@ -252,8 +252,10 @@ function process_remotehost_opts() {
                 ;;
         esac
     done
-    if [ "$do_validate" != "1" ]; then 
-        remote_logs_dir="/var/lib/crucible/$endpoint_label-logs_$run_id"
+    if [ "$do_validate" != "1" ]; then
+        remote_dir="/var/lib/crucible/${endpoint_label}_${run_id}"
+        remote_logs_dir="${remote_dir}/logs"
+        remote_data_dir="${remote_dir}/data/tmp"
     fi
 }
 
@@ -274,6 +276,11 @@ function launch_osruntime() {
     local this_cs_label this_cs_log_file base_cmd cd_cmd cs_rb_env
     local env_opts existing_container container_id container_mount container_name fs
     echo osruntime: $osruntime
+
+    # create working directories
+    do_ssh $user@$host /bin/mkdir -p $remote_logs_dir
+    do_ssh $user@$host /bin/mkdir -p $remote_data_dir
+
     echo ensuring container image is pulled to $host
     do_ssh $user@$host podman pull $image
     container_name="${endpoint_label}_$run_id"
@@ -288,8 +295,10 @@ function launch_osruntime() {
         container_mount=`do_ssh $user@$host podman mount "$container_id"`
         if [ ! -z "$container_mount" ]; then
             echo "Container mount: $container_mount"
+            echo "Mapping container /tmp to host $remote_data_dir"
+            do_ssh $user@$host mkdir -p $container_mount/tmp
+            do_ssh $user@$host mount --verbose --options bind $remote_data_dir $container_mount/tmp
             echo "Adding host directories to container mount"
-            #for fs in dev proc sys; do
             for fs in proc dev dev/hugepages proc sys lib/modules usr/src boot; do
                 echo "Adding $fs"
                 do_ssh $user@$host mkdir -p $container_mount/$fs
@@ -309,7 +318,6 @@ function launch_osruntime() {
     fi
 
     # For each client and server launch the actual script which will run it.
-    do_ssh $user@$host /bin/mkdir -p $remote_logs_dir
     count=1
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         this_cs_log_file="$this_cs_label.txt"
@@ -370,7 +378,7 @@ function move_remotehost_logs() {
         pushd / >/dev/null
         do_scp "$user@$host:$remote_cs_log_file" / && \
         mv $remote_cs_log_file $client_server_logs_dir && \
-        do_ssh $user@$host /bin/rm -r $remote_logs_dir
+        do_ssh $user@$host /bin/rm -r $remote_dir
         popd >/dev/null
     done
 }
