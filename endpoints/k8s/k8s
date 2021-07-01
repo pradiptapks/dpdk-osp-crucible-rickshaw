@@ -65,6 +65,14 @@ declare -A securityContext
 declare -A resources
 declare -A annotations
 
+function cleanup_json() {
+    local json="$1"; shift
+
+    mv ${json} ${json}.tmp
+    jq . ${json}.tmp > ${json}
+    rm ${json}.tmp
+}
+
 function endpoint_k8s_test_stop() {
     local msgs_dir="$1"; shift
     local test_id="$1"; shift
@@ -179,6 +187,7 @@ function endpoint_k8s_test_start() {
                 echo '        ]' >>$svc_json
                 echo '    }' >>$svc_json
                 echo '}' >>$svc_json
+                cleanup_json "${svc_json}"
                 cat "$svc_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-$name.txt"
                 # Debug info
                 ssh $user@$host "kubectl get svc/rickshaw-$name -o json" >"$endpoint_run_dir/get-svc-$name.json"
@@ -213,6 +222,7 @@ function endpoint_k8s_test_start() {
                 echo '        ]' >>$svc_endp_json
                 echo '    }]' >>$svc_endp_json
                 echo '}' >>$svc_endp_json
+                cleanup_json "${svc_endp_json}"
                 cat "$svc_endp_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-endp-$name.txt"
     
     
@@ -255,6 +265,7 @@ function endpoint_k8s_test_start() {
                     echo '        ]' >>$nodep_json
                     echo '    }' >>$nodep_json
                     echo '}' >>$nodep_json
+                    cleanup_json "${nodep_json}"
                     cat "$nodep_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-nodeport-$name.txt"
                     local endp_nodep_json=$endpoint_run_dir/$name-nodeport-endpoint.json
                     echo '{' >$endp_nodep_json
@@ -280,6 +291,7 @@ function endpoint_k8s_test_start() {
                     echo '        ]' >>$endp_nodep_json
                     echo '    }]' >>$endp_nodep_json
                     echo '}' >>$endp_nodep_json
+                    cleanup_json "${endp_nodep_json}"
                     cat "$endp_nodep_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-endp-nodeport-$name.txt"
                     # $svc_ip must now be reassigned to the IP used for NodePort.  NodePort is available on -any- worker node
                     # However, we should provide an IP of the current worker which hosts the pod
@@ -656,6 +668,7 @@ function build_pod_spec() {
     fi
     echo "  }" >>$json
     echo "}" >>$json
+    cleanup_json "${json}"
 }
 
 function create_pods() {
