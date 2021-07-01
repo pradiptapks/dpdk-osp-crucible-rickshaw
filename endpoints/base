@@ -627,7 +627,7 @@ function get_controller_ip() {
 	echo $host
 	return
     fi
-    local ip=`host $host | awk -F"address " '{print $2}'`
+    local ip=`host $host | grep "has address" | head -1 | awk -F"has address " '{print $2}'`
     # TODO: confirm is valid ipv4 addr
 
     # Now that we have the remote IP, figure out what IP this remote
