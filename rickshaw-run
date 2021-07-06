@@ -538,7 +538,7 @@ sub build_container_image {
             }
             if ($workshop_rc > 0) {
                 printf "Workshop build failed:\n";
-                printf "%s\n", join("", @workshop_output);
+                printf "%s", join("\n", @workshop_output);
                 exit 1;
             }
             debug_log(sprintf "%s\n", join("", @workshop_output));
