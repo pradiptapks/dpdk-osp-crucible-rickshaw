@@ -1,0 +1,10 @@
+    {
+      "name": "python38",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "rh-python38",
+          "rh-python38-python-pip"
+        ]
+      }
+    }

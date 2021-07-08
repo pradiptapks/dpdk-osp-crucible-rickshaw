@@ -1,0 +1,9 @@
+    {
+      "name": "scl",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "centos-release-scl"
+        ]
+      }
+    }

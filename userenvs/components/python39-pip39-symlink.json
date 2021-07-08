@@ -1,0 +1,20 @@
+    {
+      "name": "python39",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "python39",
+          "python39-pip"
+        ]
+      }
+    },
+    {
+      "name": "python-symlink",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "rm /usr/bin/python3",
+          "ln -s /usr/bin/python3.9 /usr/bin/python3"
+        ]
+      }
+    }

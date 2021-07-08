@@ -1,0 +1,9 @@
+    {
+      "name": "epel7",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "yum -v -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
+        ]
+      }
+    }

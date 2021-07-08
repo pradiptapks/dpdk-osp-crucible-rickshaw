@@ -20,12 +20,12 @@
   },
   "requirements": [
     {
-      "name": "python3",
+      "name": "python39",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "python3",
-          "python3-pip"
+          "python39",
+          "python39-pip"
         ]
       }
     },
@@ -50,7 +50,7 @@
       }
     },
     {
-      "name": "compiling",
+      "name": "core-compiling",
       "type": "distro",
       "distro_info": {
         "packages": [

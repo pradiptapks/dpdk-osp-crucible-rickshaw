@@ -20,12 +20,12 @@
   },
   "requirements": [
     {
-      "name": "python3",
+      "name": "python38",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "rh-python36",
-          "rh-python36-python-pip"
+          "rh-python38",
+          "rh-python38-python-pip"
         ]
       }
     },
@@ -34,13 +34,13 @@
       "type": "manual",
       "manual_info": {
         "commands": [
-          "alternatives --install /usr/bin/python3 python3 /opt/rh/rh-python36/root/usr/bin/python3 1",
-          "alternatives --install /usr/bin/pip3 pip3 /opt/rh/rh-python36/root/usr/bin/pip3 1"
+          "alternatives --install /usr/bin/python3 python3 /opt/rh/rh-python38/root/usr/bin/python3 1",
+          "alternatives --install /usr/bin/pip3 pip3 /opt/rh/rh-python38/root/usr/bin/pip3 1"
         ]
       }
     },
     {
-      "name": "compiling",
+      "name": "core-compiling",
       "type": "distro",
       "distro_info": {
         "packages": [
@@ -50,6 +50,15 @@
           "autoconf",
           "automake",
           "make"
+        ]
+      }
+    },
+    {
+      "name": "epel7",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "yum -v -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
         ]
       }
     },
