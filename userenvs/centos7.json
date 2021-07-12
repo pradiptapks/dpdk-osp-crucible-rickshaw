@@ -20,21 +20,30 @@
   },
   "requirements": [
     {
-      "name": "python3",
+      "name": "scl",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "python3",
-          "python3-pip"
+          "centos-release-scl"
         ]
       }
     },
     {
-      "name": "epel",
+      "name": "python38",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "epel-release"
+          "rh-python38",
+          "rh-python38-python-pip"
+        ]
+      }
+    },
+    {
+      "name": "epel7",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "yum -v -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
         ]
       }
     },
@@ -98,6 +107,16 @@
             "/usr/sbin/ip -V"
           ]
         }
+      }
+    },
+    {
+      "name": "post-python",
+      "type": "manual",
+      "manual_info": {
+        "commands": [
+          "alternatives --install /usr/bin/python3 python3 /opt/rh/rh-python38/root/usr/bin/python3 1",
+          "alternatives --install /usr/bin/pip3 pip3 /opt/rh/rh-python38/root/usr/bin/pip3 1"
+        ]
       }
     }
   ]

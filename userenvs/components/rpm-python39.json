@@ -1,10 +1,10 @@
     {
-      "name": "python3",
+      "name": "python39",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "rh-python36",
-          "rh-python36-python-pip"
+          "python39",
+          "python39-pip"
         ]
       }
     }

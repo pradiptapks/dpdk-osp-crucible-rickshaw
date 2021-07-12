@@ -45,12 +45,12 @@
           "findutils",
           "hostname",
           "iputils-ping",
-          "iproute"
+          "iproute2"
         ]
       }
     },
     {
-      "name": "compiling",
+      "name": "core-compiling",
       "type": "distro",
       "distro_info": {
         "packages": [
