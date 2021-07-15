@@ -1,9 +1,0 @@
-    {
-      "name": "src-compiling",
-      "type": "manual",
-      "distro_info": {
-        "packages": [
-          "flex", "bison", "libnuma"
-        ]
-      }
-    }
