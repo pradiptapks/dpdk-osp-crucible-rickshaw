@@ -62,6 +62,25 @@
           "make"
         ]
       }
+    },
+    {
+      "name": "numactl_src",
+      "type": "source",
+      "source_info": {
+        "url": "https://github.com/numactl/numactl/releases/download/v2.0.14/numactl-2.0.14.tar.gz",
+        "filename": "numactl-2.0.14.tar.gz",
+        "commands": {
+          "unpack": "tar -xzf numactl-2.0.14.tar.gz",
+          "get_dir": "tar -tzf numactl-2.0.14.tar.gz | head -n 1",
+          "commands": [
+            "./configure",
+            "make",
+            "make install",
+            "ldconfig",
+            "numactl -H"
+          ]
+        }
+      }
     }
   ]
 }
