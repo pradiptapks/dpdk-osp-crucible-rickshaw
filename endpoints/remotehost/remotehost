@@ -408,14 +408,7 @@ function launch_osruntime() {
         fi
         set -u
         if [ $numa_node -gt -1 ]; then
-            do_ssh $user@$host "numactl -H"
-            ssh_rc=$?
-            if [ $ssh_rc -gt 0 ]; then
-                echo "running numactl failed"
-                exit 1
-            else
-                base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
-            fi
+            base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
         fi
 
         if [ $count -gt 1 ]; then
