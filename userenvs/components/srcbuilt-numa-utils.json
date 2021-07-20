@@ -8,7 +8,7 @@
 		            "unpack": "tar -xzf numactl-2.0.14.tar.gz",
 		            "get_dir": "tar -tzf numactl-2.0.14.tar.gz | head -n 1",
 		            "commands": [
-			            "./configure",
+			            "./configure --prefix=/usr",
 			            "make",
 			            "make install",
 			            "ldconfig",
