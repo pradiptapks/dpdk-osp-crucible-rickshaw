@@ -531,17 +531,17 @@ sub build_container_image {
             ($workshop_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_cmd);
             my @workshop_output = split(/\n/, $workshop_output);
             if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop.out")) {
-                printf WORKSHOP_LOG_FH "%s", join("\n", @workshop_output);
+                printf WORKSHOP_LOG_FH "%s\n", join("\n", @workshop_output);
                 close(WORKSHOP_LOG_FH);
             } else {
                 printf "Failed to open " . $run_dir . "/workshop.out for writing\n";
             }
             if ($workshop_rc > 0) {
                 printf "Workshop build failed:\n";
-                printf "%s", join("\n", @workshop_output);
+                printf "%s\n", join("\n", @workshop_output);
                 exit 1;
             }
-            debug_log(sprintf "%s\n", join("", @workshop_output));
+            debug_log(sprintf "%s\n", join("\n", @workshop_output));
             # Becasue there can be a lot of non-JSON debug/info stuff in the output before the
             # actual JSON, find the JSON by starting at the end and scanning backwards
             my $workshop_json = "";
@@ -931,7 +931,7 @@ sub validate_endpoints() {
         my @output = grep(!/^#/, split(/\n/, $output));
         if ($cmd_rc > 0) {
             die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
-                " validation returned non-zero exit code:\n" . join("\n", @output);
+                " validation returned non-zero exit code:\n" . join("\n", @output) . "\n";
         }
         # Output from endpoint's validation should be 1 or more lines with "client" or "server"
         # followed by 1 or more positive integers representing the client/server IDs this
