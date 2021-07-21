@@ -182,6 +182,8 @@ sub roadblock_leader {
                     $follower_param;
             debug_log(sprintf "roadblock leader command:%s\n", $cmd);
             ($cmd, my $output, $rc) = run_cmd($cmd);
+            debug_log(sprintf "roadblock leader rc:%s\n", $rc);
+            debug_log(sprintf "roadblock leader output:\n%s\n", join("\n", $output));
             ($file_rc, $_[0]) = get_json_file($msgs_file);
             if ($file_rc > 0 or ! defined $_[0]) {
                 print "Could not open the message file\n";
@@ -969,10 +971,10 @@ sub validate_endpoints() {
     }
     my $server_required = 0;
     if (exists $bench_config{'server'}) {
-        debug_log("server is present");
+        debug_log("server is present\n");
         $server_required = 1;
         if (exists $bench_config{'server'}{'required'} && ! $bench_config{'server'}{'required'}) {
-            debug_log("server is present but not required");
+            debug_log("server is present but not required\n");
             $server_required = 0;
         } elsif (! exists $bench_config{'server'}{'required'}) {
             $bench_config{'server'}{'required'} = 1;
