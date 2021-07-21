@@ -969,10 +969,10 @@ sub validate_endpoints() {
     }
     my $server_required = 0;
     if (exists $bench_config{'server'}) {
-        debug_log("server is present");
+        debug_log("server is present\n");
         $server_required = 1;
         if (exists $bench_config{'server'}{'required'} && ! $bench_config{'server'}{'required'}) {
-            debug_log("server is present but not required");
+            debug_log("server is present but not required\n");
             $server_required = 0;
         } elsif (! exists $bench_config{'server'}{'required'}) {
             $bench_config{'server'}{'required'} = 1;
