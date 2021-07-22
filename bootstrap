@@ -141,6 +141,11 @@ while true; do
             export max_sample_failures="$1"
             shift;
             ;;
+        --max-rb-attempts)
+            shift;
+            export max_rb_attempts="$1"
+            shift;
+            ;;
         --)
             shift;
             break;
@@ -153,9 +158,14 @@ while true; do
     esac
 done
 
+if [ -z "$max_rb_attempts" ]; then
+    max_rb_attempts=1
+    echo "[WARNING] --max-rb-attempts was not used, so setting to default of $max_rb_attempts"
+fi
+
 if [ -z "$max_sample_failures" ]; then
     max_sample_failures=3
-    echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
+    echo "[WARNING] --max-sample-failures was not used, so setting to default of $max_sample_failures"
 fi
 
 export ssh_id_file="/tmp/rickshaw_id.rsa"
@@ -205,7 +215,8 @@ echo
 
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
 if [ -e /usr/local/bin/client-server-script ]; then
-    /usr/local/bin/client-server-script
+    echo "Execing client-server-script:"
+    exec /usr/local/bin/client-server-script
 else
     exit_error "Could not find client-server-script"
 fi

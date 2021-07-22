@@ -13,7 +13,7 @@ rb_exit_abort=4
 rb_exit_nonet=5
 rb_exit_critical=6
 default_timeout=240
-max_rb_attempts=5
+max_rb_attempts=""
 endpoint_deploy_timeout=360
 client_server_start_timeout=720
 endpoint_move_data_timeout=300
@@ -45,6 +45,7 @@ function exit_error() {
 function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
+    local longopts+=",max-rb-attempts:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -98,6 +99,11 @@ function process_opts() {
                 max_sample_failures="$1"
                 shift;
                 ;;
+	    --max-rb-attempts)
+		shift;
+		max_rb_attempts="$1"
+		shift;
+		;;
             --)
                 shift;
                 break;
@@ -114,6 +120,12 @@ if [ -z "$max_sample_failures" ]; then
     max_sample_failures=3
     if [ "do_validate" == "0" ]; then
         echo "[WARNING] --max-sample-failures was not used, so setting to default of $max_sample_failures"
+    fi
+fi
+if [ -z "$max_rb_attempts" ]; then
+    max_rb_attempts=1
+    if [ "do_validate" == "0" ]; then
+        echo "[WARNING] --max-rb-attempts was not used, so setting to default of $max_rb_attempts"
     fi
 fi
 

@@ -419,6 +419,7 @@ function launch_osruntime() {
             base_cmd+=" --endpoint=remotehost"
             base_cmd+=" --osruntime=$osruntime"
             base_cmd+=" --max-sample-failures=$max_sample_failures"
+            base_cmd+=" --max-rb-attempts=$max_rb_attempts"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
             if [ $numa_node -gt -1 ]; then
                 base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
@@ -447,6 +448,7 @@ function launch_osruntime() {
             echo "endpoint=remotehost"                      >> ${endpoint_run_dir}/${env_file}
             echo "osruntime=$osruntime"                     >> ${endpoint_run_dir}/${env_file}
             echo "max_sample_failures=$max_sample_failures" >> ${endpoint_run_dir}/${env_file}
+            echo "max_rb_attempts=$max_rb_attempts"         >> ${endpoint_run_dir}/${env_file}
             echo "ssh_id=${ssh_id}"                         >> ${endpoint_run_dir}/${env_file}
 
             for cs_rb_opt in $cs_rb_opts; do
@@ -459,7 +461,7 @@ function launch_osruntime() {
             done
 
             if pushd ${endpoint_run_dir} >/dev/null; then
-                echo "Copying ${endpoint_run_dir}/${env_file} to ${user}@${host}:/tmp"
+                echo "Copying ${endpoint_run_dir}/${env_file} to ${user}@${host}:${remote_cfg_dir}"
                 do_scp "${env_file}" "${user}@${host}:${remote_cfg_dir}"
 
                 popd >/dev/null

@@ -9,7 +9,6 @@ test -e /etc/profile && . /etc/profile
 PATH="/usr/local/bin:$PATH"
 roadblock_bin="/usr/local/bin/roadblock.py"
 use_roadblock=1
-max_rb_attempts=5
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_nonet=5
@@ -178,6 +177,7 @@ echo
 function process_opts() {
     longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
     longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,endpoint:,osruntime:,max-sample-failures:"
+    longopts+=",max-rb-attempts:"
     opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "\nUnrecognized option specified: $@\n\n"
@@ -235,6 +235,11 @@ function process_opts() {
                 max_sample_failures="$1"
                 shift;
                 ;;
+            --max-rb-attempts)
+                shift;
+                max_rb_attempts="$1"
+                shift;
+                ;;
             --)
                 shift;
                 break;
@@ -249,8 +254,12 @@ function process_opts() {
 }
 
 function validate_core_env() {
+    echo
+    echo "core environment:"
     if [ -z "$rickshaw_host" ]; then
-	    exit_error "Exiting due to rickshaw host not being set"
+	exit_error "Exiting due to rickshaw host not being set"
+    else
+	echo "rickshaw_host=${rickshaw_host}"
     fi
     if [ -z "$roadblock_id" ]; then
         echo "Cannot use roadblock for synchronizaton because an ID was not provided"
@@ -260,6 +269,7 @@ function validate_core_env() {
         echo "Cannot use roadblock for synchronizaton because a password was not provided"
         use_roadblock=0
     fi
+    echo "use_roadblock=${use_roadblock}"
     if [ "$use_roadblock" == "1" ]; then
         if [ ! -e $roadblock_bin ]; then
             exit_error "Could not find roadblock binary: $roadblock_bin"
@@ -274,13 +284,24 @@ function validate_core_env() {
         exit_error 'cs_label "'$cs_label'" does not adhere to regex /^(\w+)-\d+$/'
     fi
 
+    if [ -z "${max_rb_attempts}" ]; then
+	max_rb_attempts=1
+	echo "[WARNING] --max-rb-attempts was not used, so setting to default of $max_rb_attempts"
+    else
+	echo "max_rb_attempts=${max_rb_attempts}"
+    fi
     if [ -z "$max_sample_failures" ]; then
         max_sample_failures=3
         echo "[WARNING] --max-sample-failures was not used, so seeting to default of $max_sample_failures"
+    else
+	echo "max_sample_failures=${max_sample_failures}"
     fi
     if [ -z "$endpoint_run_dir" ]; then
         exit_error "The endpoint run directory (--endpoint-run-dir) was not defined"
+    else
+	echo "endpoint_run_dir=${endpoint_run_dir}"
     fi
+    echo
 }
 
 function setup_core_env() {
