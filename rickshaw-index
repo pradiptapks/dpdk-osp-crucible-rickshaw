@@ -246,6 +246,8 @@ my $tool_dir = $run_dir . "/tool-data";
 $result_schema_file = $rickshaw_project_dir . "/schema/run.json";
 $bench_metric_schema_file = $rickshaw_project_dir . "/schema/bench-metric.json";
 
+# All ES document creation starts with the rickshaw-result.json which is a product of running
+# rickshaw-run, rickshaw-postprocess-bench, and rickshaw-postprocess-tools
 my $result_file = $run_dir . "/rickshaw-run.json";
 debug_log(sprintf "Opening %s\n", $result_file);
 ($file_rc, my $result_ref) = get_json_file($result_file, $result_schema_file);
@@ -303,19 +305,19 @@ if (ref $idx_resp_ref eq ref [] ) {
     }
 } else {
     printf "Could not find any indices in ES\n";
+    exit 1;
 }
 
 $cdm{'ver'} = $latest_ver;
 if (not grep(/^$cdm{'ver'}$/, @suported_cdm_vers)) {
     printf "The version of CDM used in ES [%s] is not one that is supported by rickshaw-index: [%s]\n",
            $cdm{'ver'}, join(" ",  @suported_cdm_vers);
+    printf "Either use an older version of CDM or (ideally) find a newer version of rickshaw which supports %s\n", $cdm{'ver'};
 }
-#print $idx_resp;
-
 printf "Exporting from %s to elasticsearch documents and POSTing to localhost:9200\n", $result_file;
 printf "Run ID: %s\n", $result{'run-id'};
-my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
-
+my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/_search/",
+                            '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
 debug_log(sprintf("response:\n%s\n", $response));
 my $response_ref = $coder->decode($response);
 debug_log(sprintf "response" . Dumper $response_ref);
@@ -326,7 +328,6 @@ if ($$response_ref{'hits'}{'total'}{'value'} > 0) {
 }
 my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
 my $run_doc_json = $coder->encode(\%run_doc);
-my $curl_cmd = "curl --stderr /dev/null -H \'Content-Type: application/json\'";
 if (-e $tool_dir) {
     my $run_doc_ref = $coder->decode($run_doc_json);
     if (opendir(TOOLDIR, $tool_dir)) {
