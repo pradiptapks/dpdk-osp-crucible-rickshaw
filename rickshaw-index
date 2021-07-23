@@ -34,9 +34,10 @@ use toolbox::logging;
 
 $toolbox::logging::debug = 0;
 
+my @suported_cdm_vers = ('v5dev', 'v6dev');
 my %result;
 my $base_run_dir;
-my %cdm = ( 'ver' => 'v5dev' );
+my %cdm = ( 'ver' => '' );
 my $coder = JSON::XS->new->canonical;
 my $result_schema_file;
 my $bench_metric_schema_file;
@@ -107,7 +108,7 @@ sub index_metrics {
         my @names_list = sort(keys(%{ $metr_desc_doc{'metric_desc'}{'names'} }));
         $metr_desc_doc{'metric_desc'}{'names-list'} = \@names_list;
         my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
-        http_request("POST", "localhost:9200", "/cdmv5dev-metric_desc/_doc/", $metr_desc_doc_json);
+        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
     }
     my $count = 0;
     my $ndjson = "";
@@ -128,7 +129,7 @@ sub index_metrics {
             $ndjson .= sprintf "%s\n", $metr_data_doc_json;
             $count++;
             if ($count >= 1000) {
-                http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
+                http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
                 $ndjson = "";
                 $count = 0;
             }
@@ -145,7 +146,7 @@ sub index_metrics {
         }
     }
     if ($count > 0) {
-        http_ndjson_request("POST", "localhost:9200", "/cdmv5dev-metric_data/_doc/_bulk", $ndjson);
+        http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
     }
     close $metr_csv_fh;
     if (defined $primary_metric) {
@@ -166,9 +167,9 @@ sub http_request {
     my $response = $client->responseContent();
     debug_log(sprintf "Response:\n%s\n\n", $response);
     my $resp_ref = $coder->decode($response);
-        if (exists $$resp_ref{'error'}) {
-            printf "ERROR:\n%s\n", $response;
-        }
+    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'error'}) {
+        printf "ERROR:\n%s\n", $response;
+    }
     return $response;
 }
 
@@ -183,7 +184,10 @@ sub http_ndjson_request {
     debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
     $client->request($method, $req, $body, \%req_header);
     my $response = $client->responseContent();
-    #debug_log($response);
+    my $resp_ref = $coder->decode($response);
+    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'errors'} and $$resp_ref{'errors'} != 0) {
+        printf "ERROR:\n%s\n", $response;
+    }
     return $response;
 }
 
@@ -267,9 +271,50 @@ for my $field (qw(host name email desc)) {
     }
 }
 
+# Find the newest CDM version and verify all the required indices are present
+my $idx_resp = http_request("GET", "localhost:9200", "_cat/indices?format=json", '');
+my $idx_resp_ref = $coder->decode($idx_resp);
+my $latest_ver;
+if (ref $idx_resp_ref eq ref [] ) {
+    my %shortnames;
+    my %fullnames;
+    my %vers;
+    foreach my $idx (@{ $idx_resp_ref } ) {
+        my $idx_name = $$idx{'index'};
+        if ($idx_name =~ /cdm(v\d+.+)-(.+)/) {
+            my $ver = $1;
+            my $name = $2;
+            $vers{$ver} = 1;
+            $shortnames{$name} = 1;
+            $fullnames{$idx_name} = 1;
+        }
+    }
+    my @sorted_vers = sort(keys(%vers));
+    $latest_ver = $sorted_vers[0];
+    printf "Latest CDM version found in local ES instacne is %s\n", $latest_ver;
+    foreach my $req_name ("run", "iteration", "tag", "param", "sample", "period", "metric_desc", "metric_data") {
+        my $complete_index_name = "cdm" . $latest_ver . "-" . $req_name;
+        if (! exists $fullnames{$complete_index_name}) {
+            printf "Could not find index %s in Elastic\n", $complete_index_name;
+            exit 1;
+        } else {
+            printf "Found index %s\n", $req_name;
+        }
+    }
+} else {
+    printf "Could not find any indices in ES\n";
+}
+
+$cdm{'ver'} = $latest_ver;
+if (not grep(/^$cdm{'ver'}$/, @suported_cdm_vers)) {
+    printf "The version of CDM used in ES [%s] is not one that is supported by rickshaw-index: [%s]\n",
+           $cdm{'ver'}, join(" ",  @suported_cdm_vers);
+}
+#print $idx_resp;
+
 printf "Exporting from %s to elasticsearch documents and POSTing to localhost:9200\n", $result_file;
 printf "Run ID: %s\n", $result{'run-id'};
-my $response = http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
+my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/_search/", '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
 
 debug_log(sprintf("response:\n%s\n", $response));
 my $response_ref = $coder->decode($response);
@@ -331,7 +376,7 @@ if (exists $result{'tags'}) {
         $tag_doc{'tag'}{'name'} = $$tag{'name'};
         $tag_doc{'tag'}{'val'} = $$tag{'val'};
         my $tag_doc_json = $coder->encode(\%tag_doc);
-        http_request("POST", "localhost:9200", "/cdmv5dev-tag/_doc/", $tag_doc_json);
+        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-tag/_doc/", $tag_doc_json);
     }
 }
 if (exists $result{'iterations'}) {
@@ -352,9 +397,10 @@ if (exists $result{'iterations'}) {
             $param_doc{'param'}{'arg'} = $$param{'arg'};
             $param_doc{'param'}{'val'} = $$param{'val'};
             my $param_doc_json = $coder->encode(\%param_doc);
-            http_request("POST", "localhost:9200", "/cdmv5dev-param/_doc/", $param_doc_json);
+            http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-param/_doc/", $param_doc_json);
         }
-        my $this_iter_dir = $iter_subdir . "/iteration-" . $iter_num;
+        my $this_iter_path = "iteration-" . $iter_num;
+        my $this_iter_dir = $iter_subdir . "/" . $this_iter_path;
         my $iter_status;
         if (-d $run_dir . "/" . $this_iter_dir) {
             $iter_status = "pass";
@@ -383,13 +429,16 @@ if (exists $result{'iterations'}) {
                         $sample{'status'} = $samp_status;
                         my $samp_doc_ref = $coder->decode($iter_doc_json);
                         my %samp_doc = %$samp_doc_ref;
+                        my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
                         $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
                         $samp_doc{'sample'}{'num'} = $sample_num;
+                        if ($cdm{'ver'} eq "v6dev") {
+                            $samp_doc{'sample'}{'path'} = $this_samp_dir;
+                        }
                         $samp_doc{'sample'}{'status'} = $sample{'status'};
                         my $samp_doc_json = $coder->encode(\%samp_doc);
-                        http_request("POST", "localhost:9200", "/cdmv5dev-sample/_doc/", $samp_doc_json);
+                        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-sample/_doc/", $samp_doc_json);
                         my @cons_periods; # periods [of the same name] from clients/servers get merged here
-                        my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
                         debug_log("Working on " . $this_samp_dir . "\n");
                         if (opendir(my $samp_dh, $run_dir . "/" . $this_samp_dir)) {
                             my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
@@ -493,7 +542,7 @@ if (exists $result{'iterations'}) {
                             $sample{'periods'} = \@cons_periods;
                             foreach my $per (@cons_periods) {
                                 my $this_per_doc_json = $coder->encode($per);
-                                http_request("POST", "localhost:9200", "/cdmv5dev-period/_doc/", $this_per_doc_json);
+                                http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-period/_doc/", $this_per_doc_json);
                             }
                             push(@samples, \%sample);
                         } #opendir samp
@@ -514,8 +563,11 @@ if (exists $result{'iterations'}) {
                 $iter_doc{'iteration'}{'primary-period'} = $primary_period;
                 $iter_doc{'iteration'}{'num'} = $iter_num;
                 $iter_doc{'iteration'}{'status'} = $iter_status;
+                if ($cdm{'ver'} eq "v6dev") {
+                    $iter_doc{'iteration'}{'path'} = $this_iter_dir;
+                }
                 $iter_doc_json = $coder->encode(\%iter_doc);
-                http_request("POST", "localhost:9200", "/cdmv5dev-iteration/_doc/", $iter_doc_json);
+                http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-iteration/_doc/", $iter_doc_json);
             } else {
                 printf "Skipping iteration %d\n", $iter_num;
             } #opendir iter
@@ -527,5 +579,5 @@ if (exists $result{'iterations'}) {
 # Rebuild run doc with newly acquired info and index
 %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
 $run_doc_json = $coder->encode(\%run_doc);
-http_request("POST", "localhost:9200", "/cdmv5dev-run/_doc/", $run_doc_json);
+http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/", $run_doc_json);
 print "Indexing to ES complete\n";
