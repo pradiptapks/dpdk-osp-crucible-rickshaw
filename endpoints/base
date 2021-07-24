@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 #set -u
 
 # Shared init and functions for endpoints
@@ -99,11 +99,11 @@ function process_opts() {
                 max_sample_failures="$1"
                 shift;
                 ;;
-	    --max-rb-attempts)
-		shift;
-		max_rb_attempts="$1"
-		shift;
-		;;
+            --max-rb-attempts)
+                shift;
+                max_rb_attempts="$1"
+                shift;
+                ;;
             --)
                 shift;
                 break;
@@ -627,17 +627,17 @@ function is_ip() {
     local ip=$1; shift
 
     if echo "$ip" | egrep --silent '[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}'; then
-	return 0
+        return 0
     else
-	return 1
+        return 1
     fi
 }
 
 function get_controller_ip() {
     local host=$1; shift
     if is_ip $host; then
-	echo $host
-	return
+        echo $host
+        return
     fi
     local ip=`host $host | grep "has address" | head -1 | awk -F"has address " '{print $2}'`
     # TODO: confirm is valid ipv4 addr
