@@ -91,10 +91,10 @@ my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
 my $utility_schema_file = $rickshaw_project_dir . "/schema/utility.json";
 my $bench_params_schema_file = $rickshaw_project_dir . "/schema/bench-params.json";
+my $roadblock_exit_success = 0;
 my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
-my $roadblock_exit_nofile = 5;
-my $roadblock_exit_critical = 6;
+my $roadblock_exit_input = 2;
 
 my @tests;
 my %clients_servers;
@@ -168,7 +168,7 @@ sub roadblock_leader {
         (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
         chomp $date;
         printf "Roadblock: %s ", $date;
-        while ($attempts < $run{'max-rb-attempts'} and $rc != 0 and $rc != $roadblock_exit_abort) {
+        while ($attempts < $run{'max-rb-attempts'} and $rc != $roadblock_exit_success and $rc != $roadblock_exit_abort) {
             $attempts++;
             my $this_uuid = $attempts . ":" . $uuid;
             printf "role: %s ", $role;
@@ -189,12 +189,13 @@ sub roadblock_leader {
                 print "Could not open the message file\n";
                 exit 1;
             }
-            # Becasue roadblock leader does not exit with right code
-            if ( my $g_output = grep(/(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)/, $output) ) {
-                $rc = $roadblock_exit_abort;
+            if ( $rc != $roadblock_exit_success) {
                 printf "roadblock output BEGIN\n";
-                printf "%s", $output;
+                printf "%s", join("\n", $output);
+                printf "roadblock rc: %d\n", $rc;
                 printf "roadblock output END\n";
+            }
+            if ( $rc == $roadblock_exit_abort ) {
                 printf "roadblock messages\n";
                 foreach my $msg (@{ $_[0]{'received'} }) {
                     if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
@@ -202,25 +203,8 @@ sub roadblock_leader {
                     }
                 }
             }
-	    my $g_output;
-            if ( $g_output = grep(/(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)/, $output) ) {
-                $rc = $roadblock_exit_timeout;
-                printf "roadblock output BEGIN\n";
-                printf "%s", $output;
-                printf "roadblock output END\n";
-            } elsif ( $g_output = grep(/(Could\snot\sopen\smessage\slog)/, $output) ) {
-                $rc = $roadblock_exit_nofile;
-                printf "roadblock output BEGIN\n";
-                printf "%s", $output;
-                printf "roadblock output END\n";
-            } elsif ( $g_output = grep(/(CRITICAL)/, $output) ) {
-                $rc = $roadblock_exit_critical;
-                printf "roadblock output BEGIN\n";
-                printf "%s", $output;
-                printf "roadblock output END\n";
-            }
         }
-        if ($rc == $roadblock_exit_abort or $rc == 0) {
+        if ($rc == $roadblock_exit_abort or $rc == $roadblock_exit_success) {
             ($file_rc, $_[0]) = get_json_file($msgs_file);
             if ($file_rc > 0 or ! defined $_[0]) {
                 print "Could not open the message file\n";
