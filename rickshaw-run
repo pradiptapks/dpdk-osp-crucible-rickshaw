@@ -478,15 +478,44 @@ sub build_container_image {
         my $image_md5 = $md5->hexdigest;
         my $workshop_image = $userenv . "_" . $image_md5;
         my $image_tag = $image_md5;
-        $image_url = $run{'reg-repo'} . ":" . $image_tag;
+        my $skip_registry_auth = 0;
         my $image_found = 0;
-        $cmd = "skopeo inspect docker://" . $image_url . " 2>&1";
+        my $output;
+        $image_url = $run{'reg-repo'} . ":" . $image_tag;
+        if ($image_url =~ /^dir:/) {
+            $image_url =~ /^dir:(.*)/;
+            my $image_dir = $1;
+            if (! -d $image_dir) {
+                printf "Creating local registry directory: %s\n", $image_dir;
+                make_path($image_dir, { verbose => 1, error => \my $err } );
+                if ($err && @$err) {
+                    print "make_path: encountered errors:\n";
+                    for my $diag (@$err) {
+                        print Dumper $diag;
+                    }
+                }
+            }
+        }
+        if ($run{'reg-auth'} eq "") {
+            printf "Disabling registry authorization due to empty 'reg-auth' variable\n";
+            $skip_registry_auth = 1;
+        }
+        my $skopeo_url;
+        if (($image_url =~ /^dir:/) || ($image_url =~ /^docker:\/\//)) {
+            $skopeo_url = $image_url;
+        } else {
+            $skopeo_url = "docker://" . $image_url;
+        }
+        $cmd = "skopeo inspect " . $skopeo_url . " 2>&1";
         debug_log(sprintf "running: %s\n", $cmd);
-        ($cmd, my $output, $cmd_rc) = run_cmd($cmd);
-        my $push_cmd = "buildah --authfile " . $run{'reg-auth'} . " push localhost/workshop/$workshop_image $image_url";
+        ($cmd, $output, $cmd_rc) = run_cmd($cmd);
+        my $push_cmd = "buildah";
+        if (! $skip_registry_auth) {
+            $push_cmd .= " --authfile " . $run{'reg-auth'};
+        }
+        $push_cmd .= " push localhost/workshop/$workshop_image $image_url";
         my $rmi_cmd = "buildah rmi localhost/workshop/$workshop_image";
-        my $rc = $?;
-        if ($rc ==  0) {
+        if ($cmd_rc == 0) {
             printf "Image was found at %s:\n", $image_url;
             debug_log(sprintf "%s\n", $output) if defined $output;
             $image_found = 1;
@@ -500,8 +529,8 @@ sub build_container_image {
                 printf "Local workshop image was also not found:\n";
                 printf "%s\n", $output;
             } else {
-                printf "Found local workshop image, pushing to %s\n", $image_url;
                 $image_found = 1;
+                printf "Found local workshop image, pushing to %s\n", $image_url;
                 print $push_cmd . "\n";
                 ($push_cmd, my $output, my $rc) = run_cmd($push_cmd);
                 if ($rc > 0) {
@@ -540,7 +569,8 @@ sub build_container_image {
             my $coder = JSON::XS->new;
             my $workshop_ref = $coder->decode($workshop_json);
             $workshop_image_id = $$workshop_ref[0]{'id'};
-            printf "Workshop complete.  Now pushing to container registry with this command:\n%s\n", $push_cmd;
+            printf "Workshop complete.  New image has image id of '%s'.\n", $workshop_image_id;
+            printf "Now pushing to container registry with this command:\n%s\n", $push_cmd;
             ($push_cmd, my $output, my $buildah_rc) = run_cmd($push_cmd);
             if ($buildah_rc > 0) {
                 printf "Pushing workshop image failed:\n%s\n", $output;
