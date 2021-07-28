@@ -1,6 +1,6 @@
 #!/bin/bash
-# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 exec 2>&1
 test -e /etc/profile && . /etc/profile
 
@@ -9,10 +9,10 @@ test -e /etc/profile && . /etc/profile
 PATH="/usr/local/bin:$PATH"
 roadblock_bin="/usr/local/bin/roadblock.py"
 use_roadblock=1
+rb_exit_success=0
 rb_exit_timeout=3
 rb_exit_abort=4
-rb_exit_nonet=5
-rb_exit_critical=6
+rb_exit_input=2
 default_timeout=240
 client_server_script_timeout=720
 runtime_padding=180
@@ -70,37 +70,20 @@ function do_roadblock() {
     local attempts=0
     local rc=99
     if [ "$use_roadblock" == "1" ]; then
-        while [ $attempts -lt $max_rb_attempts -a $rc -ne 0 -a $rc -ne $rb_exit_abort ]; do
-	        let attempts=$attempts+1
+        while [ $attempts -lt $max_rb_attempts -a $rc -ne $rb_exit_success -a $rc -ne $rb_exit_abort ]; do
+            let attempts=$attempts+1
             echo "attempt number: $attempts"
             echo "uuid: $attempts:$uuid"
-            #echo "going to run this roadblock command: $cmd"
-            local output=`$cmd --uuid=$attempts:$uuid 2>&1`
-            rc=$?
+            local rb_cmd="$cmd --uuid=$attempts:$uuid"
+            echo "going to run this roadblock command: ${rb_cmd}"
             echo "roadblock output BEGIN"
-            printf "%s\n" "$output"
+            ${rb_cmd}
+            rc=$?
             echo "roadblock output END"
             echo "roadblock exit code: $rc"
-            if echo $output | grep -q -P -- '(Name\sor\sservice\snot\sknown)'; then
-                rc=$rb_exit_nonet
-                #rb_exit_msg="Roadblock error: $output"
-            elif echo $output | grep -q -P -- '(Exiting\swith\sabort|Roadblock\sCompleted\swith\san\sAbort)'; then
-                rc=$rb_exit_abort
-                #rb_exit_msg="Roadblock error: $output"
-            elif echo $output | grep -q -P -- '(The\sroadblock\shas\stimed\sout|Roadblock\sfailed\swith\stimeout)'; then
-                rc=$rb_exit_timeout
-                #rb_exit_msg="Roadblock error: $output"
-            elif echo $output | grep -q -P -- '(CRITICAL)'; then
-                rc=$rb_exit_critical
-                #rb_exit_msg="Roadblock error: $output"
-            fi
-            #if [ $rc -gt 0 ]; then
-                #echo "Roadblock exit code is non-zero: $rc"
-	            #echo "$rb_exit_msg"
-            #fi
-            if [ -f roadblock-messages ]; then
+            if [ -f ${msgs_file} ]; then
                 echo "messages from roadblock:"
-                cat roadblock-messages
+                cat ${msgs_file}
             fi
         done
 
@@ -113,11 +96,11 @@ function do_roadblock() {
         return 0
     fi
 
-    if [ $rc -eq 0 -o $rc -eq $rb_exit_abort ]; then
+    if [ $rc -eq $rb_exit_success -o $rc -eq $rb_exit_abort ]; then
         echo "returning $rc"
         return $rc
     else
-        exit_error "$rb_exit_msg"
+        exit_error "roadblocked exited with an error: rc=$rc"
     fi
 }
 
