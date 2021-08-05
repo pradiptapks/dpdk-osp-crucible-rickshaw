@@ -439,6 +439,7 @@ if (exists $result{'iterations'}) {
                         $samp_doc{'sample'}{'status'} = $sample{'status'};
                         my $samp_doc_json = $coder->encode(\%samp_doc);
                         http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-sample/_doc/", $samp_doc_json);
+                        put_json_file($run_dir . "/" . $this_samp_dir . "/sample.json", \%samp_doc);
                         my @cons_periods; # periods [of the same name] from clients/servers get merged here
                         debug_log("Working on " . $this_samp_dir . "\n");
                         if (opendir(my $samp_dh, $run_dir . "/" . $this_samp_dir)) {
@@ -541,9 +542,24 @@ if (exists $result{'iterations'}) {
                             } #cs_names
                             $sample_num++;
                             $sample{'periods'} = \@cons_periods;
+                            my $cons_per_id = 0;
                             foreach my $per (@cons_periods) {
                                 my $this_per_doc_json = $coder->encode($per);
                                 http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-period/_doc/", $this_per_doc_json);
+                                put_json_file($run_dir . "/" . $this_samp_dir . "/period-" . $cons_per_id . ".json", $per);
+                                if (defined $primary_period and $$per{'period'}{'name'} eq $primary_period) {
+                                    {
+                                        my $dir = pushd($run_dir . "/" . $this_samp_dir);
+                                        if (-e "period-" . $cons_per_id . ".json.xz") {
+                                            symlink("period-" . $cons_per_id . ".json.xz", "primary-period.json.xz");
+                                        } elsif (-e "period-" . $cons_per_id . ".json") {
+                                            symlink("period-" . $cons_per_id . ".json", "primary-period.json");
+                                        } else {
+                                            printf "WARNING: could not find %s (or with .xz) to link to\n", "period-" . $cons_per_id . ".json";
+                                        }
+                                    }
+                                }
+                                $cons_per_id++;
                             }
                             push(@samples, \%sample);
                         } #opendir samp
@@ -569,6 +585,7 @@ if (exists $result{'iterations'}) {
                 }
                 $iter_doc_json = $coder->encode(\%iter_doc);
                 http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-iteration/_doc/", $iter_doc_json);
+                put_json_file($run_dir . "/" . $this_iter_dir . "/iteration.json", \%iter_doc);
             } else {
                 printf "Skipping iteration %d\n", $iter_num;
             } #opendir iter
