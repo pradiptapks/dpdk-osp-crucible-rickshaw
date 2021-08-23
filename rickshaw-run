@@ -1124,7 +1124,13 @@ sub prepare_bench_tool_engines() {
         $cmd =~ s/\%run-dir\%/$run_dir/g;
         debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
         ($cmd, my $pre_cmd_output, my $cmd_rc) = run_cmd($cmd);
-        debug_log(sprintf "controller pre-script output:\n%s\n", $pre_cmd_output);
+        if ($cmd_rc != 0) {
+            printf "controller pre-script failed with return code = %d\n", $cmd_rc;
+            printf "controller pre-script command: %s\n", $cmd;
+            printf "controller pre-script output:\n%s", join("\n", $pre_cmd_output);
+            exit $cmd_rc;
+        }
+        debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
     copy($rickshaw_project_dir . "/client-server-script", $client_server_run_script)
         || die "Could not copy client-server-script to " . $client_server_run_script .
