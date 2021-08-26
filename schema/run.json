@@ -88,6 +88,10 @@
       "type": "string",
       "pattern": "^.+$"
     },
+    "id": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
     "tags": {
       "type": "array",
       "items": {
@@ -118,7 +122,6 @@
   "required": [
     "email",
     "name",
-    "run-id",
     "test-order",
     "endpoints",
     "iterations",
