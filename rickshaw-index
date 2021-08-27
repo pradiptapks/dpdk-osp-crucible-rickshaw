@@ -5,6 +5,8 @@
 # Author: Andrew Theurer
 #
 # Rickshaw will run a benhcmark for you.  Please see README.md for instructions.
+# rickshaw-index takes the rickshaw-run.json, plus metric data found from benchmark
+# and tools, and indexes that data into elasticsearch.
 
 use strict;
 use warnings;
@@ -48,6 +50,186 @@ sub usage {
     print "--base-run-dir <dir>  (this is a result-file in json that rickshaw-post-process generates)\n";
 }
 
+sub http_request {
+    my $method = shift;
+    my $host = shift;
+    my $req = shift;
+    my $body = shift;
+    my $client = REST::Client->new();
+    $client->setHost($host);
+    my %req_header = ("Content-Type" => "application/json");
+    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
+    $client->request($method, $req, $body, \%req_header);
+    my $response = $client->responseContent();
+    debug_log(sprintf "Response:\n%s\n\n", $response);
+    my $resp_ref = $coder->decode($response);
+    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'error'}) {
+        printf "ERROR:\n%s\n", $response;
+    }
+    return $response;
+}
+
+sub http_ndjson_request {
+    my $method = shift;
+    my $host = shift;
+    my $req = shift;
+    my $body = shift;
+    my $client = REST::Client->new();
+    $client->setHost($host);
+    my %req_header = ("Content-Type" => "application/x-ndjson");
+    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
+    $client->request($method, $req, $body, \%req_header);
+    my $response = $client->responseContent();
+    my $resp_ref = $coder->decode($response);
+    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'errors'} and $$resp_ref{'errors'} != 0) {
+        printf "ERROR:\n%s\n", $response;
+    }
+    return $response;
+}
+
+sub create_es_doc {
+    my $doc_type = shift;
+    my $iter_idx = shift;
+    my $sample_idx = shift;
+    my $period_idx = shift;
+
+    my %es_doc = ( 'cdm' => \%cdm );
+    for my $f (qw(id harness host email name source begin end benchmark)) {
+        if (exists $result{$f} and defined $result{$f}) {
+            $es_doc{'run'}{$f} = $result{$f};
+        }
+    }
+    if ($doc_type eq "tag") {
+        if (defined $iter_idx) {
+            if (exists $result{'tags'} and ref($result{'tags'}) eq ref([]) ) {
+                for my $g (qw(name val)) {
+                    # When creating a tag ES doc, the $iter_idx is repurposed for the tag_idx,
+                    # because a tag is not specific to an iteration
+                    $es_doc{'tag'}{$g} = $result{'tags'}[$iter_idx]{$g};
+                }
+            }
+        } else {
+            print "create_es_doc(%s,%s) tag index missing, exiting\n", $doc_type, $iter_idx;
+        }
+    } elsif ($doc_type eq "param") {
+        if (defined $iter_idx) {
+            if (defined $sample_idx) {
+                if (exists $result{'iterations'}[$iter_idx]{'params'}[$sample_idx] and ref($result{'iterations'}[$iter_idx]{'params'}[$sample_idx]) eq ref({}) ) {
+                    for my $g (qw(status primary-metric primary-period id num path)) {
+                        $es_doc{'iteration'}{$g} = $result{'iterations'}[$iter_idx]{$g};
+                    }
+                    for my $g (qw(arg val)) {
+                        # When creating a tag ES doc, the $sample_idx is repurposed for the param_index,
+                        # because a param is not specific to a sample
+                        $es_doc{'param'}{$g} = $result{'iterations'}[$iter_idx]{'params'}[$sample_idx]{$g};
+                    }
+                }
+            } else {
+                print "create_es_doc(%s,%s,%s) param index missing, exiting\n", $doc_type, "", $sample_idx;
+            }
+        } else {
+            print "create_es_doc(%s,%s,%s) tag index missing, exiting\n", $doc_type, $iter_idx, $sample_idx;
+        }
+    } else {
+        if (defined $iter_idx) {
+            if (exists $result{'iterations'}[$iter_idx]) {
+                for my $g (qw(status primary-metric primary-period id num path)) {
+                    $es_doc{'iteration'}{$g} = $result{'iterations'}[$iter_idx]{$g};
+                }
+                if (defined $sample_idx) {
+                    if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
+                        for my $h (qw(status id num path)) {
+                            $es_doc{'sample'}{$h} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{$h};
+                        }
+                        if (defined $period_idx) {
+                            if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
+                                for my $i (qw(id name begin end)) {
+                                    $es_doc{'period'}{$i} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{'periods'}[$period_idx]{$i};
+                                }
+                            } else {
+                                printf "Period index %d (for sample index %d, iteration index %d) does not exist in rickshaw-result.json\n", $period_idx, $sample_idx, $iter_idx;
+                            }
+                        }
+                    } else {
+                        printf "Sample index %d (for iteration index %d) does not exist in rickshaw-result.json\n", $sample_idx, $iter_idx;
+                    }
+                }
+            } else {
+                printf "Iteration index %d does not exist in rickshaw-result.json\n", $iter_idx;
+            }
+        }
+    }
+    return \%es_doc;
+}
+
+# This is meant to index a specific ES document type with sourcing the info direclty
+# from %result hash (wich is the contents of rickshaw-run.json).  When a tag, param,
+# iteration, sample, or period document is desired, a corresponing index for the respective
+# array(s) in %result is necessary.
+sub index_es_doc {
+    my $doc_type = shift;
+    if (not defined $doc_type) {
+        print "ERROR: doc_type must be defined\n";
+        exit 1;
+    }
+    #TODO match a valid doc_type
+    my $iter = shift;
+    my $sample = shift;
+    my $period = shift;
+    my $es_doc_ref = create_es_doc($doc_type, $iter, $sample, $period);
+    my $es_doc_json = $coder->encode($es_doc_ref);
+    http_request("POST", "localhost:9200", "cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/", $es_doc_json);
+}
+
+sub write_es_doc {
+    my $doc_type = shift;
+    if (not defined $doc_type) {
+        print "ERROR: doc_type must be defined\n";
+        exit 1;
+    }
+    my $dir = shift;
+    my $iter = shift;
+    my $sample = shift;
+    my $period = shift;
+    my $es_doc_ref = create_es_doc($doc_type, $iter, $sample, $period);
+    {
+        my $this_dir = pushd($dir);
+        if ($doc_type eq "period") {
+            my $file = "period-" . $period . ".json";
+            put_json_file($file, $es_doc_ref);
+            if (defined $result{'iterations'}[$iter]{'primary-period'}) {
+                if (defined $result{'iterations'}[$iter]{'samples'}[$sample]{'periods'}[$period]{'name'}) {
+                    if ($result{'iterations'}[$iter]{'primary-period'} eq $result{'iterations'}[$iter]{'samples'}[$sample]{'periods'}[$period]{'name'}) {
+                        my $link_file = "primary-period.json";
+                        if (-e $file . ".xz") {
+                            $file .= ".xz";
+                            $link_file .= ".xz";
+                        }
+                        if ( -e $link_file) {
+                            printf "Deleting stale symlink %s\n", $link_file;
+                            unlink($link_file);
+                        }
+                        printf "Creating a symlink %s -> %s\n", $link_file, $file;
+                        symlink($file, $link_file) || printf "WARNING: could not symlink %s -> %s\n", $link_file, $file;
+                    }
+                } else {
+                    printf "WARNING: period name is not defined for iteration %s sample %d\n", $iter, $sample;
+                }
+            } else {
+                printf "WARNING: iteration %d does not have a primary period defined\n", $iter;
+                print Dumper $result{'iterations'}[$iter];
+            }
+        } else {
+            my $file = $doc_type . ".json";
+            put_json_file($file, $es_doc_ref);
+        }
+    } # popd
+}
+
+# This will index 1 or more metrics, based on what is found in the metric json & csv documents.
+# Unlike index_es_doc(), index_metrics() needs a "base" document to work with, which can be generated
+# with create_es_doc().  Metrics can be indexed from either a benchmark sample directory or a tool
+# directory.
 sub index_metrics {
     my $metr_file = shift; # filename without .json or .csv
     my $cstype = shift;
@@ -55,7 +237,6 @@ sub index_metrics {
     my $base_doc_ref = shift; # metric_desc doc gets populated with this, usually a run doc or period doc
     my $primary_metric = shift; # optional, for reporting earliest-begin and latest-end from all
                                 # metrics processed with type matching $primary_metric
-                                #
     my $earliest_begin;
     my $latest_end;
     my $coder = JSON::XS->new->canonical;
@@ -108,6 +289,9 @@ sub index_metrics {
         my @names_list = sort(keys(%{ $metr_desc_doc{'metric_desc'}{'names'} }));
         $metr_desc_doc{'metric_desc'}{'names-list'} = \@names_list;
         my $metr_desc_doc_json = $coder->encode(\%metr_desc_doc);
+        # We do not use index_es_doc() here because that requires getting all info from the %result,
+        # and %result (rickshaw-run.json) by design does not include any metric data, as it would be
+        # way too large.
         http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
     }
     my $count = 0;
@@ -129,6 +313,8 @@ sub index_metrics {
             $ndjson .= sprintf "%s\n", $metr_data_doc_json;
             $count++;
             if ($count >= 1000) {
+                # ES docs type metric_data do not contain other sections run, iteration, sample, period, metric_desc,
+                # as this would take up sunstantially more space for potentially millions of documents.
                 http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
                 $ndjson = "";
                 $count = 0;
@@ -152,43 +338,6 @@ sub index_metrics {
     if (defined $primary_metric) {
         return ($earliest_begin, $latest_end);
     }
-}
-
-sub http_request {
-    my $method = shift;
-    my $host = shift;
-    my $req = shift;
-    my $body = shift;
-    my $client = REST::Client->new();
-    $client->setHost($host);
-    my %req_header = ("Content-Type" => "application/json");
-    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
-    $client->request($method, $req, $body, \%req_header);
-    my $response = $client->responseContent();
-    debug_log(sprintf "Response:\n%s\n\n", $response);
-    my $resp_ref = $coder->decode($response);
-    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'error'}) {
-        printf "ERROR:\n%s\n", $response;
-    }
-    return $response;
-}
-
-sub http_ndjson_request {
-    my $method = shift;
-    my $host = shift;
-    my $req = shift;
-    my $body = shift;
-    my $client = REST::Client->new();
-    $client->setHost($host);
-    my %req_header = ("Content-Type" => "application/x-ndjson");
-    debug_log(sprintf "Request: http://%s/%s\nbody: %s\n\n", $host, $req, $body);
-    $client->request($method, $req, $body, \%req_header);
-    my $response = $client->responseContent();
-    my $resp_ref = $coder->decode($response);
-    if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'errors'} and $$resp_ref{'errors'} != 0) {
-        printf "ERROR:\n%s\n", $response;
-    }
-    return $response;
 }
 
 # Process the cmdline params
@@ -257,20 +406,9 @@ if ($file_rc > 0 or ! defined $result_ref) {
 }
 if (defined $result_ref) {
     %result = %{ $result_ref };
-    # TODO checks for minimum fileds for valid run
 } else {
     printf "Could not find or load rickshaw-run.json in %s, exiting\n", $run_dir;
     exit 1;
-}
-
-
-# Start by creating what will be the CDM run document for elasticsearch
-my %run = ( 'id' => $result{'run-id'}, 'harness' => 'rickshaw', 'benchmark' => $result{'benchmark'},
-            'host' => 'localhost', 'name' => $result{'name'}, 'email' => $result{'email'} );
-for my $field (qw(host name email desc)) {
-    if (defined $result{$field}) {
-        $run{$field} = $result{$field};
-    }
 }
 
 # Find the newest CDM version and verify all the required indices are present
@@ -315,21 +453,30 @@ if (not grep(/^$cdm{'ver'}$/, @suported_cdm_vers)) {
     printf "Either use an older version of CDM or (ideally) find a newer version of rickshaw which supports %s\n", $cdm{'ver'};
 }
 printf "Exporting from %s to elasticsearch documents and POSTing to localhost:9200\n", $result_file;
-printf "Run ID: %s\n", $result{'run-id'};
+if (exists $result{'run-id'} and defined $result{'run-id'}) {
+    # Convert to 'id', which matches ES docs
+    $result{'id'} = $result{'run-id'};
+    delete $result{'run-id'};
+}
+if (not exists $result{'id'} or not defined $result{'id'}) {
+    $result{'id'} = Data::UUID->new->create_str();
+}
+my $host = `hostname`;
+chomp $host;
+$result{'source'} = $host . "/" . $base_run_dir;
+printf "Run ID: %s\n", $result{'id'};
 my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/_search/",
-                            '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'run-id'} . '"}}]}},"size":1000}');
+                            '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'id'} . '"}}]}},"size":1000}');
 debug_log(sprintf("response:\n%s\n", $response));
 my $response_ref = $coder->decode($response);
 debug_log(sprintf "response" . Dumper $response_ref);
 if ($$response_ref{'hits'}{'total'}{'value'} > 0) {
-    print "Run ID already exists, so will not POST to elasticsearch\n";
+    printf "Run ID %s already exists, so will not POST to elasticsearch\n", $result{'id'};
     print "Either delete existing run from ES or regenerate rickshaw-result.json\n";
     exit 1;
 }
-my %run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
-my $run_doc_json = $coder->encode(\%run_doc);
 if (-e $tool_dir) {
-    my $run_doc_ref = $coder->decode($run_doc_json);
+    my $base_metric_doc_ref = create_es_doc("metric_desc");
     if (opendir(TOOLDIR, $tool_dir)) {
         my @collectors = grep(/\w+/, readdir(TOOLDIR));
         for my $collector (@collectors) {
@@ -352,7 +499,7 @@ if (-e $tool_dir) {
                                     if (my $pid = fork) {
                                         push(@pids, $pid);
                                     } else {
-                                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, \%run_doc);
+                                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
                                         exit;
                                     }
                                 }
@@ -368,37 +515,25 @@ if (-e $tool_dir) {
     }
 }
 if (exists $result{'tags'}) {
+    my $tag_idx = 0;
     for my $tag (@{ $result{'tags'} }) {
-        # Copy data from 'parent' doc so querying directly for tags with
-        # run/iteration data is possible
-        my $tag_doc_ref = $coder->decode($run_doc_json);
-        my %tag_doc = %$tag_doc_ref;
-        $tag_doc{'tag'}{'id'} = Data::UUID->new->create_str();
-        $tag_doc{'tag'}{'name'} = $$tag{'name'};
-        $tag_doc{'tag'}{'val'} = $$tag{'val'};
-        my $tag_doc_json = $coder->encode(\%tag_doc);
-        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-tag/_doc/", $tag_doc_json);
+        index_es_doc("tag", $tag_idx);
+        $tag_idx++;
     }
 }
 if (exists $result{'iterations'}) {
     print "Indexing of benchmark data starting\n";
     my $iter_num = 1;
     for my $iter (@{ $result{'iterations'} }) {
-        my $iter_array_idx = $iter_num - 1;
-        my $iter_doc_ref = $coder->decode($run_doc_json);
-        my %iter_doc = %$iter_doc_ref;
-        $iter_doc{'iteration'}{'id'} = Data::UUID->new->create_str();
-        my $iter_doc_json = $coder->encode(\%iter_doc);
+        printf "working on iter num %d\n", $iter_num;
+        my $iter_idx = $iter_num - 1;
+        $$iter{'samples'} = ();
+        $$iter{'id'} = Data::UUID->new->create_str();
+        my $param_idx = 0;
         for my $param (@{ $$iter{'params'} }) {
-            # Copy data from 'parent' doc so querying directly for params with
-            # run/iteration data is possible
-            my $param_doc_ref = $coder->decode($iter_doc_json);
-            my %param_doc = %$param_doc_ref;
-            $param_doc{'param'}{'id'} = Data::UUID->new->create_str();
-            $param_doc{'param'}{'arg'} = $$param{'arg'};
-            $param_doc{'param'}{'val'} = $$param{'val'};
-            my $param_doc_json = $coder->encode(\%param_doc);
-            http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-param/_doc/", $param_doc_json);
+            $$param{'id'} = Data::UUID->new->create_str();
+            index_es_doc("param", $iter_idx, $param_idx);
+            $param_idx++;
         }
         my $this_iter_path = "iteration-" . $iter_num;
         my $this_iter_dir = $iter_subdir . "/" . $this_iter_path;
@@ -421,25 +556,24 @@ if (exists $result{'iterations'}) {
                 my $primary_period;
                 my $sample_num = 1;
                 for my $samp_dir (@samp_dirs) {
+                    my $sample_idx = $sample_num - 1;
+                    $$iter{'samples'}[$sample_idx] = {};
+                    my $this_sample = $$iter{'samples'}[$sample_idx];
                     my $samp_status = "pass";
                     if ($samp_dir =~ /fail\d+/) {
-                        $samp_status = "fail";
+                        $$this_sample{'status'} = "fail";
+                    } else {
+                        $$this_sample{'status'} = "pass";
                     }
                     if ($samp_status eq "pass") {
-                        my %sample; # sample data from all clients/servers
-                        $sample{'status'} = $samp_status;
-                        my $samp_doc_ref = $coder->decode($iter_doc_json);
-                        my %samp_doc = %$samp_doc_ref;
+                        my $this_sample = $$iter{'samples'}[$sample_idx];
                         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
-                        $samp_doc{'sample'}{'id'} = Data::UUID->new->create_str();
-                        $samp_doc{'sample'}{'num'} = $sample_num;
+                        $$this_sample{'status'} = $samp_status;
+                        $$this_sample{'id'} = Data::UUID->new->create_str();
                         if ($cdm{'ver'} eq "v6dev") {
-                            $samp_doc{'sample'}{'path'} = $this_samp_dir;
+                            $$this_sample{'path'} = $this_samp_dir;
                         }
-                        $samp_doc{'sample'}{'status'} = $sample{'status'};
-                        my $samp_doc_json = $coder->encode(\%samp_doc);
-                        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-sample/_doc/", $samp_doc_json);
-                        my @cons_periods; # periods [of the same name] from clients/servers get merged here
+                        $$this_sample{'periods'} = [];
                         debug_log("Working on " . $this_samp_dir . "\n");
                         if (opendir(my $samp_dh, $run_dir . "/" . $this_samp_dir)) {
                             my @cs_names = grep(/^(client|server)$/, readdir($samp_dh));
@@ -461,45 +595,45 @@ if (exists $result{'iterations'}) {
                                             my %data = %$data_ref;
                                             if (! defined $primary_metric and exists $data{'primary-metric'}) {
                                                 $primary_metric = $data{'primary-metric'};
+                                                $$iter{'primary-metric'} = $primary_metric;
                                             }
                                             if (! defined $primary_period and exists $data{'primary-period'}) {
                                                 $primary_period = $data{'primary-period'};
+                                                $$iter{'primary-period'} = $primary_period;
                                             }
                                             # For any sample, every client/server has information that contributes to one
                                             # or more benchmark-sample-periods.  This data needs to be consolidated into
                                             # 1 period doc for each common period across the clients/servers.
                                             if (defined $data{'periods'}) {
                                                 for (my $k = 0; $k < scalar @{ $data{'periods'} }; $k++) {
-                                                    my $cons_period_id;
-                                                    # Match the $cons_period_id to an existing consolidated-period if it exists
-                                                    for (my $cons_id = 0; $cons_id < scalar @cons_periods; $cons_id++) {
-                                                        if (defined $cons_periods[$cons_id]{'period'}{'name'} and $cons_periods[$cons_id]{'period'}{'name'} eq $data{'periods'}[$k]{'name'}) {
-                                                            $cons_period_id = $cons_id;
+                                                    my $period_idx;
+                                                    for (my $idx = 0; $idx < scalar @{ $$this_sample{'periods'} }; $idx++) {
+                                                        if (defined $$this_sample{'periods'}[$idx]{'name'} and $$this_sample{'periods'}[$idx]{'name'} eq $data{'periods'}[$k]{'name'}) {
+                                                            $period_idx = $idx;
                                                             last;
                                                         }
                                                     }
-                                                    # If there is no match this is the first time a period of this name
-                                                    # has been processed, so add it to @cons_periods.
-                                                    if (! defined $cons_period_id) {
-                                                        # Always start the doc with the info from its "parent"
-                                                        my $per_doc_ref = $coder->decode($samp_doc_json);
-                                                        my %period = ('id' => Data::UUID->new->create_str(), 'name' => $data{'periods'}[$k]{'name'});
+                                                    # If there is no match, this is the first time a period of this name
+                                                    # has been processed, so add it to $$this_sample{'periods'}[]
+                                                    if (! defined $period_idx) {
+                                                        my %period = ( 'name' => $data{'periods'}[$k]{'name'}, 'id' => Data::UUID->new->create_str() );
                                                         if (defined $data{'periods'}[$k]{'begin'}) {
                                                             $period{'begin'} = $data{'periods'}[$k]{'begin'};
                                                         }
                                                         if (defined $data{'periods'}[$k]{'end'}) {
                                                             $period{'end'} = $data{'periods'}[$k]{'end'};
                                                         }
-                                                        $$per_doc_ref{'period'} = \%period;
-                                                        push(@cons_periods, $per_doc_ref);
-                                                        $cons_period_id = scalar @cons_periods - 1;
+                                                        push(@{ $$this_sample{'periods'} }, \%period);
+                                                        $period_idx = scalar @{ $$this_sample{'periods'} } - 1;
                                                     }
+
                                                     # When we consolidate the same period from many clients/servers, we need to find
                                                     # the time period where there are samples from all clients/servers, in order to
                                                     # ensure we are measuring a period with "full participation".  We can do this
                                                     # while indexing the metrics.
                                                     my $earliest_begin;
                                                     my $latest_end;
+                                                    my $base_metric_doc_ref = create_es_doc("metric_desc", $iter_idx, $sample_idx, $period_idx);
                                                     for (my $j = 0; $j < scalar(@{ $data{'periods'}[$k]{'metric-files'} }); $j++) {
                                                         # Metric data is still in other file(s).  For each member in 'metric-files' array,
                                                         # there should be a 2 files with the same prefix
@@ -507,7 +641,7 @@ if (exists $result{'iterations'}) {
                                                         my $this_begin;
                                                         my $this_end;
                                                         # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                                        ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $cons_periods[$cons_period_id], $primary_metric);
+                                                        ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
                                                         # From processing all metric files, get the very-earliest-begin and very-latest-end
                                                         if (not defined $earliest_begin or $earliest_begin > $this_begin) {
                                                             $earliest_begin = $this_begin;
@@ -520,55 +654,50 @@ if (exists $result{'iterations'}) {
                                                     # we need to adjust the begin for the consolidated period to match this client/server's earliest_begin.
                                                     # This ensures the consolidated period always has samples from every single client/server for the entire
                                                     # period.
-                                                    if (not defined $cons_periods[$cons_period_id]{'begin'} or $cons_periods[$cons_period_id]{'begin'} < $earliest_begin) {
-                                                        $cons_periods[$cons_period_id]{'period'}{'begin'} = $earliest_begin;
+                                                    if (not defined $$this_sample{'periods'}[$period_idx]{'begin'} or $$this_sample{'periods'}[$period_idx]{'begin'} < $earliest_begin) {
+                                                        $$this_sample{'periods'}[$period_idx]{'begin'} = $earliest_begin;
                                                     }
-                                                    if (not defined $cons_periods[$cons_period_id]{'end'} or $cons_periods[$cons_period_id]{'end'} > $latest_end) {
-                                                        $cons_periods[$cons_period_id]{'period'}{'end'} = $latest_end;
+                                                    if (not defined $$this_sample{'periods'}[$period_idx]{'end'} or $$this_sample{'periods'}[$period_idx]{'end'} > $latest_end) {
+                                                        $$this_sample{'periods'}[$period_idx]{'end'} = $latest_end;
                                                     }
-                                                    # Adjust run begin/end to capture entire run from periods
-                                                    if (! defined $run{'run.begin'} or $run{'begin'} > $cons_periods[$cons_period_id]{'period'}{'begin'}) {
-                                                        $run{'begin'} = $cons_periods[$cons_period_id]{'period'}{'begin'};
+                                                    if (! defined $result{'run.begin'} or $result{'begin'} > $$this_sample{'periods'}[$period_idx]{'begin'}) {
+                                                        $result{'begin'} = $$this_sample{'periods'}[$period_idx]{'begin'};
                                                     }
-                                                    if (! defined $run{'end'} or $run{'end'} < $cons_periods[$cons_period_id]{'period'}{'end'}) {
-                                                        $run{'end'} = $cons_periods[$cons_period_id]{'period'}{'end'};
+                                                    if (! defined $result{'end'} or $result{'end'} < $$this_sample{'periods'}[$period_idx]{'end'}) {
+                                                        $result{'end'} = $$this_sample{'periods'}[$period_idx]{'end'};
                                                     }
+                                                    index_es_doc("period", $iter_idx, $sample_idx, $period_idx);
+                                                    write_es_doc("period", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx, $period_idx);
                                                 }
                                             }
                                         }
                                     } #cs_ids
                                 } #opendir csnames
                             } #cs_names
+                            index_es_doc("sample", $iter_idx, $sample_idx);
+                            write_es_doc("sample", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx);
                             $sample_num++;
-                            $sample{'periods'} = \@cons_periods;
-                            foreach my $per (@cons_periods) {
-                                my $this_per_doc_json = $coder->encode($per);
-                                http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-period/_doc/", $this_per_doc_json);
-                            }
-                            push(@samples, \%sample);
+                            #push(@samples, \%sample);
                         } #opendir samp
                     } #samp pass
                 } #samp_dirs
-                $result{'iterations'}[$iter_array_idx]{'samples'} = \@samples;
-                if (defined $primary_metric) {
-                    $result{'iterations'}[$iter_array_idx]{'primary-metric'} = $primary_metric;
-                } else {
+                if (not defined $$iter{'primary-metric'}) {
                     printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
                 }
                 if (defined $primary_period) {
-                    $result{'iterations'}[$iter_array_idx]{'primary-period'} = $primary_period;
+                    $$iter{'primary-period'} = $primary_period;
                 } else {
                     printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
                 }
-                $iter_doc{'iteration'}{'primary-metric'} = $primary_metric;
-                $iter_doc{'iteration'}{'primary-period'} = $primary_period;
-                $iter_doc{'iteration'}{'num'} = $iter_num;
-                $iter_doc{'iteration'}{'status'} = $iter_status;
+                $$iter{'primary-metric'} = $primary_metric;
+                $$iter{'primary-period'} = $primary_period;
+                $$iter{'num'} = $iter_num;
+                $$iter{'status'} = $iter_status;
                 if ($cdm{'ver'} eq "v6dev") {
-                    $iter_doc{'iteration'}{'path'} = $this_iter_dir;
+                    $$iter{'path'} = $this_iter_dir;
                 }
-                $iter_doc_json = $coder->encode(\%iter_doc);
-                http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-iteration/_doc/", $iter_doc_json);
+                index_es_doc("iteration", $iter_idx);
+                write_es_doc("iteration", $run_dir . "/" . $this_iter_dir, $iter_idx);
             } else {
                 printf "Skipping iteration %d\n", $iter_num;
             } #opendir iter
@@ -577,8 +706,5 @@ if (exists $result{'iterations'}) {
     } #iterations
     print "Indexing of benchmark data complete\n";
 } #if iterations
-# Rebuild run doc with newly acquired info and index
-%run_doc = ( 'cdm' => \%cdm, 'run' => \%run );
-$run_doc_json = $coder->encode(\%run_doc);
-http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/", $run_doc_json);
+index_es_doc("run");
 print "Indexing to ES complete\n";

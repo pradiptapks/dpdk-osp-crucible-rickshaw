@@ -37,7 +37,7 @@ $toolbox::logging::debug = 0;
 
 my $ug = Data::UUID->new;
 my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => "s",
-                 "base-run-dir" => tempdir(), "run-id" => $ug->create_str(),
+                 "base-run-dir" => tempdir(), "id" => $ug->create_str(),
                  "max-sample-failures" => 1, "max-rb-attempts" => 1);
 
 my @utilities = ( "packrat" );
@@ -50,7 +50,7 @@ my %userenvs;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
-my $rb_base_uuid = $run{'run-id'};
+my $rb_base_uuid = $run{'id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 240;
@@ -158,7 +158,7 @@ sub roadblock_leader {
         my $label = shift;
         my $timeout = shift;
         my $role = "leader";
-        my $uuid = $run{'run-id'} . ":" . $label;
+        my $uuid = $run{'id'} . ":" . $label;
         # save $_[0] for by ref later to store json ref
         my $follower_param = "";
         for (my $i=1; $i < scalar @_; $i++) {
@@ -1030,7 +1030,7 @@ sub validate_endpoints() {
     printf " and %d server(s)", $servers_present if exists $bench_config{'server'} && $servers_present;
     printf "\n";
     if ($use_roadblock) {
-        $endpoint_roadblock_opt = " --roadblock-id=" . $run{'run-id'} .
+        $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
                                 " --roadblock-passwd=" . $redis_passwd;
         $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
                                 "/workshop.json ";
@@ -1355,7 +1355,7 @@ sub deploy_endpoints() {
             my $cmd = "./" . $type .
                     " --endpoint-opts=" . $opts .
                     " --endpoint-label=" . $label .
-                    " --run-id=" . $run{'run-id'} .
+                    " --run-id=" . $run{'id'} .
                     " --base-run-dir=" . $run{'base-run-dir'} .
                     " --max-sample-failures=" . $run{'max-sample-failures'} .
                     " --max-rb-attempts=" . $run{'max-rb-attempts'} .
