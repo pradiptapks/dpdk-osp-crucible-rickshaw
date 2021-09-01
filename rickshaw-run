@@ -444,6 +444,12 @@ sub build_container_image {
         }
         (my $cmd, my $cmd_output, my $cmd_rc) = run_cmd("$workshop_cmd --label config-analysis --dump-config true");
         my @config_analysis_output = split(/\n/, $cmd_output);
+        if (open(CONFIG_ANALYSIS_FH, ">", $run_dir . "/workshop.dump-config.out")) {
+            printf CONFIG_ANALYSIS_FH "%s\n", join("\n", @config_analysis_output);
+            close(CONFIG_ANALYSIS_FH);
+        } else {
+            print "Failed to open %s/workshop.dump-config.out for writing\n", $run_dir;
+        }
         my $break_line = 0;
         for (my $i=0; $i<scalar(@config_analysis_output); $i++) {
             if ($config_analysis_output[$i] =~ /Config dump:/) {
