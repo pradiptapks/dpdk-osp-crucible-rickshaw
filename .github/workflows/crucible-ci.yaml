@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  crucible-ci:
+  crucible-ci-fio:
+    name: crucible-ci-fio
     runs-on: ubuntu-latest
 
     steps:
@@ -34,4 +35,32 @@ jobs:
 
     - name: Run CI
       run: |
-        sudo ~/crucible-ci/run-ci --userenvs all --samples 2 --repeat-runs --scenarios fio,uperf
+        sudo ~/crucible-ci/run-ci --userenvs all --samples 2 --repeat-runs --scenarios fio
+
+  crucible-ci-uperf:
+    name: crucible-ci-uperf
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Show Environment
+      run: |
+        whoami
+        echo
+        pwd
+        echo
+        ls -la
+
+    - name: Git Clone crucible-ci
+      run: |
+        pushd ~/
+        git clone https://github.com/perftool-incubator/crucible-ci.git
+
+    - name: Setup CI Environment
+      run: |
+        sudo ~/crucible-ci/setup-ci-environment --ci-target rickshaw --ci-target-dir $(pwd)
+
+    - name: Run CI
+      run: |
+        sudo ~/crucible-ci/run-ci --userenvs all --samples 2 --repeat-runs --scenarios uperf
