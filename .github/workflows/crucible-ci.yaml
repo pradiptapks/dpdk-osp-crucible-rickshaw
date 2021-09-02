@@ -34,4 +34,4 @@ jobs:
 
     - name: Run CI
       run: |
-        sudo ~/crucible-ci/run-ci
+        sudo ~/crucible-ci/run-ci --userenvs all --samples 2 --repeat-runs --scenarios fio,uperf
