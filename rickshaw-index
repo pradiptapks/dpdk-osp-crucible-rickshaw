@@ -44,6 +44,7 @@ my $coder = JSON::XS->new->canonical;
 my $result_schema_file;
 my $bench_metric_schema_file;
 my $file_rc;
+my %es_doc_count = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0, 'metric_desc' => 0);
 
 sub usage {
     print "\nusage:\n\n";
@@ -94,68 +95,109 @@ sub create_es_doc {
     my $period_idx = shift;
 
     my %es_doc = ( 'cdm' => \%cdm );
-    for my $f (qw(id harness host email name source begin end benchmark)) {
-        if (exists $result{$f} and defined $result{$f}) {
-            $es_doc{'run'}{$f} = $result{$f};
+    for my $field (qw(id harness host email name source begin end benchmark)) {
+        if (exists $result{$field} and defined $result{$field}) {
+            $es_doc{'run'}{$field} = $result{$field};
+        } elsif ($field =~ /benchmark|source/) {
+            printf "ERROR: field name %s was not found in rickshaw-result.json:\n", $field;
+            print Dumper \%result;
         }
     }
     if ($doc_type eq "tag") {
         if (defined $iter_idx) {
-            if (exists $result{'tags'} and ref($result{'tags'}) eq ref([]) ) {
-                for my $g (qw(name val)) {
-                    # When creating a tag ES doc, the $iter_idx is repurposed for the tag_idx,
-                    # because a tag is not specific to an iteration
-                    $es_doc{'tag'}{$g} = $result{'tags'}[$iter_idx]{$g};
+            # When creating a tag ES doc, the $iter_idx is repurposed for the tag_idx,
+            # because a tag is not specific to an iteration
+            my $tag_idx = $iter_idx;
+            if (exists $result{'tags'}) {
+                if (ref($result{'tags'}) eq ref([])) {
+                    for my $field (qw(name val)) {
+                        if (exists $result{'tags'}{$field} and defined $result{'tags'}{$field}) {
+                            $es_doc{'tag'}{$field} = $result{'tags'}[$tag_idx]{$field};
+                        } else {
+                            printf "ERROR: field name %s for tag %d was not found in rickshaw-result.json:\n", $field, $tag_idx;
+                            printf Dumper $result{'tags'}[$tag_idx];
+                            exit 1;
+                        }
+                    }
+                } else {
+                    printf "ERROR: tag at index %d is not an array/list in rickshaw-result.json, exiting:";
+                    print Dumper \%result;
+                    exit 1;
                 }
+            } else {
+                printf "ERROR: tags array/list is missing from the rickshaw-result.json, exiting:\n";
+                print Dumper \%result;
+                exit 1;
             }
         } else {
-            print "create_es_doc(%s,%s) tag index missing, exiting\n", $doc_type, $iter_idx;
+            print "ERROR: create_es_doc(%s,) tag index missing, exiting\n", $doc_type;
         }
     } elsif ($doc_type eq "param") {
         if (defined $iter_idx) {
             if (defined $sample_idx) {
-                if (exists $result{'iterations'}[$iter_idx]{'params'}[$sample_idx] and ref($result{'iterations'}[$iter_idx]{'params'}[$sample_idx]) eq ref({}) ) {
-                    for my $g (qw(status primary-metric primary-period id num path)) {
-                        $es_doc{'iteration'}{$g} = $result{'iterations'}[$iter_idx]{$g};
-                    }
-                    for my $g (qw(arg val)) {
-                        # When creating a tag ES doc, the $sample_idx is repurposed for the param_index,
-                        # because a param is not specific to a sample
-                        $es_doc{'param'}{$g} = $result{'iterations'}[$iter_idx]{'params'}[$sample_idx]{$g};
-                    }
-                }
-            } else {
-                print "create_es_doc(%s,%s,%s) param index missing, exiting\n", $doc_type, "", $sample_idx;
-            }
-        } else {
-            print "create_es_doc(%s,%s,%s) tag index missing, exiting\n", $doc_type, $iter_idx, $sample_idx;
-        }
-    } else {
-        if (defined $iter_idx) {
-            if (exists $result{'iterations'}[$iter_idx]) {
-                for my $g (qw(status primary-metric primary-period id num path)) {
-                    $es_doc{'iteration'}{$g} = $result{'iterations'}[$iter_idx]{$g};
-                }
-                if (defined $sample_idx) {
-                    if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
-                        for my $h (qw(status id num path)) {
-                            $es_doc{'sample'}{$h} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{$h};
+                # Since a $sample_idx is not needed for a param, we reuse it for a param_idx
+                my $param_idx = $sample_idx;
+                if (exists $result{'iterations'}[$iter_idx]{'params'}[$param_idx]) {
+                    if (ref($result{'iterations'}[$iter_idx]{'params'}[$param_idx]) eq ref({})) {
+                        for my $g (qw(status primary-metric primary-period id num path)) {
+                            $es_doc{'iteration'}{$g} = $result{'iterations'}[$iter_idx]{$g};
                         }
-                        if (defined $period_idx) {
-                            if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
-                                for my $i (qw(id name begin end)) {
-                                    $es_doc{'period'}{$i} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{'periods'}[$period_idx]{$i};
-                                }
+                        for my $field (qw(arg val)) {
+                            if (exists $result{'iterations'}[$iter_idx]{'params'}[$param_idx]{$field} and defined $result{'iterations'}[$iter_idx]{'params'}[$param_idx]{$field}) {
+                                $es_doc{'param'}{$field} = $result{'iterations'}[$iter_idx]{'params'}[$param_idx]{$field};
                             } else {
-                                printf "Period index %d (for sample index %d, iteration index %d) does not exist in rickshaw-result.json\n", $period_idx, $sample_idx, $iter_idx;
+                                printf "ERROR: field name %s for param %d in iteration %d was not found in rickshaw-result.json:\n", $field, $param_idx, $iter_idx;
+                                print Dumper $result{'iterations'}[$iter_idx]{'params'}[$param_idx];
+                                exit 1;
                             }
                         }
                     } else {
-                        printf "Sample index %d (for iteration index %d) does not exist in rickshaw-result.json\n", $sample_idx, $iter_idx;
+                        printf "ERROR: param at index %d is not an object/hash, exiting", $iter_idx;
+                        print Dumper $result{'iterations'}[$iter_idx]{'params'};
+                        exit 1;
+                    }
+                } else {
+                    printf "ERROR: param array/list at index %d does not exist in rickshaw-result.json, exiting", $iter_idx;
+                    print Dumper $result{'iterations'}[$iter_idx];
+                    exit 1;
+                }
+            } else {
+                print "ERROR: create_es_doc(%s,%s,%s) param index missing, exiting\n", $doc_type, $iter_idx, "";
+                exit 1;
+            }
+        } else {
+            print "ERROR: create_es_doc(%s,%s,%s) iter index missing, exiting\n", $doc_type, "", $sample_idx;
+            exit 1;
+        }
+    } else { # All other doc types
+        if (defined $iter_idx) {
+            if (exists $result{'iterations'}[$iter_idx]) {
+                foreach  my $iter_field (qw(status primary-metric primary-period id num path)) {
+                    $es_doc{'iteration'}{$iter_field} = $result{'iterations'}[$iter_idx]{$iter_field};
+                }
+                if (defined $sample_idx) {
+                    if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
+                        foreach my $sample_field (qw(status id num path)) {
+                            $es_doc{'sample'}{$sample_field} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{$sample_field};
+                        }
+                        if (defined $period_idx) {
+                            if (exists $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]) {
+                                for my $period_field (qw(id name begin end)) {
+                                    $es_doc{'period'}{$period_field} = $result{'iterations'}[$iter_idx]{'samples'}[$sample_idx]{'periods'}[$period_idx]{$period_field};
+                                }
+                            } else {
+                                printf "ERROR: Period index %d (for sample index %d, iteration index %d) does not exist in rickshaw-result.json\n", $period_idx, $sample_idx, $iter_idx;
+                                exit 1;
+                            }
+                        }
+                    } else {
+                        printf "ERROR: Sample index %d (for iteration index %d) does not exist in rickshaw-result.json\n", $sample_idx, $iter_idx;
+                        exit 1;
                     }
                 }
             } else {
-                printf "Iteration index %d does not exist in rickshaw-result.json\n", $iter_idx;
+                printf "ERROR: Iteration index %d does not exist in rickshaw-result.json\n", $iter_idx;
+                exit 1;
             }
         }
     }
@@ -179,6 +221,7 @@ sub index_es_doc {
     my $es_doc_ref = create_es_doc($doc_type, $iter, $sample, $period);
     my $es_doc_json = $coder->encode($es_doc_ref);
     http_request("POST", "localhost:9200", "cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/", $es_doc_json);
+    $es_doc_count{$doc_type}++;
 }
 
 sub write_es_doc {
@@ -293,6 +336,7 @@ sub index_metrics {
         # and %result (rickshaw-run.json) by design does not include any metric data, as it would be
         # way too large.
         http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
+        $es_doc_count{'metric_desc'}++;
     }
     my $count = 0;
     my $ndjson = "";
@@ -352,6 +396,15 @@ sub run_id_in_es {
     } else {
         return 0;
     }
+}
+
+sub indexed_doc_count {
+    my $doc_type = shift;
+    my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/_count/",
+                                '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'id'} . '"}}]}}}');
+    my $response_ref = $coder->decode($response);
+    debug_log(sprintf "response" . Dumper $response_ref);
+    return $$response_ref{'count'};
 }
 
 # Process the cmdline params
@@ -512,16 +565,21 @@ if (-e $tool_dir) {
                                     if (my $pid = fork) {
                                         push(@pids, $pid);
                                     } else {
+                                        $es_doc_count{'metric-desc'} = 0;
                                         index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
-                                        exit;
+                                        exit $es_doc_count{'metric_desc'};
                                     }
                                 }
                             }
                         }
                     }
                     printf "Waiting for %d indexing jobs to complete\n", scalar @pids;
-                    while (wait() > -1) {}
-                    printf "Indexing of tool data for %s complete\n", $cd_id;
+                    while (1) {
+                        my $wait_return = wait(); 
+                        my $child_exit_code = $? >> 8;
+                        last if ($wait_return < 0);
+                        $es_doc_count{'metric_desc'} += $child_exit_code;
+                    }
                 }
             }
         }
@@ -720,14 +778,23 @@ if (exists $result{'iterations'}) {
     print "Indexing of benchmark data complete\n";
 } #if iterations
 index_es_doc("run");
-my $num_attempts = 0;
-while (run_id_in_es($result{'id'}) == 0) {
-    print "Checking for run document in ES\n";
-    sleep 3;
-    $num_attempts++;
-    if ($num_attempts > 10) {
-        print "Could not query for run document in ES, index failed\n";
+my $attempts = 0;
+while (scalar keys %es_doc_count > 0) {
+    if ($attempts > 10) {
+        print "ERROR: could not ensure all ES docs are indexed, exiting\n";
         exit 1;
     }
+    printf "Confirming all documents are in elasticsearch (attempt #%d)\n", $attempts;
+    foreach my $doctype (keys %es_doc_count) {
+        my $this_indexed_count = indexed_doc_count($doctype);
+        printf "  %s: %d indexed, %d found\n", $doctype, $es_doc_count{$doctype}, $this_indexed_count;
+        if ($this_indexed_count eq $es_doc_count{$doctype}) {
+            delete $es_doc_count{$doctype};
+        }
+    }
+    printf "\n";
+    $attempts++;
+    sleep 3;
 }
+
 print "Indexing to ES complete\n";
