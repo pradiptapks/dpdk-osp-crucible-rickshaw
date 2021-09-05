@@ -8,8 +8,8 @@
     "name": "opensuse",
     "label": "OpenSUSE Leap",
     "origin": {
-      "image": "registry.opensuse.org/opensuse/leap",
-      "tag": "15"
+      "image": "registry.opensuse.org/opensuse/tumbleweed",
+      "tag": "latest"
     },
     "properties": {
       "packages": {
@@ -70,6 +70,15 @@
           "autoconf",
           "automake",
           "make"
+        ]
+      }
+    },
+    {
+      "name": "util-linux",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "util-linux"
         ]
       }
     }
