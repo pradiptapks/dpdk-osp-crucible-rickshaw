@@ -72,6 +72,15 @@
           "make"
         ]
       }
+    },
+    {
+      "name": "util-linux",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "util-linux"
+        ]
+      }
     }
   ]
 }
