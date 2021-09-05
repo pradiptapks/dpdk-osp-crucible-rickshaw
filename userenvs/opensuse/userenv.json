@@ -2,8 +2,8 @@
     "name": "opensuse",
     "label": "OpenSUSE Leap",
     "origin": {
-      "image": "registry.opensuse.org/opensuse/leap",
-      "tag": "15"
+      "image": "registry.opensuse.org/opensuse/tumbleweed",
+      "tag": "latest"
     },
     "properties": {
       "packages": {
