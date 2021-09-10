@@ -64,10 +64,15 @@ sub http_request {
     my $response = $client->responseContent();
     debug_log(sprintf "Response:\n%s\n\n", $response);
     my $resp_ref = $coder->decode($response);
+    if (not defined $resp_ref) {
+        printf "ERROR: response to index request is undefined\n";
+        exit 1;
+    }
     if (defined $resp_ref and ref $resp_ref eq ref {} and exists $$resp_ref{'error'}) {
         printf "ERROR:\n%s\n", $response;
+        exit 1;
     }
-    return $response;
+    return $resp_ref;
 }
 
 sub http_ndjson_request {
@@ -220,8 +225,12 @@ sub index_es_doc {
     my $period = shift;
     my $es_doc_ref = create_es_doc($doc_type, $iter, $sample, $period);
     my $es_doc_json = $coder->encode($es_doc_ref);
-    http_request("POST", "localhost:9200", "cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/", $es_doc_json);
+    my $resp_ref = http_request("POST", "localhost:9200", "cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/", $es_doc_json);
     $es_doc_count{$doc_type}++;
+    if ($$resp_ref{'result'} ne "created") {
+        printf "Request to index failed:\n%s\n", $coder->encode($resp_ref);
+        exit 1;
+    }
 }
 
 sub write_es_doc {
@@ -335,7 +344,7 @@ sub index_metrics {
         # We do not use index_es_doc() here because that requires getting all info from the %result,
         # and %result (rickshaw-run.json) by design does not include any metric data, as it would be
         # way too large.
-        http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
+        my $resp_ref = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
         $es_doc_count{'metric_desc'}++;
     }
     my $count = 0;
@@ -384,27 +393,12 @@ sub index_metrics {
     }
 }
 
-sub run_id_in_es {
-    my $id = shift;
-    my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-run/_doc/_search/",
-                                '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $id . '"}}]}},"size":1000}');
-    debug_log(sprintf("response:\n%s\n", $response));
-    my $response_ref = $coder->decode($response);
-    debug_log(sprintf "response" . Dumper $response_ref);
-    if ($$response_ref{'hits'}{'total'}{'value'} > 0)  {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
 sub indexed_doc_count {
     my $doc_type = shift;
-    my $response = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/_count/",
+    my $resp_ref= http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/_count/",
                                 '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'id'} . '"}}]}}}');
-    my $response_ref = $coder->decode($response);
-    debug_log(sprintf "response" . Dumper $response_ref);
-    return $$response_ref{'count'};
+    debug_log(sprintf "response" . Dumper $resp_ref);
+    return $$resp_ref{'count'};
 }
 
 # Process the cmdline params
@@ -479,8 +473,7 @@ if (defined $result_ref) {
 }
 
 # Find the newest CDM version and verify all the required indices are present
-my $idx_resp = http_request("GET", "localhost:9200", "_cat/indices?format=json", '');
-my $idx_resp_ref = $coder->decode($idx_resp);
+my $idx_resp_ref = http_request("GET", "localhost:9200", "_cat/indices?format=json", '');
 my $latest_ver;
 if (ref $idx_resp_ref eq ref [] ) {
     my %shortnames;
@@ -535,7 +528,7 @@ chomp $host;
 $result{'source'} = $host . "/" . $base_run_dir;
 printf "Run ID: %s\n", $result{'id'};
 
-if (run_id_in_es($result{'id'}) == 1) {
+if (indexed_doc_count("run") > 0) {
     printf "Run ID %s already exists, so will not POST to elasticsearch\n", $result{'id'};
     print "Either delete existing run from ES or regenerate rickshaw-result.json\n";
     exit 1;
@@ -778,7 +771,7 @@ if (exists $result{'iterations'}) {
     print "Indexing of benchmark data complete\n";
 } #if iterations
 index_es_doc("run");
-my $attempts = 0;
+my $attempts = 1;
 while (scalar keys %es_doc_count > 0) {
     if ($attempts > 10) {
         print "ERROR: could not ensure all ES docs are indexed, exiting\n";
