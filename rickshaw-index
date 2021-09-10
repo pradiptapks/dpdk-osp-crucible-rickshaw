@@ -427,7 +427,7 @@ sub wait_for_docs {
             if ($submitted == $found) {
                 @doctypes = grep(!/^$doctype?/, @doctypes);
             }
-            if ($found gt $submitted) {
+            if ($found > $submitted) {
                 printf "ERROR: should not have more found than submitted, exiting\n";
             }
         }
