@@ -116,7 +116,7 @@ sub create_es_doc {
             if (exists $result{'tags'}) {
                 if (ref($result{'tags'}) eq ref([])) {
                     for my $field (qw(name val)) {
-                        if (exists $result{'tags'}{$field} and defined $result{'tags'}{$field}) {
+                        if (exists $result{'tags'}[$tag_idx]{$field} and defined $result{'tags'}[$tag_idx]{$field}) {
                             $es_doc{'tag'}{$field} = $result{'tags'}[$tag_idx]{$field};
                         } else {
                             printf "ERROR: field name %s for tag %d was not found in rickshaw-result.json:\n", $field, $tag_idx;
