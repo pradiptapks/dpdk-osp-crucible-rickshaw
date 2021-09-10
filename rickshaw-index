@@ -560,6 +560,7 @@ if (-e $tool_dir) {
                                     } else {
                                         $es_doc_count{'metric-desc'} = 0;
                                         index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
+                                        printf "Child process %d for %s exiting with %d metric_desc documents indexed\n", $$, $tool_dir . "/" . $tool_file, $es_doc_count{'metric_desc'};
                                         exit $es_doc_count{'metric_desc'};
                                     }
                                 }
@@ -571,6 +572,7 @@ if (-e $tool_dir) {
                         my $wait_return = wait(); 
                         my $child_exit_code = $? >> 8;
                         last if ($wait_return < 0);
+                        printf "Child process %d had exit code %d\n", $wait_return, $child_exit_code;
                         $es_doc_count{'metric_desc'} += $child_exit_code;
                     }
                 }
