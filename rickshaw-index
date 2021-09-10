@@ -34,6 +34,7 @@ use lib "$ENV{'TOOLBOX_HOME'}/perl";
 use toolbox::json;
 use toolbox::logging;
 
+$| = 1; # flush stdout
 $toolbox::logging::debug = 0;
 
 my @suported_cdm_vers = ('v5dev', 'v6dev');
@@ -44,7 +45,7 @@ my $coder = JSON::XS->new->canonical;
 my $result_schema_file;
 my $bench_metric_schema_file;
 my $file_rc;
-my %es_doc_count = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0, 'metric_desc' => 0);
+my %num_docs_submitted = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0, 'metric_desc' => 0);
 
 sub usage {
     print "\nusage:\n\n";
@@ -226,7 +227,7 @@ sub index_es_doc {
     my $es_doc_ref = create_es_doc($doc_type, $iter, $sample, $period);
     my $es_doc_json = $coder->encode($es_doc_ref);
     my $resp_ref = http_request("POST", "localhost:9200", "cdm" . $cdm{'ver'} . "-" . $doc_type . "/_doc/", $es_doc_json);
-    $es_doc_count{$doc_type}++;
+    $num_docs_submitted{$doc_type}++;
     if ($$resp_ref{'result'} ne "created") {
         printf "Request to index failed:\n%s\n", $coder->encode($resp_ref);
         exit 1;
@@ -289,6 +290,7 @@ sub index_metrics {
     my $base_doc_ref = shift; # metric_desc doc gets populated with this, usually a run doc or period doc
     my $primary_metric = shift; # optional, for reporting earliest-begin and latest-end from all
                                 # metrics processed with type matching $primary_metric
+    my $num_metric_docs_submitted = 0;
     my $earliest_begin;
     my $latest_end;
     my $coder = JSON::XS->new->canonical;
@@ -345,7 +347,7 @@ sub index_metrics {
         # and %result (rickshaw-run.json) by design does not include any metric data, as it would be
         # way too large.
         my $resp_ref = http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/", $metr_desc_doc_json);
-        $es_doc_count{'metric_desc'}++;
+        $num_metric_docs_submitted++;
     }
     my $count = 0;
     my $ndjson = "";
@@ -389,7 +391,9 @@ sub index_metrics {
     }
     close $metr_csv_fh;
     if (defined $primary_metric) {
-        return ($earliest_begin, $latest_end);
+        return ($num_metric_docs_submitted, $earliest_begin, $latest_end);
+    } else {
+        return $num_metric_docs_submitted;
     }
 }
 
@@ -399,6 +403,38 @@ sub indexed_doc_count {
                                 '{"query":{"bool":{"filter":[{"term":{"run.id":"' . $result{'id'} . '"}}]}}}');
     debug_log(sprintf "response" . Dumper $resp_ref);
     return $$resp_ref{'count'};
+}
+
+sub wait_for_docs {
+    my @doctypes =  (keys %num_docs_submitted);
+    my $attempts = 1;
+    my $max_attempts = 20;
+    while (scalar @doctypes > 0) {
+        if ($attempts > $max_attempts) {
+            print "ERROR: could not ensure all ES docs are indexed, exiting\n";
+            exit 1;
+        }
+        printf "Confirming all documents are in elasticsearch (attempt #%d of %d)\n", $attempts, $max_attempts;
+        my @these_doctypes = @doctypes;
+        foreach my $doctype (@these_doctypes) {
+            if ($num_docs_submitted{$doctype} == 0) {
+                @doctypes = grep(!/^$doctype?/, @doctypes);
+                next;
+            }
+            my $found = indexed_doc_count($doctype);
+            my $submitted = $num_docs_submitted{$doctype};
+            printf "  %s: %d submitted, %d found\n", $doctype, $submitted, $found;
+            if ($submitted == $found) {
+                @doctypes = grep(!/^$doctype?/, @doctypes);
+            }
+            if ($found gt $submitted) {
+                printf "ERROR: should not have more found than submitted, exiting\n";
+            }
+        }
+        printf "\n";
+        $attempts++;
+        sleep 2;
+    }
 }
 
 # Process the cmdline params
@@ -558,10 +594,9 @@ if (-e $tool_dir) {
                                     if (my $pid = fork) {
                                         push(@pids, $pid);
                                     } else {
-                                        $es_doc_count{'metric-desc'} = 0;
-                                        index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
-                                        printf "Child process %d for %s exiting with %d metric_desc documents indexed\n", $$, $tool_dir . "/" . $tool_file, $es_doc_count{'metric_desc'};
-                                        exit $es_doc_count{'metric_desc'};
+                                        my $num_metric_docs_submitted = index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
+                                        #printf "Child process %d for %s exiting with %d metric_desc documents indexed\n", $$, $tool_dir . "/" . $tool_file, $num_metric_docs_submitted;
+                                        exit $num_metric_docs_submitted;
                                     }
                                 }
                             }
@@ -572,9 +607,10 @@ if (-e $tool_dir) {
                         my $wait_return = wait(); 
                         my $child_exit_code = $? >> 8;
                         last if ($wait_return < 0);
-                        printf "Child process %d had exit code %d\n", $wait_return, $child_exit_code;
-                        $es_doc_count{'metric_desc'} += $child_exit_code;
+                        #printf "Child process %d had exit code %d\n", $wait_return, $child_exit_code;
+                        $num_docs_submitted{'metric_desc'} += $child_exit_code;
                     }
+                    wait_for_docs;
                 }
             }
         }
@@ -707,7 +743,9 @@ if (exists $result{'iterations'}) {
                                                         my $this_begin;
                                                         my $this_end;
                                                         # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                                        ($this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
+                                                        (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
+                                                        printf "A call to index_metrics() submitted %d metric_desc docs\n", $num_metric_docs_submitted;
+                                                        $num_docs_submitted{'metric_desc'} += $num_metric_docs_submitted;
                                                         # From processing all metric files, get the very-earliest-begin and very-latest-end
                                                         if (not defined $earliest_begin or $earliest_begin > $this_begin) {
                                                             $earliest_begin = $this_begin;
@@ -773,23 +811,5 @@ if (exists $result{'iterations'}) {
     print "Indexing of benchmark data complete\n";
 } #if iterations
 index_es_doc("run");
-my $attempts = 1;
-while (scalar keys %es_doc_count > 0) {
-    if ($attempts > 10) {
-        print "ERROR: could not ensure all ES docs are indexed, exiting\n";
-        exit 1;
-    }
-    printf "Confirming all documents are in elasticsearch (attempt #%d)\n", $attempts;
-    foreach my $doctype (keys %es_doc_count) {
-        my $this_indexed_count = indexed_doc_count($doctype);
-        printf "  %s: %d indexed, %d found\n", $doctype, $es_doc_count{$doctype}, $this_indexed_count;
-        if ($this_indexed_count eq $es_doc_count{$doctype}) {
-            delete $es_doc_count{$doctype};
-        }
-    }
-    printf "\n";
-    $attempts++;
-    sleep 3;
-}
-
+wait_for_docs;
 print "Indexing to ES complete\n";
