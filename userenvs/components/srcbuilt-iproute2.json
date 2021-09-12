@@ -1,0 +1,18 @@
+    {
+	"name": "iproute2",
+	"type": "source",
+	"source_info": {
+	    "url": "https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-5.9.0.tar.xz",
+	    "filename": "iproute2.tar.xz",
+	    "commands": {
+		"unpack": "tar -xJf iproute2.tar.xz",
+		"get_dir": "tar -tJf iproute2.tar.xz | head -n 1",
+		"commands": [
+		    "./configure",
+		    "make",
+		    "make install",
+		    "ip -Version"
+		]
+	    }
+	}
+    }
