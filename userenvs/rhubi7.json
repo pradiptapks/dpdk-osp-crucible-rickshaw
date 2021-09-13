@@ -77,9 +77,48 @@
           "cpio",
           "findutils",
           "hostname",
-          "iputils",
-          "iproute"
+          "iputils"
         ]
+      }
+    },
+    {
+      "name": "centos7-repos",
+      "type": "files",
+      "files_info": {
+        "files": [
+          {
+            "src": "%rickshaw-dir%/userenvs/requirement-sources/CentOS-Base.repo",
+            "dst": "/etc/yum.repos.d"
+          }
+        ]
+      }
+    },
+    {
+      "name": "extra-compiling",
+      "type": "distro",
+      "distro_info": {
+        "packages": [
+          "flex",
+          "bison"
+        ]
+      }
+    },
+    {
+      "name": "iproute2",
+      "type": "source",
+      "source_info": {
+        "url": "https://mirrors.edge.kernel.org/pub/linux/utils/net/iproute2/iproute2-5.9.0.tar.xz",
+        "filename": "iproute2.tar.xz",
+        "commands": {
+          "unpack": "tar -xJf iproute2.tar.xz",
+          "get_dir": "tar -tJf iproute2.tar.xz | head -n 1",
+          "commands": [
+            "./configure",
+            "make",
+            "make install",
+            "ip -Version"
+          ]
+        }
       }
     }
   ]
