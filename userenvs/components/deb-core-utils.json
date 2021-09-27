@@ -3,7 +3,10 @@
       "type": "distro",
       "distro_info": {
         "packages": [
-          "curl", "tar", "cpio", "xz-utils", "gzip", "jq", "git", "cpio", "findutils", "hostname", "iputils-ping", "iproute2", "numactl"
+          "curl", "tar", "cpio", "xz-utils", "gzip", "jq", "git",
+          "cpio", "findutils", "hostname", "iputils-ping", "iproute2",
+          "numactl", "elfutils-libelf-dev", "openssl-dev", "xz-dev", "libzstd-dev",
+          "libcap-dev"
         ]
       }
     }
