@@ -47,9 +47,9 @@
           "iputils-ping",
           "iproute2",
           "numactl",
-          "elfutils-libelf-dev",
-          "openssl-dev",
-          "xz-dev",
+          "libelf-dev",
+          "libssl-dev",
+          "liblzma-dev",
           "libzstd-dev",
           "libcap-dev"
         ]

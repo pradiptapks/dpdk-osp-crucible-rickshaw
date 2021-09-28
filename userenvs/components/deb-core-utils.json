@@ -5,7 +5,7 @@
         "packages": [
           "curl", "tar", "cpio", "xz-utils", "gzip", "jq", "git",
           "cpio", "findutils", "hostname", "iputils-ping", "iproute2",
-          "numactl", "elfutils-libelf-dev", "openssl-dev", "xz-dev", "libzstd-dev",
+          "numactl", "libelf-dev", "libssl-dev", "liblzma-dev", "libzstd-dev",
           "libcap-dev"
         ]
       }
