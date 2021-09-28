@@ -503,6 +503,10 @@ sub build_container_image {
                 }
             }
         }
+        if (! exists $run{'reg-tls-verify'}) {
+            $run{'reg-tls-verify'} = "true";
+        }
+        my $tls_verify = "--tls-verify=" . $run{'reg-tls-verify'};
         if ($run{'reg-auth'} eq "") {
             printf "Disabling registry authorization due to empty 'reg-auth' variable\n";
             $skip_registry_auth = 1;
@@ -513,14 +517,14 @@ sub build_container_image {
         } else {
             $skopeo_url = "docker://" . $image_url;
         }
-        $cmd = "skopeo inspect " . $skopeo_url . " 2>&1";
+        $cmd = "skopeo inspect " . $tls_verify . " " . $skopeo_url . " 2>&1";
         debug_log(sprintf "running: %s\n", $cmd);
         ($cmd, $output, $cmd_rc) = run_cmd($cmd);
         my $push_cmd = "buildah";
         if (! $skip_registry_auth) {
             $push_cmd .= " --authfile " . $run{'reg-auth'};
         }
-        $push_cmd .= " push localhost/workshop/$workshop_image $image_url";
+        $push_cmd .= " push " . $tls_verify . " localhost/workshop/$workshop_image $image_url";
         my $rmi_cmd = "buildah rmi localhost/workshop/$workshop_image";
         if ($cmd_rc == 0) {
             printf "Image was found at %s:\n", $image_url;
@@ -686,7 +690,7 @@ sub run_tests {
 }
 
 # Apply envinronment variables
-foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REG_AUTH RS_REG_REPO)) {
+foreach my $e (qw(RS_NAME RS_EMAIL RS_TAGS RS_DESC RS_REG_AUTH RS_REG_REPO RS_REG_TLS_VERIFY)) {
     if (exists $ENV{$e}) {
         my $var = $e;
         $var =~ s/^RS_//;
