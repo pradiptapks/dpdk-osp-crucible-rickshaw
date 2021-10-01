@@ -505,6 +505,9 @@ sub build_container_image {
         }
         if (! exists $run{'reg-tls-verify'}) {
             $run{'reg-tls-verify'} = "true";
+        } elsif ($run{'reg-tls-verify'} ne "true" && $run{'reg-tls-verify'} ne "false") {
+            printf "WARNING: Invalid value found for reg-tls-verify, defaulting to 'true'\n";
+            $run{'reg-tls-verify'} = "true";
         }
         my $tls_verify = "--tls-verify=" . $run{'reg-tls-verify'};
         if ($run{'reg-auth'} eq "") {
