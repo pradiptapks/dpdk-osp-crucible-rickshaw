@@ -29,7 +29,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "samples-iteration-repeat-runs"
+        artifact_tag: "samples-iteration-repeat-runs-remotehost"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "fio"
@@ -57,7 +57,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "samples-iteration-repeat-runs"
+        artifact_tag: "samples-iteration-repeat-runs-k8s"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "fio"
@@ -85,7 +85,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "fio"
+        artifact_tag: "fio-remotehost"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "fio"
@@ -112,7 +112,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "fio"
+        artifact_tag: "fio-k8s"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "fio"
@@ -139,7 +139,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "uperf"
+        artifact_tag: "uperf-remotehost"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "uperf"
@@ -166,7 +166,7 @@ jobs:
     - name: Run crucible-ci->integration-tests
       uses: ./crucible-ci/.github/actions/integration-tests
       with:
-        artifact_tag: "uperf"
+        artifact_tag: "uperf-k8s"
         ci_target: "rickshaw"
         ci_target_dir: ${{ github.workspace }}/rickshaw
         scenarios: "uperf"
