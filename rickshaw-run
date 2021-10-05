@@ -50,7 +50,6 @@ my %userenvs;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
-my $rb_base_uuid = $run{'id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 240;
