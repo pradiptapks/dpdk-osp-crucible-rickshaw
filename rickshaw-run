@@ -749,7 +749,7 @@ sub process_cmdline() {
             usage;
             exit 0;
         } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^packrat-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$|^engine-dir$/ or
-                $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
+                $arg =~ /^run-id$|^id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
                 $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$/ or
                 $arg =~ /^reg-(auth|repo)$/ or
                 $arg =~ /^email$|^desc$/) {
