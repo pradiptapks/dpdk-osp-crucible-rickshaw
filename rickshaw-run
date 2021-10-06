@@ -50,7 +50,6 @@ my %userenvs;
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
-my $rb_base_uuid = $run{'id'};
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 240;
@@ -750,7 +749,7 @@ sub process_cmdline() {
             usage;
             exit 0;
         } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^packrat-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$|^engine-dir$/ or
-                $arg =~ /^run-id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
+                $arg =~ /^run-id$|^id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
                 $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$/ or
                 $arg =~ /^reg-(auth|repo)$/ or
                 $arg =~ /^email$|^desc$/) {
