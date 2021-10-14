@@ -20,6 +20,18 @@
   },
   "requirements": [
     {
+      "name": "centos7-repos",
+      "type": "files",
+      "files_info": {
+        "files": [
+          {
+            "src": "%rickshaw-dir%/userenvs/requirement-sources/centos7.repo",
+            "dst": "/etc/yum.repos.d"
+          }
+        ]
+      }
+    },
+    {
       "name": "python38",
       "type": "distro",
       "distro_info": {
@@ -70,26 +82,23 @@
           "curl",
           "tar",
           "cpio",
-          "xz",
           "gzip",
           "jq",
           "git",
           "cpio",
           "findutils",
           "hostname",
-          "iputils"
-        ]
-      }
-    },
-    {
-      "name": "centos7-repos",
-      "type": "files",
-      "files_info": {
-        "files": [
-          {
-            "src": "%rickshaw-dir%/userenvs/requirement-sources/CentOS-Base.repo",
-            "dst": "/etc/yum.repos.d"
-          }
+          "iputils",
+          "elfutils-libelf",
+          "elfutils-libelf-devel",
+          "openssl",
+          "openssl-devel",
+          "xz",
+          "xz-devel",
+          "libcap",
+          "libzstd",
+          "libzstd-devel",
+          "libcap-devel"
         ]
       }
     },

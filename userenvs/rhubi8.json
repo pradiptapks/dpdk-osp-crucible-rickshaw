@@ -20,6 +20,18 @@
   },
   "requirements": [
     {
+      "name": "centos8-repos",
+      "type": "files",
+      "files_info": {
+        "files": [
+          {
+            "src": "%rickshaw-dir%/userenvs/requirement-sources/centos8.repo",
+            "dst": "/etc/yum.repos.d"
+          }
+        ]
+      }
+    },
+    {
       "name": "python39",
       "type": "distro",
       "distro_info": {
@@ -37,7 +49,6 @@
           "curl",
           "tar",
           "cpio",
-          "xz",
           "gzip",
           "jq",
           "git",
@@ -45,7 +56,17 @@
           "findutils",
           "hostname",
           "iputils",
-          "iproute"
+          "iproute",
+          "elfutils-libelf",
+          "elfutils-libelf-devel",
+          "openssl",
+          "openssl-devel",
+          "xz",
+          "xz-devel",
+          "libcap",
+          "libzstd",
+          "libzstd-devel",
+          "libcap-devel"
         ]
       }
     },

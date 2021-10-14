@@ -14,6 +14,7 @@
 name=CentOS-7 - Base
 mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=os&infra=$infra
 #baseurl=http://mirror.centos.org/centos/7/os/$basearch/
+enabled=1
 gpgcheck=1
 gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 
@@ -22,6 +23,7 @@ gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 name=CentOS-7 - Updates
 mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=updates&infra=$infra
 #baseurl=http://mirror.centos.org/centos/7/updates/$basearch/
+enaled=1
 gpgcheck=1
 gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 
@@ -30,6 +32,7 @@ gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 name=CentOS-7 - Extras
 mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=extras&infra=$infra
 #baseurl=http://mirror.centos.org/centos/7/extras/$basearch/
+enabled=1
 gpgcheck=1
 gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 
@@ -39,6 +42,6 @@ name=CentOS-7 - Plus
 mirrorlist=http://mirrorlist.centos.org/?release=7&arch=$basearch&repo=centosplus&infra=$infra
 #baseurl=http://mirror.centos.org/centos/7/centosplus/$basearch/
 gpgcheck=1
-enabled=0
+enabled=1
 gpgkey=http://mirror.centos.org/centos/7/os/x86_64/RPM-GPG-KEY-CentOS-7
 
