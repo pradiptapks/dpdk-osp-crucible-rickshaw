@@ -322,6 +322,7 @@ sub dir_entries {
 
 sub build_container_image {
     my $userenv = shift;
+    printf "Processing userenv '%s'\n", $userenv;
     my $image_url; # What we will return
     if ($use_workshop) {
         # First, calculate the image ID, which is a md5sum of all the
@@ -429,11 +430,16 @@ sub build_container_image {
         }
         (my $cmd, my $cmd_output, my $cmd_rc) = run_cmd("$workshop_cmd --label config-analysis --dump-config true");
         my @config_analysis_output = split(/\n/, $cmd_output);
-        if (open(CONFIG_ANALYSIS_FH, ">", $run_dir . "/workshop.dump-config.out")) {
+        if (open(CONFIG_ANALYSIS_FH, ">", $run_dir . "/workshop." . $userenv . ".dump-config.out")) {
             printf CONFIG_ANALYSIS_FH "%s\n", join("\n", @config_analysis_output);
             close(CONFIG_ANALYSIS_FH);
         } else {
-            print "Failed to open %s/workshop.dump-config.out for writing\n", $run_dir;
+            print "Failed to open %s/workshop." . $userenv . ".dump-config.out for writing\n", $run_dir;
+        }
+        if ($cmd_rc > 0) {
+            printf "Workshop dump config failed:\n";
+            printf "%s\n", join("\n", @config_analysis_output);
+            exit 1;
         }
         my $break_line = 0;
         for (my $i=0; $i<scalar(@config_analysis_output); $i++) {
@@ -450,11 +456,16 @@ sub build_container_image {
         # as being copied into the userenv
         ($cmd, $cmd_output, $cmd_rc) = run_cmd("$workshop_cmd --label files-listing --dump-files true");
         my @files_dump_output = split(/\n/, $cmd_output);
-        if (open(FILES_DUMP_FH, ">", $run_dir . "/workshop.dump-files.out")) {
+        if (open(FILES_DUMP_FH, ">", $run_dir . "/workshop." . $userenv . ".dump-files.out")) {
             printf FILES_DUMP_FH "%s\n", join("\n", @files_dump_output);
             close(FILES_DUMP_FH);
         } else {
-            print "Failed to open %s/workshop.dump-files.out\n", $run_dir;
+            print "Failed to open %s/workshop." . $userenv . ".dump-files.out\n", $run_dir;
+        }
+        if ($cmd_rc > 0) {
+            printf "Workshop dump files failed:\n";
+            printf "%s\n", join("\n", @files_dump_output);
+            exit 1;
         }
         $break_line = 0;
         for (my $i=0; $i<scalar(@files_dump_output); $i++) {
@@ -575,11 +586,11 @@ sub build_container_image {
             printf "This may take a few minutes\n";
             ($workshop_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_cmd);
             my @workshop_output = split(/\n/, $workshop_output);
-            if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop.out")) {
+            if (open(WORKSHOP_LOG_FH, ">", $run_dir . "/workshop." . $userenv . ".out")) {
                 printf WORKSHOP_LOG_FH "%s\n", join("\n", @workshop_output);
                 close(WORKSHOP_LOG_FH);
             } else {
-                printf "Failed to open " . $run_dir . "/workshop.out for writing\n";
+                printf "Failed to open " . $run_dir . "/workshop." . $userenv . ".out for writing\n";
             }
             if ($workshop_rc > 0) {
                 printf "Workshop build failed:\n";
@@ -1538,6 +1549,7 @@ make_run_dirs();
 validate_endpoints();
 build_test_order();
 prepare_bench_tool_engines();
+print "Preparing userenvs:\n";
 foreach my $userenv (keys %userenvs) {
     $userenvs{$userenv}{'image'} = build_container_image($userenv);
 }
