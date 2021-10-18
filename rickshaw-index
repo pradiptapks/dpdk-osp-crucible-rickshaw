@@ -678,7 +678,7 @@ if (exists $result{'iterations'}) {
         }
         if ($iter_status eq "pass") {
             if (opendir(my $iter_dh, $run_dir . "/" . $this_iter_dir)) {
-                my @samp_dirs = grep(/^sample-\d+/, readdir($iter_dh));
+                my @samp_dirs = grep(/^sample-\d+$/, readdir($iter_dh));
                 my @samples;
                 my $primary_metric;
                 my $primary_period;
