@@ -55,14 +55,23 @@
           "curl",
           "tar",
           "cpio",
-          "xz",
           "gzip",
           "jq",
           "git",
           "cpio",
           "findutils",
           "hostname",
-          "iputils"
+          "iputils",
+          "elfutils-libelf",
+          "elfutils-libelf-devel",
+          "openssl",
+          "openssl-devel",
+          "xz",
+          "xz-devel",
+          "libcap",
+          "libzstd",
+          "libzstd-devel",
+          "libcap-devel"
         ]
       }
     },

@@ -1,10 +1,10 @@
     {
-      "name": "centos7-repos",
+      "name": "centos8-repos",
       "type": "files",
       "files_info": {
         "files": [
 	    {
-		"src": "%rickshaw-dir%/userenvs/requirement-sources/centos7.repo",
+		"src": "%rickshaw-dir%/userenvs/requirement-sources/centos8.repo",
 		"dst": "/etc/yum.repos.d"
 	    }
         ]
