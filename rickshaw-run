@@ -962,6 +962,12 @@ sub make_run_dirs() {
     }
 }
 
+sub save_config_info() {
+    if (put_json_file($config_dir . "/rickshaw-run.json", \%run) > 0) {
+        printf "save_config_info(): put_json_file() failed for %s\n", $config_dir . "/rickshaw-run.json";
+    }
+}
+
 sub validate_endpoints() {
     # Call each endpoint script with "--validate" as the first option, and each endpoint script should
     # return a list of clients and servers which are used from this endpoint.  Collect this output
@@ -1546,6 +1552,7 @@ load_bench_params();
 load_tool_params();
 load_utility_params();
 make_run_dirs();
+save_config_info();
 validate_endpoints();
 build_test_order();
 prepare_bench_tool_engines();
