@@ -71,9 +71,13 @@ declare -A volumeMounts
 function cleanup_json() {
     local json="$1"; shift
 
+    echo "cleanup_json: processing ${json}"
     mv ${json} ${json}.tmp
-    jq . ${json}.tmp > ${json}
-    rm ${json}.tmp
+    if jq . ${json}.tmp > ${json}; then
+        rm ${json}.tmp
+    else
+        exit_error "cleanup_json failed to process ${json}"
+    fi
 }
 
 function endpoint_k8s_test_stop() {
