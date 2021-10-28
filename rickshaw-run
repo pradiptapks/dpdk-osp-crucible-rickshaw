@@ -90,6 +90,7 @@ my $tool_schema_file = $rickshaw_project_dir . "/schema/tool.json";
 my $run_schema_file = $rickshaw_project_dir . "/schema/run.json";
 my $utility_schema_file = $rickshaw_project_dir . "/schema/utility.json";
 my $bench_params_schema_file = $rickshaw_project_dir . "/schema/bench-params.json";
+my $tool_params_schema_file = $rickshaw_project_dir . "/schema/tool-params.json";
 my $roadblock_exit_success = 0;
 my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
@@ -861,7 +862,7 @@ sub load_tool_params() {
         $run{'tool-params'} = $rickshaw_project_dir . "/config/tool-params.json";
     }
     # TODO: need schema for tool-params
-    ($rc, my $json_ref) = get_json_file($run{'tool-params'});
+    ($rc, my $json_ref) = get_json_file($run{'tool-params'}, $tool_params_schema_file);
     if ($rc > 0 or ! defined $json_ref) {
         print "Could not open the tool params file\n";
         exit 1;
