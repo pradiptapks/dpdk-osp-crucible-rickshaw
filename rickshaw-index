@@ -696,6 +696,7 @@ if (exists $result{'iterations'}) {
                     if ($samp_status eq "pass") {
                         my $this_sample = $$iter{'samples'}[$sample_idx];
                         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
+                        $$this_sample{'num'} = $sample_num;
                         $$this_sample{'status'} = $samp_status;
                         $$this_sample{'id'} = Data::UUID->new->create_str();
                         if ($cdm{'ver'} eq "v6dev") {
