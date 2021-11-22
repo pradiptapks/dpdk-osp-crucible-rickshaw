@@ -62,6 +62,7 @@ masters_tool_collect="1"
 kubeconfig="1"
 declare -A cpuPartitioning
 declare -A nodeSelector
+declare -A PsecurityContext
 declare -A securityContext
 declare -A resources
 declare -A annotations
@@ -447,9 +448,9 @@ function process_k8s_opts() {
                 fi
                 ;;
             securityContext)
-                # securityContext is per pod:
+                # securityContext is per container:
                 # option format::  securityContext:<pod-name>:<full-path-to-json-with-securityContext>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # <pod-name> can be 'default' to apply to any pod's containers that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "securityContext": {
                 #   "privileged": false,
@@ -464,6 +465,28 @@ function process_k8s_opts() {
                     securityContext[$name]=`cat $file`
                 else
                     exit_error "Could not find securityContext file $file for $name"
+                fi
+                ;;
+            PsecurityContext)
+                # PsecurityContext is per pod:
+                # option format::  PsecurityContext:<pod-name>:<full-path-to-json-with-securityContext>
+                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # json file example (note no outer {}'s)
+                # "securityContext": {
+                #       "sysctls": [
+                #          {
+                #             "name": "net.ipv4.tcp_tw_reuse",
+                #             "value": "1"
+                #          }
+                #       ]
+                # }
+                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                name=`echo $val | awk -F: '{print $1}'`
+                file=`echo $val | awk -F: '{print $2}'`
+                if [ ! -z "$file" -o -e $file ]; then
+                    PsecurityContext[$name]=`cat $file`
+                else
+                    exit_error "Could not find PsecurityContext file $file for $name"
                 fi
                 ;;
             resources)
@@ -731,7 +754,15 @@ function build_pod_spec() {
         fi
         set -u
     fi
-
+    # If user provides pod securityContext 
+    if [ "$type" == "cs" ]; then
+        set +u
+        if [ ! -z "${PsecurityContext[$name]}" ]; then
+            echo -e ",${PsecurityContext[$name]}" >>$json
+        elif [ ! -z "${PsecurityContext[default]}" ]; then
+            echo -e ",${PsecurityContext[default]}" >>$json
+        fi
+    fi
     echo "  }" >>$json
     echo "}" >>$json
     cleanup_json "${json}"
