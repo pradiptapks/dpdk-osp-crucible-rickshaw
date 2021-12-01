@@ -657,6 +657,7 @@ if (exists $result{'iterations'}) {
         my $iter_idx = $iter_num - 1;
         $$iter{'samples'} = ();
         $$iter{'id'} = Data::UUID->new->create_str();
+        $$iter{'num'} = $iter_num;
         my $param_idx = 0;
         for my $param (@{ $$iter{'params'} }) {
             $$param{'id'} = Data::UUID->new->create_str();
@@ -675,6 +676,10 @@ if (exists $result{'iterations'}) {
         } else {
             $iter_status = "missing";
             printf "Not going to index iteration %d because its directory cannot be found\n", $iter_num;
+        }
+        $$iter{'status'} = $iter_status;
+        if ($cdm{'ver'} eq "v6dev") {
+            $$iter{'path'} = $this_iter_dir;
         }
         if ($iter_status eq "pass") {
             if (opendir(my $iter_dh, $run_dir . "/" . $this_iter_dir)) {
@@ -696,6 +701,7 @@ if (exists $result{'iterations'}) {
                     if ($samp_status eq "pass") {
                         my $this_sample = $$iter{'samples'}[$sample_idx];
                         my $this_samp_dir = $this_iter_dir . "/" .  $samp_dir;
+                        $$this_sample{'num'} = $sample_num;
                         $$this_sample{'status'} = $samp_status;
                         $$this_sample{'id'} = Data::UUID->new->create_str();
                         if ($cdm{'ver'} eq "v6dev") {
@@ -820,11 +826,6 @@ if (exists $result{'iterations'}) {
                 }
                 $$iter{'primary-metric'} = $primary_metric;
                 $$iter{'primary-period'} = $primary_period;
-                $$iter{'num'} = $iter_num;
-                $$iter{'status'} = $iter_status;
-                if ($cdm{'ver'} eq "v6dev") {
-                    $$iter{'path'} = $this_iter_dir;
-                }
                 index_es_doc("iteration", $iter_idx);
                 write_es_doc("iteration", $run_dir . "/" . $this_iter_dir, $iter_idx);
             } else {
