@@ -1156,6 +1156,34 @@ sub build_test_order() {
     }
 }
 
+sub build_tool_cmd {
+    my $tool_entry = shift;
+    my $start_stop = shift;
+    my $fh = shift;
+    my $endpoint_type = shift;
+    my $tool_name = $$tool_entry{'tool'};
+    # Assemble the arguments as a bash array in order to not get them scrambled later
+    my $tool_cmd = $tool_name . ':declare -a ARGS=(';
+    foreach my $tool_param (@{ $$tool_entry{'params'} }) {
+        $tool_cmd .= "'--" . $$tool_param{'arg'} . "' '" . $$tool_param{'val'} . "' ";
+    }
+    $tool_cmd =~ s/\s$//;
+    $tool_cmd .= ") && ";
+    $tool_cmd .= $tools_configs{$tool_name}{'collector'}{$start_stop} . ' "${ARGS[@]}"';
+    # Check if the engine is deployed by an endpoint that blacklists this tool
+    if (exists $tools_configs{$tool_name}{'collector'}{'blacklist'}) {
+        for my $i (@{ $tools_configs{$tool_name}{'collector'}{'blacklist'} }) {
+            if (defined $endpoint_type and $endpoint_type eq $$i{'endpoint'}) {
+                # If it is, don't let this client/server run this tool
+                undef $tool_cmd;
+            }
+        }
+    }
+    if (defined $tool_cmd) {
+        printf $fh "%s\n", $tool_cmd;
+    }
+}
+
 sub prepare_bench_tool_engines() {
     # Run on the controller (the host running this script) the benchmark-specific "pre-script"
     if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controller"}{"pre-script"} ne "") {
@@ -1216,14 +1244,7 @@ sub prepare_bench_tool_engines() {
                 die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
             debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
             foreach my $tool_entry (@tools_params) {
-                my $tool_name = $$tool_entry{'tool'};
-                if (grep($tool_name, @{ $collectors{$collector} })) {
-                    my $tool_cmd = $tool_name . ": " . $tools_configs{$tool_name}{'collector'}{$start_stop};
-                    foreach my $tool_param (@{ $$tool_entry{'params'} }) {
-                        $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
-                    }
-                    printf $fh "%s\n", $tool_cmd;
-                }
+                build_tool_cmd($tool_entry, $start_stop, $fh);
             }
             close($fh);
             chmod 0755, $tool_cmd_file;
@@ -1241,29 +1262,11 @@ sub prepare_bench_tool_engines() {
                 my $cs_tool_cmds_dir = $tool_cmds_dir . "/" . $cs_type . "/" . $$cs_ref{'id'};
                 make_path($cs_tool_cmds_dir);
                 my $tool_cmd_file = $cs_tool_cmds_dir . "/" . $start_stop;
-                open(TOOL_CMD_FH, ">" . $tool_cmd_file) ||
+                open(my $fh, ">" . $tool_cmd_file) ||
                     die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
-                my $cs_endpoint = $$cs_ref{'endpoint-type'};
+                #my $cs_endpoint = $$cs_ref{'endpoint-type'};
                 foreach my $tool_entry (@tools_params) {
-                    my $tool_name = $$tool_entry{'tool'};
-                    my $tool_cmd = $tool_name . ": " . $tools_configs{$tool_name}{'collector'}{$start_stop};
-                    foreach my $tool_param (@{ $$tool_entry{'params'} }) {
-                        $tool_cmd .= " --" . $$tool_param{'arg'} . " " . $$tool_param{'val'};
-                    }
-                    # Check if the client/server is deployed by an endpoint that blacklists this tool 
-                    if (exists $tools_configs{$tool_name}{'collector'}{'blacklist'}) {
-                        for my $i (@{ $tools_configs{$tool_name}{'collector'}{'blacklist'} }) {
-                            if ($$cs_ref{'endpoint-type'} eq $$i{'endpoint'}) {
-                                # If it is, don't let this client/server run this tool
-                                debug_log(sprintf "%s %d will not run tool %s\n",
-                                                $cs_type, $$cs_ref{'id'}, $tool_name);
-                                undef $tool_cmd;
-                            }
-                        }
-                    }
-                    if (defined $tool_cmd) {
-                        printf TOOL_CMD_FH "%s\n", $tool_cmd;
-                    }
+                    build_tool_cmd($tool_entry, $start_stop, $fh, $$cs_ref{'endpoint-type'});
                 }
                 close(TOOL_CMD_FH);
             }
