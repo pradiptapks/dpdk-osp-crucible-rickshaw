@@ -132,7 +132,7 @@ fi
 function addto_clients_servers() {
     local arg="$1"; shift
     local val="$1"; shift
-    for ids in `echo $val | sed -e 's/,/ /'`; do
+    for ids in `echo $val | sed -e 's/+/ /g'`; do
         if echo $ids | grep -q -- "-"; then
             range=`echo $ids | sed 's/-/ /'`
             for j in `seq $range`; do
