@@ -782,6 +782,7 @@ sub source_container_image {
     my $userenv_arg;
     my $count = 0;
     my $userenv_ref = get_json_file($rickshaw_project_dir . "/userenvs/" . $userenv . ".json");
+    my $userenv_image = $$userenv_ref{'userenv'}{'origin'}{'image'} . ":" . $$userenv_ref{'userenv'}{'origin'}{'tag'};
     while (scalar @requirements > 0) {
         my $req_arg;
         my $skip_update;
@@ -853,7 +854,7 @@ sub source_container_image {
     if ($i == 0) {
         # The first stage pulls a userenv image (like fedora, stream, etc), and that
         # image needs to be deleted later, so save a reference to it here
-        push(@local_images, $$userenv_ref{'userenv'}{'origin'}{'image'} . ":" . $$userenv_ref{'userenv'}{'origin'}{'tag'});
+        push(@local_images, $userenv_image);
     }
     while ($i <= $num_images - 1) {
         printf "Builidng stage %d...", $i + 1;
