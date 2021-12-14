@@ -532,7 +532,11 @@ sub delete_local_image {
         $full_url = $run{'source-image-url'} . ":" . $image;
     }
     if (!local_image_found($image)) {
-        die "ERROR: delete_local_image(): could not find local image [" . $full_url . "] before delete";
+        printf "ERROR: delete_local_image(): could not find local image [%s] before delete\n", $full_url;
+        printf "imgae: [%s]\n", $image;
+        printf "full_url: [%s]\n", $full_url;
+        printf "source-image-url: [%s]\n", $run{'source-image-url'};
+        exit 1;
     }
     debug_log(sprintf "Deleting local image %s\n", $full_url);
     my $cmd = "buildah";
