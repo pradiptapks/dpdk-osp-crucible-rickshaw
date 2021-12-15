@@ -41,7 +41,7 @@ else
     exit
 fi
 
-chroot_rbind_mounts="proc dev sys lib/modules usr/src boot"
+chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
 
 endpoint_name="remotehost"
 osruntime="chroot"
