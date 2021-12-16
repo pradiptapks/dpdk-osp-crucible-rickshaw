@@ -65,6 +65,10 @@
           },
           "additionalItems": false
         },
+        "client-server-ratio": {
+          "type": "string",
+          "pattern": "^.+$"
+        },
         "runtime": {
           "type": "string",
           "pattern": "^.+$"
