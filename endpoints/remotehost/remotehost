@@ -47,7 +47,6 @@ endpoint_name="remotehost"
 osruntime="chroot"
 userenv="rhubi8"
 user="root"
-ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A cpuPartitioning
 declare -A numaNode
 
