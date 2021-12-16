@@ -467,6 +467,7 @@ sub local_image_found {
 }
 
 sub workshop_build_image {
+    my $stage = shift;
     my $userenv_arg = shift;
     die "workshop_build_image(): userenv_arg must be defined\n" if !defined $userenv_arg;
     my $req_args = shift;
@@ -498,8 +499,8 @@ sub workshop_build_image {
     debug_log(sprintf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
     ($workshop_build_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_build_cmd);
     my @workshop_output = split(/\n/, $workshop_output);
-    my $workshop_output_file = $run_dir . "/workshop." . $image_tag . ".stdout.txt";
-    my $fh = open_write_text_file($workshop_output_file) || die "Failed to open " . $workshop_output_file . ".out for writing\n";
+    my $workshop_output_file = $run_dir . "/workshop.stage-" . $stage . "." . $image_tag . ".stdout.txt";
+    my $fh = open_write_text_file($workshop_output_file) || die "Failed to open " . $workshop_output_file . " for writing\n";
     printf $fh "%s\n", join("\n", @workshop_output);
     close($fh);
     if ($workshop_rc > 0) {
@@ -568,7 +569,7 @@ sub push_local_image {
         }
     }
     if (!local_image_found($image_tag)) {
-        die "ERROR: push_local_image(): could not find local image before push";
+        die "ERROR: push_local_image(): could not find local image before push ($image_tag)";
     }
     my $cmd = "buildah";
     if (! $skip_registry_auth) {
@@ -582,7 +583,7 @@ sub push_local_image {
         exit 1;
     }
     if (!remote_image_found($image_tag)) {
-        die "ERROR: push_local_image(): could not find remote image after push";
+        die "ERROR: push_local_image(): could not find remote image after push ($image_tag)";
     }
 }
 
@@ -857,12 +858,15 @@ sub source_container_image {
         push(@local_images, $userenv_image);
     }
     while ($i <= $num_images - 1) {
-        printf "Builidng stage %d...", $i + 1;
+        printf "Processing stage %d (%s)...\n", $i + 1, $workshop_args[$i]{'tag'};
         my $begin = time();
-        workshop_build_image($workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
+        workshop_build_image($i + 1, $workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
         my $end = time();
-        printf "took %d seconds\n", $end - $begin;
+        printf "\tBuilding took %d seconds\n", $end - $begin;
+        $begin = time();
         push_local_image($workshop_args[$i]{'tag'});
+        $end = time();
+        printf "\tPushing took %d seconds\n", $end - $begin;
         push(@local_images, $workshop_args[$i]{'tag'});
         $image = $run{'dest-image-url'} . ":" . $workshop_args[$i]{'tag'};
         $i++;
