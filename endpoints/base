@@ -15,7 +15,7 @@ rb_exit_input=2
 default_timeout=240
 max_rb_attempts=""
 endpoint_deploy_timeout=360
-client_server_start_timeout=720
+client_server_script_start_timeout=720
 endpoint_move_data_timeout=300
 cs_rb_opts=""
 do_validate="0"
@@ -46,7 +46,7 @@ function exit_error() {
 function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
-    local longopts+=",max-rb-attempts:"
+    local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,client-server-script-start-timeout:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -103,6 +103,18 @@ function process_opts() {
             --max-rb-attempts)
                 shift;
                 max_rb_attempts="$1"
+                shift;
+                ;;
+            --endpoint-deploy-timeout)
+                shift;
+                endpoint_deploy_timeout="$1"
+                echo "setting endpoint_deploy_timeout to $endpoint_deploy_timeout"
+                shift;
+                ;;
+            --client-server-script-start-timeout)
+                shift;
+                client_server_script_start_timeout="$1"
+                echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
                 shift;
                 ;;
             --)
@@ -312,15 +324,15 @@ function process_prebench_roadblocks() {
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
-    do_roadblock "client-server-script-start" "follower" $client_server_start_timeout
+    do_roadblock "client-server-script-start" "follower" $client_server_script_start_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
-    do_roadblock "client-server-get-data" "follower" $client_server_start_timeout
+    do_roadblock "client-server-get-data" "follower" $default_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
-    do_roadblock "client-server-collect-sysinfo" "follower" $client_server_start_timeout
+    do_roadblock "client-server-collect-sysinfo" "follower" $default_timeout
     if [ $? -eq $rb_exit_abort ]; then
         exit_error "Exiting due to abort from another participant"
     fi
@@ -531,14 +543,13 @@ function process_roadblocks() {
                     stop_sync="`echo $this_sync | sed -e s/start/stop/ -e s/get/send/`"
                     echo "stop_sync: $stop_sync"
                 fi
-                #if [ $# -gt 0 ]; then # If there are no other args then there are no leader roadblocks
-                    #echo "about to run do_roadblock collector-$this_sync leader $client_server_start_timeout "" $@"
-                    #do_roadblock "collector-$this_sync" "leader" $client_server_start_timeout "" $@
-                    #a_rb=$?
-                    #echo "rb exit code: $a_rb"
-                #fi
-                echo "about to run do_roadblock client-server-$this_sync follower $client_server_start_timeout"
-                do_roadblock "client-server-$this_sync" "follower" $client_server_start_timeout
+                if [ "$this_sync" == "script-start" ]; then
+                    this_timeout=$client_server_script_start_timeout
+                else
+                    this_timeout=$default_timeout
+                fi
+                echo "about to run do_roadblock client-server-$this_sync follower $this_timeout"
+                do_roadblock "client-server-$this_sync" "follower" $this_timeout
                 b_rb=$?
                 echo "rb exit code: $b_rb"
                 if [ $a_rb -gt 0 -a $b_rb -gt 0 ]; then
@@ -595,7 +606,7 @@ function process_roadblocks() {
             echo "about to process client-server stop syncs"
             for (( i=0; i<${#client_stop_syncs[*]}; i++ )); do
                 this_sync="${client_stop_syncs[$i]}"
-                do_roadblock "client-server-$this_sync" "follower" $client_server_start_timeout
+                do_roadblock "client-server-$this_sync" "follower" $client_server_script_start_timeout
             done
         else
             echo "deploy aborted, going directly to cleanup"
