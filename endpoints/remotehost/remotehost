@@ -420,6 +420,7 @@ function launch_osruntime() {
             base_cmd+=" --max-sample-failures=$max_sample_failures"
             base_cmd+=" --max-rb-attempts=$max_rb_attempts"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
+            base_cmd+=" --client-server-script-start-timeout=$client_server_script_start_timeout"
             if [ $numa_node -gt -1 ]; then
                 base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
             fi

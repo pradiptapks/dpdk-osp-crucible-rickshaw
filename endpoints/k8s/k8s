@@ -679,6 +679,10 @@ function build_pod_spec() {
     echo "            \"value\": \"$max_rb_attempts\"" >>$json
     echo "          }," >>$json
     echo "          {" >>$json
+    echo "            \"name\": \"client_server_script_start_timeout\"," >>$json
+    echo "            \"value\": \"$client_server_script_start_timeout\"" >>$json
+    echo "          }," >>$json
+    echo "          {" >>$json
     echo "            \"name\": \"ssh_id\"," >>$json
     printf "            \"value\": \"" >>$json
     sed -z 's/\n/\\n/g' $config_dir/rickshaw_id.rsa >>$json

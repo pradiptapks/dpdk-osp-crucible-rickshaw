@@ -54,7 +54,7 @@ my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout = 240;
 my $endpoint_deploy_timeout = 360;
-my $client_server_script_timeout = 720;
+my $client_server_script_start_timeout = 720;
 my $endpoint_move_data_rb_timeout = 300;
 (my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
 chomp ($hostname);
@@ -1651,6 +1651,10 @@ sub deploy_endpoints() {
     # Deploy ths endpoints so they are ready to run benchmark and tools.
     # Each endpoint is responible for launching a osruntime for each client and server.
     print "Deploying endpoints\n";
+    $endpoint_deploy_timeout += scalar @endpoints * 120;
+    printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
+    $client_server_script_start_timeout += scalar @endpoints * 120;
+    printf "client-server-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     debug_log(sprintf "\nendpoint output:\n");
     for (my $i = 0; $i < scalar @endpoints; $i++) {
         my $type = $endpoints[$i]{'type'};
@@ -1674,6 +1678,8 @@ sub deploy_endpoints() {
                     " --base-run-dir=" . $run{'base-run-dir'} .
                     " --max-sample-failures=" . $run{'max-sample-failures'} .
                     " --max-rb-attempts=" . $run{'max-rb-attempts'} .
+                    " --endpoint-deploy-timeout=" . $endpoint_deploy_timeout .
+                    " --client-server-script-start-timeout=" . $client_server_script_start_timeout .
                     $endpoint_image_opt .
                     $endpoint_roadblock_opt .
                     " >" . $this_endpoint_run_dir . "/endpoint-stdout.txt" .
@@ -1721,9 +1727,9 @@ sub process_roadblocks() {
             }
         }
         # Next step all client-servers through pre-test preparation
-        if (roadblock_leader("client-server-script-start", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
-            if (roadblock_leader("client-server-get-data", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
-                if (roadblock_leader("client-server-collect-sysinfo", $client_server_script_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+        if (roadblock_leader("client-server-script-start", $client_server_script_start_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+            if (roadblock_leader("client-server-get-data", $client_server_script_start_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
+                if (roadblock_leader("client-server-collect-sysinfo", $client_server_script_start_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
                     if (roadblock_leader("client-server-start-tools", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
                         if (roadblock_leader("client-server-start-tests", $default_rb_timeout, $messages_ref, (@rb_cs_ids, dump_endpoint_labels(\@endpoints))) == 0) {
                             # Now cycle through all tests
