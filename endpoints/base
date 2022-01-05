@@ -23,7 +23,7 @@ num_clients=0
 num_servers=0
 abort=0
 max_sample_failures=""
-ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
+export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
 declare -A servers
 
