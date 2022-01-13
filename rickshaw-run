@@ -1638,6 +1638,14 @@ sub prepare_bench_tool_engines() {
         }
         close FH;
     }
+    # Create empty files for any not created above
+    foreach my $cs_type ("client", "server", "worker") {
+        my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
+        if ( ! -e $cs_file_list) {
+            open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
+            close FH;
+        }
+    }
 }
 
 sub add_ssh_keys() {
