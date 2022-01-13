@@ -52,7 +52,7 @@ my %run; # A multi-dimensional, nested hash, schema TBD
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
-my $default_rb_timeout = 240;
+my $default_rb_timeout = 480;
 my $endpoint_deploy_timeout = 360;
 my $client_server_script_start_timeout = 720;
 my $endpoint_move_data_rb_timeout = 300;

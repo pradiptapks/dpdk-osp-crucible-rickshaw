@@ -12,7 +12,7 @@ rb_exit_success=0
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_input=2
-default_timeout=240
+default_timeout=480
 max_rb_attempts=""
 endpoint_deploy_timeout=360
 client_server_script_start_timeout=720
@@ -21,6 +21,7 @@ cs_rb_opts=""
 do_validate="0"
 num_clients=0
 num_servers=0
+disable_tools=0
 abort=0
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
