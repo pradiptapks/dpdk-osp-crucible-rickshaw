@@ -302,6 +302,9 @@ function process_remotehost_opts() {
                     exit_error "Could not properly decode cpu-partitioning for '$val'"
                 fi
                 ;;
+            disable-tools)
+                disable_tools="$val"
+                ;;
             *)
                 if echo $arg | grep -q -- "="; then
                     echo "You can't use a \"=\" for assignment in endpoint options"
@@ -413,6 +416,14 @@ function launch_osruntime() {
         fi
         set -u
 
+        if [ $count -gt 1 ]; then
+            # Only the first client/server needs to run tools
+            echo "Skipping tools execution on $this_cs_label because a previous client/server is running tools on this host"
+            this_disable_tools="1"
+        else
+            this_disable_tools="$disable_tools"
+        fi
+
         if [ "$osruntime" == "chroot" ]; then
             echo "using chroot"
 
@@ -428,13 +439,9 @@ function launch_osruntime() {
             base_cmd+=" --max-rb-attempts=$max_rb_attempts"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
             base_cmd+=" --client-server-script-start-timeout=$client_server_script_start_timeout"
+            base_cmd+=" --disable-tools=$this_disable_tools"
             if [ $numa_node -gt -1 ]; then
                 base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
-            fi
-            if [ $count -gt 1 ]; then
-                # Only the first client/server needs to run tools
-                echo "Skipping tools execution on $this_cs_label because a previous client/server is running tools on this host"
-                base_cmd+=" --disable-tools=1"
             fi
 
             # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
@@ -444,7 +451,6 @@ function launch_osruntime() {
             echo "using podman"
 
             env_file="${this_cs_label}_env.txt"
-
             ssh_id=$(sed -z 's/\n/\\n/g' ${config_dir}/rickshaw_id.rsa)
 
             echo "rickshaw_host=$controller_ipaddr"         >> ${endpoint_run_dir}/${env_file}
@@ -457,6 +463,7 @@ function launch_osruntime() {
             echo "max_sample_failures=$max_sample_failures" >> ${endpoint_run_dir}/${env_file}
             echo "max_rb_attempts=$max_rb_attempts"         >> ${endpoint_run_dir}/${env_file}
             echo "ssh_id=${ssh_id}"                         >> ${endpoint_run_dir}/${env_file}
+            echo "disable_tools=$this_disable_tools"        >> ${endpoint_run_dir}/${env_file}
 
             for cs_rb_opt in $cs_rb_opts; do
                 arg=$(echo $cs_rb_opt | awk -F'=' '{print $1}')

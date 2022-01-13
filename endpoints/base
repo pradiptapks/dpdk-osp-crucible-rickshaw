@@ -21,6 +21,7 @@ cs_rb_opts=""
 do_validate="0"
 num_clients=0
 num_servers=0
+disable_tools=0
 abort=0
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
