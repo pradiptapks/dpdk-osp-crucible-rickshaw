@@ -59,6 +59,7 @@ hugepage="0"
 osruntime="pod"
 runtimeClassName=""
 masters_tool_collect="1"
+workers_tool_collect="1"
 kubeconfig="1"
 declare -A cpuPartitioning
 declare -A nodeSelector
@@ -407,6 +408,9 @@ function process_k8s_opts() {
                 ;;
             masters-tool-collect)
                 masters_tool_collect=$val
+                ;;
+            workers-tool-collect)
+                workers_tool_collect=$val
                 ;;
             cpu-partitioning)
                 # cpu-partitioning is per pod:
@@ -961,7 +965,10 @@ function get_k8s_config() {
 }
 
 function endpoint_k8s_cleanup() {
-    new_k8s_followers="${worker_tool_pods}"
+    new_k8s_followers=""
+    if [ "${workers_tool_collect}" == "1" ]; then
+        new_k8s_followers+=" ${worker_tool_pods}"
+    fi
     if [ "${masters_tool_collect}" == "1" ]; then
         new_k8s_followers+=" ${master_tool_pods}"
     fi
@@ -982,12 +989,18 @@ create_pods cs_pods cs ${clients[@]} ${servers[@]}
 echo "These client pods were created: $cs_pods"
 verify_pods_running active_worker_nodes $cs_pods
 echo "These nodes are hosting the client-server pods: $active_worker_nodes"
-echo "Working on creating worker-tool pods"
-create_pods worker_tool_pods worker $active_worker_nodes
-echo "These worker-tool pods were created: $worker_tool_pods"
-new_k8s_followers="${worker_tool_pods}"
-verify_pods_running tool_worker_nodes $worker_tool_pods
-echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
+
+new_k8s_followers=""
+
+if [ "${workers_tool_collect}" == "1" ]; then
+    echo "Working on creating worker-tool pods"
+    create_pods worker_tool_pods worker $active_worker_nodes
+    echo "These worker-tool pods were created: $worker_tool_pods"
+    verify_pods_running tool_worker_nodes $worker_tool_pods
+    echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
+    new_k8s_followers+=" ${worker_tool_pods}"
+fi
+
 master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
 echo "These nodes are masters: $master_nodes"
 if [ -z "${master_nodes}" ]; then
