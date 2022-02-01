@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "alma8",
+    "label": "AlmaLinux 8",
+    "origin": {
+      "image": "docker.io/library/almalinux",
+      "tag": "8"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },
