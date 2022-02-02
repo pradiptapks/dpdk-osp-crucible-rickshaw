@@ -1,8 +1,8 @@
   "userenv": {
-    "name": "centos8",
-    "label": "CentOS 8",
+    "name": "alma8",
+    "label": "AlmaLinux 8",
     "origin": {
-      "image": "registry.centos.org/centos/centos",
+      "image": "docker.io/library/almalinux",
       "tag": "8"
     },
     "properties": {
