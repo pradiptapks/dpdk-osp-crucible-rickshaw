@@ -1,9 +1,9 @@
   "userenv": {
-    "name": "stream",
-    "label": "CentOS Stream",
+    "name": "stream8",
+    "label": "CentOS Stream 8",
     "origin": {
-      "image": "registry.centos.org/centos/centos",
-      "tag": "8"
+      "image": "quay.io/centos/centos",
+      "tag": "stream8"
     },
     "properties": {
       "packages": {

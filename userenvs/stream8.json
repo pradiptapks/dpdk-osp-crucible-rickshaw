@@ -5,11 +5,11 @@
     }
   },
   "userenv": {
-    "name": "stream",
-    "label": "CentOS Stream",
+    "name": "stream8",
+    "label": "CentOS Stream 8",
     "origin": {
-      "image": "registry.centos.org/centos/centos",
-      "tag": "8"
+      "image": "quay.io/centos/centos",
+      "tag": "stream8"
     },
     "properties": {
       "packages": {
@@ -19,17 +19,6 @@
     }
   },
   "requirements": [
-    {
-      "name": "stream-conversion",
-      "type": "manual",
-      "manual_info": {
-        "commands": [
-          "dnf -v -y install centos-release-stream",
-          "dnf -v -y swap centos-{linux,stream}-repos",
-          "dnf -v -y distro-sync"
-        ]
-      }
-    },
     {
       "name": "python39",
       "type": "distro",
