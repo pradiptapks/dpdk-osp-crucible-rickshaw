@@ -857,6 +857,11 @@ sub source_container_image {
         # image needs to be deleted later, so save a reference to it here
         push(@local_images, $userenv_image);
     }
+    my $x = 0;
+    while ($x < $i) {
+        printf "Processing stage %d (%s)...\n\tReady\n", $x + 1, $workshop_args[$x]{'tag'};
+        $x++;
+    }
     while ($i <= $num_images - 1) {
         printf "Processing stage %d (%s)...\n", $i + 1, $workshop_args[$i]{'tag'};
         my $begin = time();
