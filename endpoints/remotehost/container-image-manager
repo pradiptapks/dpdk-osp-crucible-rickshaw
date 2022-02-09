@@ -167,7 +167,7 @@ foreach my $image (sort { $images{'rickshaw'}{$b}{'latest-usage'} <=> $images{'r
         printf "\n%s %d %d\n", $image, $images{'rickshaw'}{$image}{'uses'}, $images{'rickshaw'}{$image}{'latest-usage'};
     }
 
-    if ($cache_size <= $max_cache_size) {
+    if ($cache_size < $max_cache_size) {
         $cache_size++;
         $images{'rickshaw'}{$image}{'cached'} = 1;
         print "rickshaw image '$image' is being preserved in the image cache due to last used\n";
@@ -192,7 +192,7 @@ foreach my $image (sort { $images{'rickshaw'}{$b}{'uses'} <=> $images{'rickshaw'
         next;
     }
     
-    if ($cache_size <= $max_cache_size) {
+    if ($cache_size < $max_cache_size) {
         $cache_size++;
         $images{'rickshaw'}{$image}{'cached'} = 1;
         print "rickshaw image '$image' is being preserved in the image cache based on usage\n";
