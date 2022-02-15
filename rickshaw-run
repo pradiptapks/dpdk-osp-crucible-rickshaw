@@ -58,6 +58,10 @@ my $client_server_script_start_timeout = 720;
 my $endpoint_move_data_rb_timeout = 300;
 (my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
 chomp ($hostname);
+my $hostname_md5 = Digest::MD5->new;
+$hostname_md5->add($hostname);
+my $hostname_hash = $hostname_md5->hexdigest;
+printf "Controller hostname is '%s' and it's hash identifier is '%s'\n", $hostname, $hostname_hash;
 my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
                          " --redis-password=" . $redis_passwd;
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost" .
@@ -1855,7 +1859,8 @@ my %cs_conf = (
                 },
                 'config' => {
                     'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ],
-                    'labels' => [ 'quay.expires-after=2w' ],
+                    'labels' => [ 'quay.expires-after=2w',
+                                  'hostname-hash=' . $hostname_hash ],
                     'envs' => [ 'TOOLBOX_HOME=/opt/toolbox' ]
                 }
             );
