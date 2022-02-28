@@ -983,11 +983,41 @@ k8s_req_check
 base_req_check
 get_k8s_config
 delete_old_pods
+
 echo "This endpoint to run these clients: ${clients[@]}"
 echo "This endpoint to run these servers: ${servers[@]}"
-create_pods cs_pods cs ${clients[@]} ${servers[@]}
-echo "These client pods were created: $cs_pods"
-verify_pods_running active_worker_nodes $cs_pods
+# A subset of pods have cpu-paritioning and therefore should be using static-cpu pod.
+# We want those pods created first, so the remaining non-static-cpu pods get a cpus-allowed mask
+# that is accurate (after all dedicated cpus are allocated).  If the non-static-cpu pods are
+# created before/during all the static-cpu pods, their cpus-allowed mask will change over time.
+cpu_part_pods=""
+regular_pods=""
+for this_pod in ${clients[@]} ${servers[@]}; do
+    if [ "${cpuPartitioning[$this_pod]}" == 1 ]; then
+        cpu_part_pods+=" $this_pod"
+    elif [ "${cpuPartitioning[$this_pod]}" == 0 ]; then
+        regular_pods+=" $this_pod"
+    elif [ "${cpuPartitioning[default]}" == 1 ]; then
+        cpu_part_pods+=" $this_pod"
+    elif [ "${cpuPartitioning[default]}" == 0 ]; then
+        regular_pods+=" $this_pod"
+    else
+        regular_pods+=" $this_pod"
+    fi
+done
+if [ ! -z "$cpu_part_pods" ]; then
+    cs_pods=""
+    create_pods cs_pods cs $cpu_part_pods
+    echo "These client/server pods with cpu-partitioning feature were created: $cs_pods"
+    verify_pods_running active_worker_nodes $cs_pods
+fi
+if [ ! -z "$regular_pods" ]; then
+    cs_pods=""
+    create_pods cs_pods cs $regular_pods
+    echo "These client/server pods without cpu-partioning feature pods were created: $cs_pods"
+    verify_pods_running active_worker_nodes $cs_pods
+fi
+
 echo "These nodes are hosting the client-server pods: $active_worker_nodes"
 
 new_k8s_followers=""
@@ -1002,6 +1032,7 @@ if [ "${workers_tool_collect}" == "1" ]; then
 fi
 
 master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
+
 echo "These nodes are masters: $master_nodes"
 if [ -z "${master_nodes}" ]; then
     masters_tool_collect="0"
