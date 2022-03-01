@@ -694,6 +694,7 @@ sub build_reqs {
         push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
     }
     push (@$req_ref, "--requirement " . $run{'engine-dir'} . "/workshop.json");
+    push (@$req_ref, "--requirement " . $rickshaw_project_dir . "/engine/workshop.json");
     foreach my $utility (@utilities) {
         if (exists $run{$utility . '-dir'}) {
             my $utility_req_file = $run{$utility . '-dir'} . "/workshop.json";
@@ -1484,7 +1485,7 @@ sub prepare_bench_tool_engines() {
         }
         debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
-    copy($run{'engine-dir'} . "/client-server-script", $client_server_run_script)
+    copy($rickshaw_project_dir . "/engine/client-server-script", $client_server_run_script)
         || die "Could not copy client-server-script to " . $client_server_run_script .
             "/client-server-script";
     chmod 0755, "$client_server_run_script";
@@ -1873,7 +1874,7 @@ $workshop_base_cmd =
     " --log-level verbose " .
     " --config " . $cs_conf_file .
     " --param %bench-dir%=" . $run{'bench-dir'} .
-    " --param %engine-dir%=" . $run{'engine-dir'} .
+    " --param %engine-dir%=" . $rickshaw_project_dir . "/engine/" .
     " --param %rickshaw-dir%=" . $rickshaw_project_dir .
     " --reg-tls-verify=" . $run{'reg-tls-verify'} .
     " 2>&1";

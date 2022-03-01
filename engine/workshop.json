@@ -1,0 +1,33 @@
+{
+    "workshop": {
+	"schema": {
+	    "version": "2020.03.02"
+	}
+    },
+    "userenvs": [
+	{
+	    "name": "default",
+	    "requirements": [
+		"engine-files"
+	    ]
+	}
+    ],
+    "requirements": [
+	{
+	    "name": "engine-files",
+	    "type": "files",
+	    "files_info": {
+		"files": [
+		    {
+			"src": "%rickshaw-dir%/engine/bootstrap",
+			"dst": "/usr/local/bin"
+		    },
+		    {
+			"src": "%rickshaw-dir%/engine/discover-cpu-partitioning.py",
+			"dst": "/usr/local/bin"
+		    }
+		]
+	    }
+	}
+    ]
+}
