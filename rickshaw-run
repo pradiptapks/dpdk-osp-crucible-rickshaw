@@ -693,7 +693,6 @@ sub build_reqs {
         # The second rb req ensures the proper python libraies are installed
         push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
     }
-    push (@$req_ref, "--requirement " . $run{'engine-dir'} . "/workshop.json");
     push (@$req_ref, "--requirement " . $rickshaw_project_dir . "/engine/workshop.json");
     foreach my $utility (@utilities) {
         if (exists $run{$utility . '-dir'}) {
