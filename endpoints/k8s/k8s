@@ -88,18 +88,18 @@ function endpoint_k8s_test_stop() {
     echo "Running endpoint_k8s_test_stop"
 
     echo "Endpoints:"
-    ssh $user@$host kubectl get endpoints -o yaml
-    endpoints=`ssh $user@$host kubectl get endpoints | grep rickshaw | awk '{print $1}'`
+    do_ssh $user@$host kubectl get endpoints -o yaml
+    endpoints=`do_ssh $user@$host kubectl get endpoints | grep rickshaw | awk '{print $1}'`
     echo "Endpoints to delete:"
     echo $endpoints
-    ssh $user@$host kubectl delete endpoints $endpoints
+    do_ssh $user@$host kubectl delete endpoints $endpoints
 
     echo "Services:"
-    ssh $user@$host kubectl get svc -o yaml
-    services=`ssh $user@$host kubectl get svc | grep rickshaw | awk '{print $1}'`
+    do_ssh $user@$host kubectl get svc -o yaml
+    services=`do_ssh $user@$host kubectl get svc | grep rickshaw | awk '{print $1}'`
     echo "Services to delete:"
     echo $services
-    ssh $user@$host kubectl delete svc $services
+    do_ssh $user@$host kubectl delete svc $services
 }
 
 function endpoint_k8s_test_start() {
@@ -145,7 +145,7 @@ function endpoint_k8s_test_start() {
             local ip=`echo $line | awk '{print $1}'`
             line=`echo $line | sed -e s/^$ip//`
             #local ports=`echo $line | sed -e s/^$name//`
-            local pod_ip=`ssh $user@$host "oc get pod/rickshaw-$name -o wide" | grep rickshaw | awk '{print $6}'`
+            local pod_ip=`do_ssh $user@$host "oc get pod/rickshaw-$name -o wide" | grep rickshaw | awk '{print $6}'`
             local ports="$line"
             local count=1
             local port_list=""
@@ -163,7 +163,7 @@ function endpoint_k8s_test_start() {
             if [ "$ip" == "$pod_ip" ]; then
                 local client_outside_cluster=0
                 local client_label=`echo $name | sed -e s/server/client/`
-                ssh $user@$host "kubectl get pods | grep -q ^rickshaw-$client_label" || client_outside_cluster=1
+                do_ssh $user@$host "kubectl get pods | grep -q ^rickshaw-$client_label" || client_outside_cluster=1
                 # If the client is hosted in this cluster, a clusterIP service will be created
                 # for the server, and an endpoint will be created to ensure the service forwards
                 # connections to exactly the pod we want.
@@ -201,11 +201,11 @@ function endpoint_k8s_test_start() {
                     echo '    }' >>$svc_json
                     echo '}' >>$svc_json
                     cleanup_json "${svc_json}"
-                    cat "$svc_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-$name.txt"
+                    cat "$svc_json" | do_ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-$name.txt"
                     # Debug info
-                    #ssh $user@$host "kubectl get svc/rickshaw-$name -o json" >"$endpoint_run_dir/get-svc-$name.json"
+                    #do_ssh $user@$host "kubectl get svc/rickshaw-$name -o json" >"$endpoint_run_dir/get-svc-$name.json"
                     # Now that the service has been created, we can get the IP to contact the benchmark server
-                    local svc_ip=`ssh $user@$host "kubectl get svc/rickshaw-$name -o json | jq -r .spec.clusterIP"`
+                    local svc_ip=`do_ssh $user@$host "kubectl get svc/rickshaw-$name -o json | jq -r .spec.clusterIP"`
                     # Instead of relying on k8s to make an association between the service and the pod, we explicitly
                     # connect the two by creating the endpoint, linking the service to the IP of the server pod
                     local svc_endp_json=$endpoint_run_dir/$name-endpoint.json
@@ -236,7 +236,7 @@ function endpoint_k8s_test_start() {
                     echo '    }]' >>$svc_endp_json
                     echo '}' >>$svc_endp_json
                     cleanup_json "${svc_endp_json}"
-                    cat "$svc_endp_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-endp-$name.txt"
+                    cat "$svc_endp_json" | do_ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-endp-$name.txt"
                     # client inside cluster
                 else
                     # client outside cluster
@@ -287,7 +287,7 @@ function endpoint_k8s_test_start() {
                     echo '}' >>$nodep_json
 
                     cleanup_json "${nodep_json}"
-                    cat "$nodep_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-nodeport-$name.txt"
+                    cat "$nodep_json" | do_ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-svc-nodeport-$name.txt"
                     local endp_nodep_json=$endpoint_run_dir/$name-nodeport-endpoint.json
                     echo '{' >$endp_nodep_json
                     echo '    "apiVersion": "v1",' >>$endp_nodep_json
@@ -317,12 +317,12 @@ function endpoint_k8s_test_start() {
                     echo '    }]' >>$endp_nodep_json
                     echo '}' >>$endp_nodep_json
                     cleanup_json "${endp_nodep_json}"
-                    cat "$endp_nodep_json" | ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-endp-nodeport-$name.txt"
+                    cat "$endp_nodep_json" | do_ssh $user@$host "kubectl create -f -" >"$endpoint_run_dir/create-endp-nodeport-$name.txt"
                     # $svc_ip must now be reassigned to the IP used for NodePort.  NodePort is available on -any- worker node
                     # However, we should provide an IP of the current worker which hosts the pod
-                    local node=`ssh $user@$host "kubectl get pod rickshaw-$name -o json" | jq -r '.spec.nodeName'`
+                    local node=`do_ssh $user@$host "kubectl get pod rickshaw-$name -o json" | jq -r '.spec.nodeName'`
                     echo "Finding IP for worker node $node"
-                    svc_ip=`ssh $user@$host "oc get nodes/$node -o wide" | grep $node | awk '{print $6}' | tr -d "\n"`
+                    svc_ip=`do_ssh $user@$host "oc get nodes/$node -o wide" | grep $node | awk '{print $6}' | tr -d "\n"`
                 fi # client is outside cluster
             else
                 echo "Benchmark-server-provided IP $ip does not match pod IP $pod_ip, so not creating a k8s-service or k8s-endpoint"
@@ -341,14 +341,14 @@ function endpoint_k8s_test_start() {
     fi
     sleep 10 # why?
     echo "services:"
-    ssh $user@$host "kubectl get svc"
-    ssh $user@$host kubectl get svc -o json >"$endpoint_run_dir/kubectl-get-services.json"
+    do_ssh $user@$host "kubectl get svc"
+    do_ssh $user@$host kubectl get svc -o json >"$endpoint_run_dir/kubectl-get-services.json"
     echo "endpoints:"
-    ssh $user@$host "kubectl get endpoints"
-    ssh $user@$host kubectl get endpoints -o json >"$endpoint_run_dir/kubectl-get-endpoints.json"
+    do_ssh $user@$host "kubectl get endpoints"
+    do_ssh $user@$host kubectl get endpoints -o json >"$endpoint_run_dir/kubectl-get-endpoints.json"
     echo "pods:"
-    ssh $user@$host "kubectl get pods -o wide"
-    ssh $user@$host kubectl get pods -o json >"$endpoint_run_dir/kubectl-get-pods.json"
+    do_ssh $user@$host "kubectl get pods -o wide"
+    do_ssh $user@$host kubectl get pods -o json >"$endpoint_run_dir/kubectl-get-pods.json"
 }
 
 function k8s_req_check() {
@@ -356,14 +356,15 @@ function k8s_req_check() {
         echo "[ERROR]host is not defined"
         exit 1
     fi
+    verify_ssh_login $user $host
     if [ "${kubeconfig}" == "1" ]; then
-        k8s_kubeconfig=`ssh -o StrictHostKeyChecking=no $user@$host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
+        k8s_kubeconfig=`do_ssh $user@$host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
         if [ -z "$k8s_kubeconfig" ]; then
             echo "[ERROR]KUBECONFIG on k8s host $host not defined"
             exit 1
         fi
     fi
-    k8s_kubectl=`ssh -o StrictHostKeyChecking=no $user@$host kubectl 2>&1`
+    k8s_kubectl=`do_ssh $user@$host kubectl 2>&1`
     if [ $? -gt 0 ]; then
         exit_error "Could not run kubectl on k8s host: $k8s_kubectl"
     fi
@@ -819,17 +820,17 @@ function create_pods() {
             echo "user: $user"
             echo "host: $host"
             # TODO: the exit code does not work here, need to find a way to have it work
-            cat "$dir/$this_pod.json" | ssh $user@$host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$this_pod.txt"
+            cat "$dir/$this_pod.json" | do_ssh $user@$host "kubectl create -f - 2>&1" >"$endpoint_run_dir/create-pod-output-$this_pod.txt"
             if [ $? -gt 0 ]; then
                 abort_error "Failed to create pod $this_pod" endpoint-deploy
             fi
             pods+=" $this_pod"
-            ssh $user@$host "kubectl get pod rickshaw-$this_pod -ojson" >$endpoint_run_dir/kubectl-get-pod-$this_pod.json
+            do_ssh $user@$host "kubectl get pod rickshaw-$this_pod -ojson" >$endpoint_run_dir/kubectl-get-pod-$this_pod.json
         else
             abort_error "Could not find $dir/$this_pod.json to create pod: $create_output" endpoint-deploy
         fi
     done
-    ssh $user@$host kubectl get pods 2>&1 >"$endpoint_run_dir/post-create-get-pods.txt"
+    do_ssh $user@$host kubectl get pods 2>&1 >"$endpoint_run_dir/post-create-get-pods.txt"
     ref1="$pods"
 }
 
@@ -853,7 +854,7 @@ function verify_pods_running() {
     local max_nonzero_exit=3
     until [ ${#unverified_pods[@]} -eq 0 -o $count -gt $max_attempts -o $abort -gt 0 ]; do
         sleep 10
-        ssh $user@$host kubectl get pods -o wide | grep $pod_prefix >$kubectl_get_pods
+        do_ssh $user@$host kubectl get pods -o wide | grep $pod_prefix >$kubectl_get_pods
         rc=$?
         if [ $rc -gt 0 ]; then
             let num_nonzero_exit=$num_nonzero_exit+1
@@ -874,7 +875,7 @@ function verify_pods_running() {
                 abort=1
                 echo "Pod $this_pod has this error: $this_status"
                 echo "Getting 'describe pod' for $pod_prefix-$this_pod"
-                ssh $user@$host kubectl describe pod $pod_prefix-$this_pod >"$endpoint_run_dir/kubectl-describe-pod-$this_pod.txt"
+                do_ssh $user@$host kubectl describe pod $pod_prefix-$this_pod >"$endpoint_run_dir/kubectl-describe-pod-$this_pod.txt"
                 break
             fi
             if [ "$this_status" == "Running" ]; then
@@ -905,7 +906,7 @@ function get_pod_logs() {
         local name="$1"; shift
         echo "Getting logs from pod $name"
         pod_name="rickshaw-$name"
-        ssh $user@$host kubectl logs $pod_name >"$client_server_logs_dir/$name.txt"
+        do_ssh $user@$host kubectl logs $pod_name >"$client_server_logs_dir/$name.txt"
     done
 }
 
@@ -917,7 +918,7 @@ function delete_pods() {
     while [ $# -gt 0 ]; do
         local name="$1"; shift
         echo "checking for existing pod $name with prefix $pod_prefix-"
-        local existing_pod="`ssh $user@$host kubectl get pods | grep "^$pod_prefix-$name " | awk '{print $1}'`"
+        local existing_pod="`do_ssh $user@$host kubectl get pods | grep "^$pod_prefix-$name " | awk '{print $1}'`"
         if [ ! -z "$existing_pod" ]; then
             echo "delete_pods(): found $name"
             pods_to_delete+=" $pod_prefix-$name"
@@ -925,7 +926,7 @@ function delete_pods() {
     done
     if [ ! -z "$pods_to_delete" ]; then
         echo "going to bulk-delete these pods: $pods_to_delete"
-        local delete_output=`ssh $user@$host "kubectl delete pod $pods_to_delete 2>&1"`
+        local delete_output=`do_ssh $user@$host "kubectl delete pod $pods_to_delete 2>&1"`
         if [ $? -gt 0 ]; then
             abort_error "Error deleting pod $existing_pod: $delete_output" endpoint-deploy
         fi
@@ -933,7 +934,7 @@ function delete_pods() {
 }
 
 function delete_old_pods() {
-    local pods=`ssh $user@$host kubectl get pods -o wide | grep $pod_prefix | awk '{print $1}' | sed -e s/$pod_prefix-// | tr '\n' ' '`
+    local pods=`do_ssh $user@$host kubectl get pods -o wide | grep $pod_prefix | awk '{print $1}' | sed -e s/$pod_prefix-// | tr '\n' ' '`
     if [ ! -z "$pods" ]; then
         echo "Going to delete these old pods: $pods"
         delete_pods $pods
@@ -945,8 +946,8 @@ function delete_old_pods() {
 function get_k8s_config() {
     local kubectl_nodes_json="$endpoint_run_dir/kubectl-get-nodes.json"
     local kubectl_nodes_stderr="$endpoint_run_dir/kubectl-get-nodes.stderr"
-    local k8s_nodes=`ssh -o StrictHostKeyChecking=no $user@$host kubectl get nodes`
-    ssh $user@$host kubectl get nodes -o json >$kubectl_nodes_json 2>$kubectl_nodes_stderr
+    local k8s_nodes=`do_ssh $user@$host kubectl get nodes`
+    do_ssh $user@$host kubectl get nodes -o json >$kubectl_nodes_json 2>$kubectl_nodes_stderr
     local nr_nodes=`jq -r '.items | length' $kubectl_nodes_json`
     local masters=""
     local workers=""
