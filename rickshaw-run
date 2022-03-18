@@ -775,7 +775,7 @@ sub source_container_image {
     my @local_images;
 
     get_image_urls;
-    printf "Sourcing container image; this may take a few minutes\n";
+    printf "Sourcing container image for userenv '%s'; this may take a few minutes\n", $userenv;
 
     my @requirements;
     build_reqs(\@requirements, $userenv);
