@@ -353,15 +353,13 @@ function endpoint_k8s_test_start() {
 
 function k8s_req_check() {
     if [ -z "$host" ]; then
-        echo "[ERROR]host is not defined"
-        exit 1
+        exit_error "k8s host is not defined"
     fi
     verify_ssh_login $user $host
     if [ "${kubeconfig}" == "1" ]; then
         k8s_kubeconfig=`do_ssh $user@$host env | grep ^KUBECONFIG | awk -F"KUBECONFIG=" '{print $2}'`
         if [ -z "$k8s_kubeconfig" ]; then
-            echo "[ERROR]KUBECONFIG on k8s host $host not defined"
-            exit 1
+            exit_error "KUBECONFIG on k8s host $host not defined"
         fi
     fi
     k8s_kubectl=`do_ssh $user@$host kubectl 2>&1`
