@@ -712,16 +712,38 @@ function is_ip() {
 }
 
 function get_controller_ip() {
-    local host=$1; shift
-    if is_ip $host; then
-        echo $host
-        return
-    fi
-    local ip=`host $host | grep "has address" | head -1 | awk -F"has address " '{print $2}'`
-    # TODO: confirm is valid ipv4 addr
+    local host endpoint_ip controller_ip
 
-    # Now that we have the remote IP, figure out what IP this remote
-    # host will need to use to contact the controller
-    local controller_ipaddr=`ip route get $ip | head -1 | awk -F"src " '{print $2}' | awk '{print $1}'`
-    echo $controller_ipaddr
+    host=$1
+    shift
+
+    if is_ip ${host}; then
+        if ip addr | grep -q ${host}; then
+            # the provided IP address is mine so it is the one to use
+            echo ${host}
+            return 0
+        else
+            # the provided IP address is not mine -- so it is the endpoint's
+            endpoint_ip=${host}
+        fi
+    else
+        endpoint_ip=$(host ${host} | grep "has address" | head -1 | awk -F"has address " '{ print $2 }')
+
+        if ! is_ip ${endpoint_ip}; then
+            exit_error "Failed to determine endpoint IP address (got '${endpoint_ip}')"
+            return 1
+        fi
+    fi
+
+    # Now that we have the endpoint's IP, figure out what controller
+    # IP this endpoint will need to use to contact the controller
+    controller_ip=$(ip route get ${endpoint_ip} | head -1 | awk -F"src " '{ print $2 }' | awk '{ print $1 }')
+
+    if ! is_ip ${controller_ip}; then
+        exit_error "Failed to determine controller IP address (got '${controller_ip}')"
+        return 1
+    else
+        echo ${controller_ip}
+        return 0
+    fi
 }
