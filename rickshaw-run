@@ -100,6 +100,8 @@ my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
 my $roadblock_exit_input = 2;
 my $workshop_base_cmd;
+my $cs_conf_file;
+my %cs_conf;
 
 my @tests;
 my %clients_servers;
@@ -481,10 +483,27 @@ sub workshop_build_image {
         printf "skip_update was not defined, so setting to false\n";
         $skip_update = "false";
     }
+    for (my $i=0; $i<@{$cs_conf{'config'}{'labels'}}; $i++) {
+        if ($cs_conf{'config'}{'labels'}[$i] =~ /hostname-hash/) {
+            splice(@{$cs_conf{'config'}{'labels'}}, $i, 1);
+            if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
+                printf "workshop_build_image(): put_json_file(): %s: remove failed\n", $cs_conf_file;
+                exit 1;
+            }
+            last;
+        }
+    }
     my $image_tag = calc_image_md5($userenv_arg, $req_args);
     if ($tag ne $image_tag) {
         printf "ERROR: workshop_build_image(): provided tag [%s] and calculated tag [%s] do not match\n",
                $tag, $image_tag;
+        exit 1;
+    }
+    # insert the hostname-hash after all tag checking has been done to
+    # avoid creating unique tags per controller
+    push(@{$cs_conf{'config'}{'labels'}}, 'hostname-hash=' . $hostname_hash);
+    if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
+        printf "workshop_build_image(): put_json_file(): %s: add failed\n", $cs_conf_file;
         exit 1;
     }
     my $proj;
@@ -1850,8 +1869,8 @@ if ($run{'reg-auth'} eq "") {
     printf "Disabling registry authorization due to empty 'reg-auth' variable\n";
     $skip_registry_auth = 1;
 }
-my $cs_conf_file = $config_dir . "/cs-conf.json";
-my %cs_conf = (
+$cs_conf_file = $config_dir . "/cs-conf.json";
+%cs_conf = (
                 'workshop' => {
                     'schema' => {
                         'version' => '2020.04.30'
@@ -1859,13 +1878,12 @@ my %cs_conf = (
                 },
                 'config' => {
                     'entrypoint' => [ "/bin/sh", "-c", "/usr/local/bin/bootstrap" ],
-                    'labels' => [ 'quay.expires-after=2w',
-                                  'hostname-hash=' . $hostname_hash ],
+                    'labels' => [ 'quay.expires-after=2w' ],
                     'envs' => [ 'TOOLBOX_HOME=/opt/toolbox' ]
                 }
             );
 if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
-    printf "build_container_image(): put_json_file() failed\n";
+    printf "put_json_file(): %s: failed\n", $cs_conf_file;
     exit 1;
 }
 $workshop_base_cmd =
