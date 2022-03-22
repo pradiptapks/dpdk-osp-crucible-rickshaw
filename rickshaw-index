@@ -37,6 +37,8 @@ use toolbox::logging;
 $| = 1; # flush stdout
 $toolbox::logging::debug = 0;
 
+my @pids;
+my $index_tools = 1;
 my @suported_cdm_vers = ('v5dev', 'v6dev');
 my %result;
 my $base_run_dir;
@@ -46,6 +48,8 @@ my $result_schema_file;
 my $bench_metric_schema_file;
 my $file_rc;
 my @queued_docs;
+my @queued_ndjson;
+my @queued_terms;
 my %num_docs_submitted = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0);
 
 sub usage {
@@ -293,10 +297,10 @@ sub write_es_doc {
                             $link_file .= ".xz";
                         }
                         if ( -e $link_file) {
-                            printf "Deleting stale symlink %s\n", $link_file;
+                            debug_log(sprintf "Deleting stale symlink %s\n", $link_file);
                             unlink($link_file);
                         }
-                        printf "Creating a symlink %s -> %s\n", $link_file, $file;
+                        debug_log(sprintf "Creating a symlink %s -> %s\n", $link_file, $file);
                         symlink($file, $link_file) || printf "WARNING: could not symlink %s -> %s\n", $link_file, $file;
                     }
                 } else {
@@ -319,11 +323,34 @@ sub write_queued_es_docs {
     }
 }
 
+sub wait_for_metric_descs {
+    my @terms = @_;
+    my $attempts = 1;
+    my $max_attempts = 20;
+    my $submitted_metric_descs = scalar @terms;
+    my $found_metric_descs = 0;
+    while ($found_metric_descs < $submitted_metric_descs) {
+        if ($attempts > $max_attempts) {
+            print "ERROR: could not ensure all ES metric_desc docs are indexed, exiting\n";
+            exit 1;
+        }
+        sleep 2;
+        my $resp_ref= http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/_count/",
+                                '{"query":{"terms":{"metric_desc.id": ' . $coder->encode(\@terms) . '}}}');
+        $found_metric_descs = $$resp_ref{'count'};
+        if ($found_metric_descs > $submitted_metric_descs) {
+            printf "Something went wrong, the number of metrics found (%d) in ES is greater than the number submitted (%d)\n", $found_metric_descs, $submitted_metric_descs;
+        }
+        $attempts++;
+    }
+}
+
 # This will index 1 or more metrics, based on what is found in the metric json & csv documents.
 # Unlike index_es_doc(), index_metrics() needs a "base" document to work with, which can be generated
 # with create_es_doc().  Metrics can be indexed from either a benchmark sample directory or a tool
 # directory.
 sub index_metrics {
+    my $index_or_queue = shift;
     my $metr_file = shift; # filename without .json or .csv
     my $cstype = shift;
     my $csid = shift;
@@ -408,9 +435,13 @@ sub index_metrics {
             $ndjson .= sprintf "%s\n", $metr_data_doc_json;
             $count++;
             if ($count >= 1000) {
-                # ES docs type metric_data do not contain other sections run, iteration, sample, period, metric_desc,
-                # as this would take up sunstantially more space for potentially millions of documents.
-                http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
+                if ($index_or_queue eq "index") {
+                    # ES docs type metric_data do not contain other sections run, iteration, sample, period, metric_desc,
+                    # as this would take up sunstantially more space for potentially millions of documents.
+                    http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
+                } else {
+                    push(@queued_ndjson, $ndjson);
+                }
                 $ndjson = "";
                 $count = 0;
             }
@@ -427,29 +458,19 @@ sub index_metrics {
         }
     }
     if ($count > 0) {
-        http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
+        if ($index_or_queue eq "index") {
+            http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", $ndjson);
+        } else {
+            push(@queued_ndjson, $ndjson);
+        }
     }
     close $metr_csv_fh;
 
     # Verify these (and only these) specific metric docs are queryable in ES
-    my $attempts = 1;
-    my $max_attempts = 20;
-    my $submitted_metric_descs = scalar keys %uuid;
-    my $found_metric_descs = 0;
-    while ($found_metric_descs < $submitted_metric_descs) {
-        if ($attempts > $max_attempts) {
-            print "ERROR: could not ensure all ES metric_desc docs are indexed, exiting\n";
-            exit 1;
-        }
-        sleep 2;
-        my @terms = values %uuid;
-        my $resp_ref= http_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_desc/_doc/_count/",
-                                '{"query":{"terms":{"metric_desc.id": ' . $coder->encode(\@terms) . '}}}');
-        $found_metric_descs = $$resp_ref{'count'};
-        if ($found_metric_descs > $submitted_metric_descs) {
-            printf "Something went wrong, the number of metrics found (%d) in ES is greater than the number submitted (%d)\n", $found_metric_descs, $submitted_metric_descs;
-        }
-        $attempts++;
+    if ($index_or_queue eq "index") {
+        wait_for_metric_descs(values %uuid);
+    } else {
+        push(@queued_terms, values %uuid);
     }
 
     if (defined $primary_metric) {
@@ -476,7 +497,7 @@ sub wait_for_docs {
             print "ERROR: could not ensure all ES docs are indexed, exiting\n";
             exit 1;
         }
-        printf "wait_for_docs(): Confirming all documents are in elasticsearch (attempt #%d of %d)\n", $attempts, $max_attempts;
+        printf "wait_for_docs(): Confirming all non-metric documents are in elasticsearch (attempt #%d of %d)\n", $attempts, $max_attempts;
         my @these_doctypes = @doctypes;
         foreach my $doctype (@these_doctypes) {
             if ($num_docs_submitted{$doctype} == 0) {
@@ -634,7 +655,7 @@ if (indexed_doc_count("run") > 0) {
     exit 1;
 }
 
-if (-e $tool_dir) {
+if (-e $tool_dir and $index_tools == 1) {
     my $base_metric_doc_ref = create_es_doc("metric_desc");
     if (opendir(TOOLDIR, $tool_dir)) {
         my @collectors = grep(/\w+/, readdir(TOOLDIR));
@@ -643,7 +664,6 @@ if (-e $tool_dir) {
             if (opendir(COLLECTORDIR, $collector_dir)) {
                 my @numbers = grep (/\d+/, readdir(COLLECTORDIR));
                 for my $num (@numbers) {
-                    my @pids;
                     my $cd_id = $collector . "-" . $num;
                     my $num_dir = $collector_dir . "/" . $num; # $run_dir/tool-data/[client|server|worker|master]/[0-N]
                     printf "Indexing of tool data for %s starting\n", $cd_id;
@@ -661,7 +681,7 @@ if (-e $tool_dir) {
                                     if (my $pid = fork) {
                                         push(@pids, $pid);
                                     } else {
-                                        my $num_metric_docs_submitted = index_metrics($tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
+                                        my $num_metric_docs_submitted = index_metrics('index', $tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
                                         exit 0;
                                     }
 
@@ -669,14 +689,6 @@ if (-e $tool_dir) {
                             }
                         }
                     }
-                    printf "Waiting for %d indexing jobs to complete\n", scalar @pids;
-                    while (1) {
-                        my $wait_return = wait(); 
-                        if ($wait_return < 0) {
-                            last;
-                        }
-                    }
-                    printf "%d indexing jobs have completed\n\n", scalar @pids;
                 }
             }
         }
@@ -808,8 +820,7 @@ if (exists $result{'iterations'}) {
                                                         my $this_begin;
                                                         my $this_end;
                                                         # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                                        (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics($metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
-                                                        printf "A call to index_metrics() submitted %d metric_desc docs\n", $num_metric_docs_submitted;
+                                                        (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics('queue', $metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
                                                         #$num_docs_submitted{'metric_desc'} += $num_metric_docs_submitted;
                                                         # From processing all metric files, get the very-earliest-begin and very-latest-end
                                                         if (not defined $earliest_begin or $earliest_begin > $this_begin) {
@@ -866,6 +877,22 @@ if (exists $result{'iterations'}) {
     } #iterations
     print "Indexing of benchmark data complete\n";
 } #if iterations
+
+if (scalar @queued_ndjson > 0) {
+    if (my $pid = fork) {
+        push(@pids, $pid);
+    } else {
+        printf "Going to index %d ndjson metrics\n", scalar @queued_ndjson;
+        while (scalar @queued_ndjson > 0) {
+            http_ndjson_request("POST", "localhost:9200", "/cdm" . $cdm{'ver'} . "-metric_data/_doc/_bulk", pop(@queued_ndjson));
+        }
+        printf "Finished indexing ndjson metrics\n";
+        print "Waiting for metric data docs be present in ES\n";
+        wait_for_metric_descs(@queued_terms);
+        exit 0;
+    }
+}
+
 if (exists $result{'tags'}) {
     my $tag_idx = 0;
     for my $tag (@{ $result{'tags'} }) {
@@ -874,6 +901,18 @@ if (exists $result{'tags'}) {
         $tag_idx++;
     }
 }
+
+if (scalar @pids > 0) {
+    printf "Waiting for %d indexing jobs to complete\n", scalar @pids;
+    while (1) {
+        my $wait_return = wait(); 
+        if ($wait_return < 0) {
+            last;
+        }
+    }
+    printf "%d indexing jobs have completed\n\n", scalar @pids;
+}
+
 print "Indexing run doc\n";
 index_es_doc("run");
 print "Indexing queued docs\n";
