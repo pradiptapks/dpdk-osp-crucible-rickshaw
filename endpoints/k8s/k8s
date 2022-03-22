@@ -964,15 +964,8 @@ function get_k8s_config() {
 }
 
 function endpoint_k8s_cleanup() {
-    new_k8s_followers=""
-    if [ "${workers_tool_collect}" == "1" ]; then
-        new_k8s_followers+=" ${worker_tool_pods}"
-    fi
-    if [ "${masters_tool_collect}" == "1" ]; then
-        new_k8s_followers+=" ${master_tool_pods}"
-    fi
-    get_pod_logs ${new_k8s_followers} $cs_pods
-    delete_pods ${new_k8s_followers} $cs_pods
+    get_pod_logs $all_pods
+    delete_pods $all_pods
 }
 
 process_opts "$@"
@@ -991,6 +984,22 @@ echo "This endpoint to run these servers: ${servers[@]}"
 # created before/during all the static-cpu pods, their cpus-allowed mask will change over time.
 cpu_part_pods=""
 regular_pods=""
+
+# The following tracks pods that have been created
+cs_pods=""
+worker_tool_pods=""
+master_tool_pods=""
+all_pods=""
+
+# All roadblock particpants are not determined until it is known
+# where tools are run.  Once this is known, this information needs
+# to be sent back to the controller.
+new_k8s_followers=""
+
+# Split up the cs pods into two groups, ones which
+# requested cpu-part, and the ones that did not.
+# This is necessary because cpu-part pods need to be 
+# created first.
 for this_pod in ${clients[@]} ${servers[@]}; do
     if [ "${cpuPartitioning[$this_pod]}" == 1 ]; then
         cpu_part_pods+=" $this_pod"
@@ -1004,22 +1013,28 @@ for this_pod in ${clients[@]} ${servers[@]}; do
         regular_pods+=" $this_pod"
     fi
 done
+
+# Create the cpu-part pods first
 if [ ! -z "$cpu_part_pods" ]; then
-    cs_pods=""
-    create_pods cs_pods cs $cpu_part_pods
-    echo "These client/server pods with cpu-partitioning feature were created: $cs_pods"
-    verify_pods_running active_worker_nodes $cs_pods
+    these_pods=""
+    create_pods these_pods cs $cpu_part_pods
+    echo "These client/server pods with cpu-partitioning feature were created: $these_pods"
+    verify_pods_running active_worker_nodes $these_pods
+    cs_pods+=" $these_pods"
 fi
+
+# Now that cpumask on worker node(s) has been reduced (to dedicate for cpu-part pods).
+# the regular pods can be created.
 if [ ! -z "$regular_pods" ]; then
-    cs_pods=""
-    create_pods cs_pods cs $regular_pods
-    echo "These client/server pods without cpu-partioning feature pods were created: $cs_pods"
-    verify_pods_running active_worker_nodes $cs_pods
+    these_pods=""
+    create_pods these_pods cs $regular_pods
+    echo "These client/server pods without cpu-partioning feature pods were created: $these_pods"
+    verify_pods_running active_worker_nodes $these_pods
+    cs_pods+=" $these_pods"
 fi
-
+echo "Total client/server pods that were created: $cs_pods"
 echo "These nodes are hosting the client-server pods: $active_worker_nodes"
-
-new_k8s_followers=""
+all_pods+=" $cs_pods"
 
 if [ "${workers_tool_collect}" == "1" ]; then
     echo "Working on creating worker-tool pods"
@@ -1028,6 +1043,7 @@ if [ "${workers_tool_collect}" == "1" ]; then
     verify_pods_running tool_worker_nodes $worker_tool_pods
     echo "These nodes are hosting the worker-tool pods: $tool_worker_nodes"
     new_k8s_followers+=" ${worker_tool_pods}"
+    all_pods+=" $worker_tool_pods"
 fi
 
 master_nodes=`cat "$endpoint_run_dir/master-nodes.txt"`
@@ -1043,6 +1059,7 @@ if [ "${masters_tool_collect}" == "1" ]; then
     verify_pods_running tool_master_nodes $master_tool_pods
     echo "These nodes are hosting the master-tool pods: $master_nodes"
     new_k8s_followers+=" ${master_tool_pods}"
+    all_pods+=" $worker_tool_pods"
 fi
 
 process_roadblocks k8s ${new_k8s_followers}
