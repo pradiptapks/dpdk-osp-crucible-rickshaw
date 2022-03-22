@@ -25,6 +25,13 @@
             "val": {
               "type": "string",
               "minLength": 1
+            },
+            "enabled": {
+              "type": "string",
+              "enum": [
+                "yes",
+                "no"
+              ]
             }
           },
           "required": [
@@ -33,6 +40,13 @@
           ],
           "additionalProperties": false
         }
+      },
+      "enabled": {
+        "type": "string",
+        "enum": [
+          "yes",
+          "no"
+        ]
       }
     },
     "required": [
