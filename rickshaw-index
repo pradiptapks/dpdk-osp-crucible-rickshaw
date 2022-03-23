@@ -264,9 +264,7 @@ sub index_es_doc {
 
 sub index_queued_es_docs {
     foreach my $this_doc (@queued_docs) {
-        print "this_doc:\n";
-        print Dumper $this_doc;
-        index_es_doc(%$this_doc{'doc-type'}, %$this_doc{'iter'}, %$this_doc{'sample'}, %$this_doc{'period'});
+        index_es_doc($$this_doc{'doc-type'}, $$this_doc{'iter'}, $$this_doc{'sample'}, $$this_doc{'period'});
     }
 }
 
@@ -317,7 +315,7 @@ sub write_es_doc {
 
 sub write_queued_es_docs {
     foreach my $this_doc (@queued_docs) {
-        write_es_doc(%$this_doc{'doc-type'}, %$this_doc{'dir'}, %$this_doc{'iter'}, %$this_doc{'sample'}, %$this_doc{'period'});
+        write_es_doc($$this_doc{'doc-type'}, $$this_doc{'dir'}, $$this_doc{'iter'}, $$this_doc{'sample'}, $$this_doc{'period'});
     }
 }
 
