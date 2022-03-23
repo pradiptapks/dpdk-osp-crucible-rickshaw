@@ -1158,7 +1158,13 @@ sub load_tool_params() {
         print "Could not open the tool params file\n";
         exit 1;
     }
-    @tools_params = @{ $json_ref };
+    my @tmp_tools_params = @{ $json_ref };
+    foreach my $tool_entry (@tmp_tools_params) {
+        if (exists($$tool_entry{'enabled'}) && ($$tool_entry{'enabled'} eq "no")) {
+            next;
+        }
+        push(@tools_params, $tool_entry);
+    }
     # Load a tool configuration for every tool the user is asking for
     foreach my $tool_entry (@tools_params) {
         my $tool_name = $$tool_entry{'tool'};
@@ -1461,6 +1467,9 @@ sub build_tool_cmd {
     # Assemble the arguments as a bash array in order to not get them scrambled later
     my $tool_cmd = $tool_name . ':declare -a ARGS=(';
     foreach my $tool_param (@{ $$tool_entry{'params'} }) {
+        if (exists($$tool_param{'enabled'}) && ($$tool_param{'enabled'} eq "no")) {
+            next;
+        }
         $tool_cmd .= "'--" . $$tool_param{'arg'} . "' '" . $$tool_param{'val'} . "' ";
     }
     $tool_cmd =~ s/\s$//;
