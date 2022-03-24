@@ -32,6 +32,7 @@ use lib "$ENV{'TOOLBOX_HOME'}/perl";
 use toolbox::json;
 use toolbox::logging;
 use toolbox::run;
+use toolbox::jsonsettings;
 
 $toolbox::logging::debug = 0;
 
@@ -42,6 +43,7 @@ my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => 
 
 my @utilities = ( "packrat" );
 
+my $jsonsettings;
 my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
@@ -52,10 +54,10 @@ my %run; # A multi-dimensional, nested hash, schema TBD
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
 my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
-my $default_rb_timeout = 240;
-my $endpoint_deploy_timeout = 360;
-my $client_server_script_start_timeout = 720;
-my $endpoint_move_data_rb_timeout = 300;
+my $default_rb_timeout;
+my $endpoint_deploy_timeout;
+my $client_server_script_start_timeout;
+my $endpoint_move_data_rb_timeout;
 (my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
 chomp ($hostname);
 my $hostname_md5 = Digest::MD5->new;
@@ -715,6 +717,8 @@ sub build_reqs {
         exit 1;
     }
     push (@$req_ref, "--requirement " . $tb_req_file);
+    # The second toolbox req ensures the proper dependencies are installed
+    push (@$req_ref, "--requirement " . $ENV{'TOOLBOX_HOME'} .  "/workshop.json");
 
     if ($use_roadblock) {
         my $rb_script_req_file = $config_dir . "/roadblock-script-req.json";
@@ -1304,9 +1308,47 @@ sub make_run_dirs() {
     }
 }
 
+sub load_settings_info() {
+    (my $rc, $jsonsettings) = load_json_settings($rickshaw_project_dir . "/rickshaw-settings.json");
+    if ($rc != 0) {
+        print "load_settings_info(): load_json_settings() failed\n";
+        exit 1;
+    }
+
+    ($rc, $default_rb_timeout) = get_json_setting("roadblock.timeouts.default", $jsonsettings);
+    if ($rc != 0) {
+        print "load_settings_info(): failed to load default roadblock timeout\n";
+        exit 1;
+    }
+
+    ($rc, $endpoint_deploy_timeout) = get_json_setting("roadblock.timeouts.endpoint-deploy", $jsonsettings);
+    if ($rc != 0) {
+        print "load_settings_info(): failed to load endpoint-deploy roadblock timeout\n";
+        exit 1;
+    }
+
+    ($rc, $client_server_script_start_timeout) = get_json_setting("roadblock.timeouts.client-server-start", $jsonsettings);
+    if ($rc != 0) {
+        print "load_settings_info(): failed to load client-server-start roadblock timeout\n";
+        exit 1;
+    }
+
+    ($rc, $endpoint_move_data_rb_timeout) = get_json_setting("roadblock.timeouts.move-data", $jsonsettings);
+    if ($rc != 0 ) {
+        print "load_settings_info(): failed to load move-data roadblock timeout\n";
+        exit 1;
+    }
+}
+
 sub save_config_info() {
     if (put_json_file($config_dir . "/rickshaw-run.json", \%run) > 0) {
         printf "save_config_info(): put_json_file() failed for %s\n", $config_dir . "/rickshaw-run.json";
+        exit 1;
+    }
+
+    if (put_json_file($config_dir . "/rickshaw-settings.json", $jsonsettings) > 0) {
+        printf "save_config_info(): put_json_file() failed for %s\n", $config_dir . "/rickshaw-settings.json";
+        exit 1;
     }
 }
 
@@ -1948,6 +1990,7 @@ $workshop_base_cmd =
     " --param %rickshaw-dir%=" . $rickshaw_project_dir .
     " --reg-tls-verify=" . $run{'reg-tls-verify'} .
     " 2>&1";
+load_settings_info();
 save_config_info();
 validate_endpoints();
 build_test_order();

@@ -478,6 +478,7 @@ function endpoint_remotehost_cleanup() {
 process_opts $@
 process_remotehost_opts $endpoint_opts
 init_common_dirs
+load_settings
 remotehost_req_check
 base_req_check
 launch_osruntime

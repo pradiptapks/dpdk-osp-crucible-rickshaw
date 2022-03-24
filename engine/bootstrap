@@ -218,6 +218,13 @@ else
 fi
 echo
 
+export json_settings_file="/tmp/rickshaw-settings.json.xz"
+
+scp_from_controller "$ssh_id_file" "$config_dir/rickshaw-settings.json.xz" /tmp
+if [ ! -e ${json_settings_file} ]; then
+    exit_error "Could not find rickshaw-settings.json.xz"
+fi
+
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
 if [ -e /usr/local/bin/client-server-script ]; then
     echo "Execing client-server-script:"
