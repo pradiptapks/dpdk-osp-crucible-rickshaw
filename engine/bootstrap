@@ -1,9 +1,11 @@
-#!/bin/bash
+#!/usr/local/bin/bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 #
 # The following is the minimum amount of code to copy over the client-server-script and no more.
 exec 2>&1
+
+echo "BASH_VERSION=${BASH_VERSION}"
 
 # Some container images need this
 test -e /etc/profile && . /etc/profile
