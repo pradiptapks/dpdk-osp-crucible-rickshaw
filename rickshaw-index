@@ -45,6 +45,7 @@ my $coder = JSON::XS->new->canonical;
 my $result_schema_file;
 my $bench_metric_schema_file;
 my $file_rc;
+my @queued_docs;
 my %num_docs_submitted = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0);
 
 sub usage {
@@ -210,6 +211,33 @@ sub create_es_doc {
     return \%es_doc;
 }
 
+sub queue_es_doc {
+    my $doc_type = shift;
+    if (not defined $doc_type) {
+        print "ERROR: doc_type must be defined\n";
+        exit 1;
+    }
+    my $dir = shift;
+    if (not defined $dir) {
+        print "ERROR: dir must be defined\n";
+        exit 1;
+    }
+    my $iter = shift;
+    my $sample = shift;
+    my $period = shift;
+    my %doc_info = ( 'doc-type' => $doc_type, 'dir' => $dir );
+    if (defined $iter) {
+        $doc_info{'iter'} = $iter;
+    }
+    if (defined $sample) {
+        $doc_info{'sample'} = $sample;
+    }
+    if (defined $period) {
+        $doc_info{'period'} = $period;
+    }
+    push(@queued_docs, \%doc_info);
+}
+
 # This is meant to index a specific ES document type with sourcing the info direclty
 # from %result hash (wich is the contents of rickshaw-run.json).  When a tag, param,
 # iteration, sample, or period document is desired, a corresponing index for the respective
@@ -231,6 +259,12 @@ sub index_es_doc {
     if ($$resp_ref{'result'} ne "created") {
         printf "Request to index failed:\n%s\n", $coder->encode($resp_ref);
         exit 1;
+    }
+}
+
+sub index_queued_es_docs {
+    foreach my $this_doc (@queued_docs) {
+        index_es_doc($$this_doc{'doc-type'}, $$this_doc{'iter'}, $$this_doc{'sample'}, $$this_doc{'period'});
     }
 }
 
@@ -277,6 +311,12 @@ sub write_es_doc {
             put_json_file($file, $es_doc_ref);
         }
     } # popd
+}
+
+sub write_queued_es_docs {
+    foreach my $this_doc (@queued_docs) {
+        write_es_doc($$this_doc{'doc-type'}, $$this_doc{'dir'}, $$this_doc{'iter'}, $$this_doc{'sample'}, $$this_doc{'period'});
+    }
 }
 
 # This will index 1 or more metrics, based on what is found in the metric json & csv documents.
@@ -642,13 +682,6 @@ if (-e $tool_dir) {
         }
     }
 }
-if (exists $result{'tags'}) {
-    my $tag_idx = 0;
-    for my $tag (@{ $result{'tags'} }) {
-        index_es_doc("tag", $tag_idx);
-        $tag_idx++;
-    }
-}
 if (exists $result{'iterations'}) {
     print "Indexing of benchmark data starting\n";
     my $iter_num = 1;
@@ -802,16 +835,14 @@ if (exists $result{'iterations'}) {
                                                     if (! defined $result{'end'} or $result{'end'} < $$this_sample{'periods'}[$period_idx]{'end'}) {
                                                         $result{'end'} = $$this_sample{'periods'}[$period_idx]{'end'};
                                                     }
-                                                    index_es_doc("period", $iter_idx, $sample_idx, $period_idx);
-                                                    write_es_doc("period", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx, $period_idx);
+                                                    queue_es_doc("period", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx, $period_idx);
                                                 }
                                             }
                                         }
                                     } #cs_ids
                                 } #opendir csnames
                             } #cs_names
-                            index_es_doc("sample", $iter_idx, $sample_idx);
-                            write_es_doc("sample", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx);
+                            queue_es_doc("sample", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx);
                             $sample_num++;
                         } #opendir samp
                     } #samp pass
@@ -826,8 +857,7 @@ if (exists $result{'iterations'}) {
                 }
                 $$iter{'primary-metric'} = $primary_metric;
                 $$iter{'primary-period'} = $primary_period;
-                index_es_doc("iteration", $iter_idx);
-                write_es_doc("iteration", $run_dir . "/" . $this_iter_dir, $iter_idx);
+                queue_es_doc("iteration", $run_dir . "/" . $this_iter_dir, $iter_idx);
             } else {
                 printf "Skipping iteration %d\n", $iter_num;
             } #opendir iter
@@ -836,6 +866,20 @@ if (exists $result{'iterations'}) {
     } #iterations
     print "Indexing of benchmark data complete\n";
 } #if iterations
+if (exists $result{'tags'}) {
+    my $tag_idx = 0;
+    for my $tag (@{ $result{'tags'} }) {
+        queue_es_doc("tag", $run_dir, $tag_idx);
+        #index_es_doc("tag", $tag_idx);
+        $tag_idx++;
+    }
+}
+print "Indexing run doc\n";
 index_es_doc("run");
+print "Indexing queued docs\n";
+index_queued_es_docs();
+print "Writing queued docs\n";
+write_queued_es_docs();
+print "Waiting for docs be present in ES\n";
 wait_for_docs;
 print "Indexing to ES complete\n";
