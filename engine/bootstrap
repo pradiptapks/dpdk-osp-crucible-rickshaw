@@ -1,9 +1,11 @@
-#!/bin/bash
+#!/usr/local/bin/bash
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 #
 # The following is the minimum amount of code to copy over the client-server-script and no more.
 exec 2>&1
+
+echo "BASH_VERSION=${BASH_VERSION}"
 
 # Some container images need this
 test -e /etc/profile && . /etc/profile
@@ -215,6 +217,13 @@ else
     echo "Disabled"
 fi
 echo
+
+export json_settings_file="/tmp/rickshaw-settings.json.xz"
+
+scp_from_controller "$ssh_id_file" "$config_dir/rickshaw-settings.json.xz" /tmp
+if [ ! -e ${json_settings_file} ]; then
+    exit_error "Could not find rickshaw-settings.json.xz"
+fi
 
 scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
 if [ -e /usr/local/bin/client-server-script ]; then

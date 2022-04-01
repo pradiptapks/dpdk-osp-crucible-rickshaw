@@ -12,11 +12,7 @@ rb_exit_success=0
 rb_exit_timeout=3
 rb_exit_abort=4
 rb_exit_input=2
-default_timeout=240
 max_rb_attempts=""
-endpoint_deploy_timeout=360
-client_server_script_start_timeout=720
-endpoint_move_data_timeout=300
 cs_rb_opts=""
 do_validate="0"
 num_clients=0
@@ -745,5 +741,35 @@ function get_controller_ip() {
     else
         echo ${controller_ip}
         return 0
+    fi
+}
+
+function load_json_setting() {
+    local query var value
+
+    query="$1"
+    typeset -n var=$2
+
+    echo "load_json_setting():"
+
+    value=$(${TOOLBOX_HOME}/bin/get-json-settings.pl --settings "${config_dir}/rickshaw-settings.json.xz" --query ${query})
+    if [ $? != 0 ]; then
+        echo "available json settings:"
+        xzcat ${json_settings_file}
+        exit_error "query '${query}' failed to load a json setting"
+    else
+        var=${value}
+        echo "json setting query '${query}' returned '${var}'"
+    fi
+
+    return 0
+}
+
+function load_settings() {
+    if [ "$do_validate" != 1 ]; then
+        load_json_setting "roadblock.timeouts.default" default_timeout
+        load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
+        load_json_setting "roadblock.timeouts.client-server-start" client_server_script_start_timeout
+        load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
     fi
 }

@@ -971,6 +971,7 @@ function endpoint_k8s_cleanup() {
 process_opts "$@"
 process_k8s_opts "$endpoint_opts"
 init_common_dirs
+load_settings
 k8s_req_check
 base_req_check
 get_k8s_config
