@@ -78,6 +78,7 @@ my $client_server_run_dir;
 my $client_server_logs_dir;
 my $client_server_archives_dir;
 my $client_server_run_script;
+my $client_server_library_script;
 my $iterations_dir;
 my $rickshaw_project_dir;
 my $roadblock_msgs_dir;
@@ -1294,6 +1295,7 @@ sub make_run_dirs() {
     $client_server_archives_dir = $client_server_run_dir . "/archives/";
     mkdir($client_server_archives_dir);
     $client_server_run_script = $client_server_config_dir . "/client-server-script";
+    $client_server_library_script = $client_server_config_dir . "/client-server-script-library";
     $iterations_dir = $run_dir . "/iterations";
     mkdir($iterations_dir);
     $roadblock_msgs_dir = $run_dir . "/roadblock-msgs";
@@ -1599,9 +1601,11 @@ sub prepare_bench_tool_engines() {
         debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
     copy($rickshaw_project_dir . "/engine/client-server-script", $client_server_run_script)
-        || die "Could not copy client-server-script to " . $client_server_run_script .
-            "/client-server-script";
+        || die "Could not copy client-server-script to " . $client_server_run_script;
     chmod 0755, "$client_server_run_script";
+    copy($rickshaw_project_dir . "/engine/client-server-script-library", $client_server_library_script)
+        || die "Could not copy client-server-script-library to " . $client_server_library_script;
+    chmod 0755, "$client_server_library_script";
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
     # to see if we need to build a command file for any of these collectors.
