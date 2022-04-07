@@ -773,3 +773,38 @@ function load_json_setting() {
 
     return 0
 }
+
+# this function provides an interface for an external caller to
+# directly invoke one of the functions defined in this file
+#
+# this allows functions to be defined in this file and used by either
+# another script that sources this file or by a discrete caller from
+# the command line or similar
+#
+# ex. 'client-server-script-library <function-name> <function-args>'
+function direct_script_function_call() {
+    local func
+
+    if [ $# -gt 0 ]; then
+        func=${1}
+        shift
+        # check if the first argument is a defined function that can
+        # be called
+        if declare -F "${func}" > /dev/null; then
+            # since it is a defined function, call it with remaining
+            # arguments
+            ${func} "$@"
+            return $?
+        else
+            echo "ERROR: direct_script_function_call(): undefined function '${func}'"
+            return 1
+        fi
+    else
+        return 0
+    fi
+}
+
+# always invoke 'direct_script_function_call' to determine if
+# something needs to be handled; when this file is sourced this should
+# effectively be a noop
+direct_script_function_call "$@"
