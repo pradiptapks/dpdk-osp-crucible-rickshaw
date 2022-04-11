@@ -388,33 +388,6 @@ function do_roadblock() {
     fi
 }
 
-function process_prebench_roadblocks() {
-    do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-    do_roadblock "client-server-script-start" "follower" $client_server_script_start_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-    do_roadblock "client-server-get-data" "follower" $default_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-    do_roadblock "client-server-collect-sysinfo" "follower" $default_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-    do_roadblock "client-server-start-tools" "follower" $default_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-    do_roadblock "client-server-start-tests" "follower" $default_timeout
-    if [ $? -eq $rb_exit_abort ]; then
-        exit_error "Exiting due to abort from another participant"
-    fi
-}
-
 function process_bench_roadblocks() {
     local endpoint_type=""
     if [ $# -gt 0 ]; then
@@ -686,17 +659,6 @@ function process_roadblocks() {
         do_roadblock "endpoint-move-data" "follower" $endpoint_deploy_timeout
     fi
     do_roadblock "endpoint-finish" "follower" $endpoint_deploy_timeout
-}
-
-function process_final_roadblocks() {
-    do_roadblock endpoint-move-data "follower" $endpoint_move_data_timeout
-    do_roadblock endpoint-finish "follower" $default_timeout
-}
-
-function process_postbench_roadblocks() {
-    for sub_label in stop-tools send-data script-finish; do
-        do_roadblock "client-server-$sub_label" "follower" $default_timeout
-    done
 }
 
 function is_ip() {
