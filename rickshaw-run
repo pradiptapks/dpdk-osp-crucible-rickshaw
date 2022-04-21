@@ -1077,7 +1077,7 @@ sub process_cmdline() {
                 $val = shift @ARGV;
             }
         } else {
-            print "[ERROR]malformed cmdline parameter: %s\n";
+            printf "[ERROR]malformed cmdline parameter: %s\n", $p;
             usage;
             exit 1;
         }
