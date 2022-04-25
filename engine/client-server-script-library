@@ -88,11 +88,16 @@ function do_roadblock() {
         return 0
     fi
 
-    if [ $rc -eq $rb_exit_success -o $rc -eq $rb_exit_abort ]; then
-        echo "returning $rc"
-        return $rc
-    else
-        exit_error "roadblocked exited with an error: rc=$rc"
+    echo "returning $rc"
+    return $rc
+}
+
+function roadblock_exit_on_error() {
+    local roadblock_rc=$1; shift
+
+    if [ ${roadblock_rc} != 0 ]; then
+        echo "roadblock_exit_on_error()"
+        exit ${roadblock_rc}
     fi
 }
 

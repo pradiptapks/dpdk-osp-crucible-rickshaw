@@ -381,10 +381,16 @@ function do_roadblock() {
     echo "total attempts: $attempts"
     echo "Completed roadblock [`date`]"
     printf "\n\n"
-    if [ $rc -ne $rb_exit_success -a $rc -ne $rb_exit_abort ]; then
-        exit_error "roadblock failed"
-    else
-        return $rc
+
+    return $rc
+}
+
+function roadblock_exit_on_error() {
+    local roadblock_rc=$1; shift
+
+    if [ ${roadblock_rc} != 0 ]; then
+        echo "roadblock_exit_on_error()"
+        exit ${roadblock_rc}
     fi
 }
 
@@ -552,6 +558,8 @@ function process_roadblocks() {
     local endpoint_type=$1; shift
     local new_followers="$@"
     local msg_file=""
+    local roadblock_rc
+
     if [ ! -z "$new_followers" ]; then
         echo "pwd: `/bin/pwd`"
         msg_file="$endpoint_run_dir/new-followers.json"
@@ -561,104 +569,71 @@ function process_roadblocks() {
         echo ']}}]' >>$msg_file
         echo "ls: `/bin/ls`"
     fi
-    if [ $abort -eq 0 ]; then
-        do_roadblock "endpoint-deploy" "follower" $endpoint_deploy_timeout $msg_file
-        d_rc=$?
-        echo "endpoint-deploy complete"
-        if [ $abort -eq 0 -a $d_rc -eq 0 ]; then
-            echo "going to process endpoint syncs"
-            abort_tests_opt=0
-            no_bench=0
-            client_abort_sync=""
-            collector_abort_sync=""
-            collector_stop_syncs=()
-            client_server_stop_syncs=()
-            start_syncs=("script-start" "get-data" "collect-sysinfo" "start-tools" "start-tests")
-            for (( i=0; i<${#start_syncs[*]}; i++ )); do
-                a_rb=0
-                b_rb=0
-                this_sync="${start_syncs[$i]}"
-                stop_sync=""
-                echo "this_sync: $this_sync"
-                # collect-sysinfo does not require a stop sync
-                if [ "$this_sync" != "collect-sysinfo" ]; then
-                    stop_sync="`echo $this_sync | sed -e s/start/stop/ -e s/get/send/`"
-                    echo "stop_sync: $stop_sync"
-                fi
-                if [ "$this_sync" == "script-start" ]; then
-                    this_timeout=$client_server_script_start_timeout
-                else
-                    this_timeout=$default_timeout
-                fi
-                echo "about to run do_roadblock client-server-$this_sync follower $this_timeout"
-                do_roadblock "client-server-$this_sync" "follower" $this_timeout
-                b_rb=$?
-                echo "rb exit code: $b_rb"
-                if [ $a_rb -gt 0 -a $b_rb -gt 0 ]; then
-                    # Both aborted, no need to signal the other
-                    no_bench=1
-                    break
-                elif [ $a_rb -gt 0 -a $b_rb -eq 0 ]; then
-                    if [ $(($i+1)) -lt ${#start_syncs[*]} ]; then
-                        echo "Collector aborted, must signal client-server to abort"
-                        client_abort_sync=${start_syncs[$(($i+1))]}
-                        # Client-server will advance when sent abort signal
-                        client_stop_syncs=("$stop_sync" ${client_stop_syncs[*]})
-                        no_bench=1
-                    else
-                        # There is not another sync before running tests, so signal
-                        # process_bench_roadbocks to abort
-                        abort_tests_opt=1
-                    fi
-                    break
-                elif [ $a_rb -eq 0 -a $b_rb -gt 0 ]; then
-                    echo "Client-server aborted"
-                    if [ $# -gt 0 ]; then  # only if we have followers
-                        echo "Must signal collector to abort"
-                        # If ths is the last sync before running tests, we can't send an abort.
-                        # That's OK, as there's nothing left for the collectors to do, as the
-                        # abort was from 'test-start'. and collectors do not run tests.
-                        if [ $(($i+1)) -lt ${#start_syncs[*]} ]; then
-                            collector_abort_sync=${start_syncs[$(($i+1))]}
-                            echo "collector_abort_sync; $collector_abort_sync"
-                            echo "Collector will advance when sent abort signal"
-                            collector_stop_syncs=("$stop_sync" ${collector_stop_syncs[*]})
-                        fi
-                    fi
-                    no_bench=1
-                    break
-                elif [ $a_rb -eq 0 -a $b_rb -eq 0 ]; then # neither aborted, advance
-                    echo "both collector and client-server passed roadblock"
-                    collector_stop_syncs=("$stop_sync" ${collector_stop_syncs[*]})
-                    client_stop_syncs=("$stop_sync" ${client_stop_syncs[*]})
-                fi
-            done
-            echo "for loop done, collector_stop_syncs: [ ${collector_stop_syncs[*]} ]  client_stop_syncs: [ ${client_stop_syncs[*]} ]"
-            echo "client_abort_sync: $client_abort_sync   collector_abort_sync: $collector_abort_sync"
 
-            if [ $no_bench -eq 0 ]; then
-                echo "going to process bench roadblocks"
-                process_bench_roadblocks $endpoint_type $abort_tests_opt
-            else
-                if [ ! -z "$client_abort_sync" ]; then
-                    echo "going to signal client-server $client_abort_sync to abort"
-                    do_roadblock "client-server-$client_abort_sync" "follower" "abort"
-                fi
-            fi
-            echo "about to process client-server stop syncs"
-            for (( i=0; i<${#client_stop_syncs[*]}; i++ )); do
-                this_sync="${client_stop_syncs[$i]}"
-                do_roadblock "client-server-$this_sync" "follower" $client_server_script_start_timeout
-            done
-        else
-            echo "deploy aborted, going directly to cleanup"
-        fi
-        if [ ! -z "$endpoint_type" ]; then
-            endpoint_${endpoint_type}_cleanup
-        fi
-        do_roadblock "endpoint-move-data" "follower" $endpoint_deploy_timeout
+
+    do_roadblock "endpoint-deploy-begin" "follower" $endpoint_deploy_timeout $msg_file
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    do_roadblock "endpoint-deploy-end" "follower" $endpoint_deploy_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    do_roadblock "engine-init-begin" "follower" $client_server_script_start_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    do_roadblock "engine-init-end" "follower" $client_server_script_start_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    do_roadblock "get-data-begin" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    do_roadblock "get-data-end" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    do_roadblock "collect-sysinfo-begin" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    # run packrat here somehow eventually
+
+    do_roadblock "collect-sysinfo-end" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    do_roadblock "start-tools-begin" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    do_roadblock "start-tools-end" "follower" $default_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    process_bench_roadblocks $endpoint_type 0
+
+
+    do_roadblock "stop-tools-begin" "follower" $default_timeout
+    do_roadblock "stop-tools-end" "follower" $default_timeout
+
+
+    do_roadblock "send-data-begin" "follower" $default_timeout
+    do_roadblock "send-data-end" "follower" $default_timeout
+
+
+    do_roadblock "endpoint-cleanup-begin" "follower" $default_timeout
+    if [ ! -z "$endpoint_type" ]; then
+        endpoint_${endpoint_type}_cleanup
     fi
-    do_roadblock "endpoint-finish" "follower" $endpoint_deploy_timeout
+    do_roadblock "endpoint-cleanup-end" "follower" $default_timeout
 }
 
 function is_ip() {

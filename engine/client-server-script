@@ -32,49 +32,70 @@ version=20200509
 echo "version: $version"
 echo
 
-sync=client-server-script-start
 leader=controller
 load_json_setting "roadblock.timeouts.default" default_timeout
 process_opts
 validate_core_env
 setup_core_env # roadblocks may be used after this
-if [ $abort -eq 0 ]; then do_roadblock $sync $leader $client_server_script_start_timeout; fi
-if [ $abort -eq 0 -a $? -eq 0 ]; then
-    sync=$sync_prefix-get-data
-    pushd "$cs_dir" >/dev/null || abort_error "Could not chdir to $cs_dir" $sync $leader
-    if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-    if [ $abort -eq 0 -a $? -eq 0 ]; then # get-data rb passed
-        get_data
-        sync=$sync_prefix-collect-sysinfo
-        if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-        if [ $? -eq 0 -a $abort -eq 0 ]; then # collect-sysinfo rb passed
-            collect_sysinfo
-            sync=$sync_prefix-start-tools
-            if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-            if [ $? -eq 0 -a $abort -eq 0 ]; then # start-tools rb passed
-                sync=$sync_prefix-start-tests
 
-                #if [ "$cs_label" == "worker-1" ]; then
-                    #abort_error "Fault injection from client-1 before $sync" $sync $leader
-                #fi
-                #echo "finished with fault injection"
-
-                start_tools
-                if [ $abort -eq 0 ]; then do_roadblock $sync $leader $default_timeout; fi
-                if [ $abort -eq 0 -a $? -eq 0 ]; then # start-tests rb passed
-                    run_tests
-                fi
-                do_roadblock $sync_prefix-stop-tests $leader $default_timeout
-                do_roadblock $sync_prefix-stop-tools $leader $default_timeout
-                stop_tools
-            fi
-        fi
-        do_roadblock $sync_prefix-send-data $leader $default_timeout
-        send_data
-    fi
-    echo "right before script-stop roadblock"
-    do_roadblock $sync_prefix-script-stop $leader $default_timeout
-    popd >/dev/null
+if ! pushd $cs_dir; then
+    abort_error "Could not chdir to $cs_dir" engine-init-begin $leader
+    exit 1
+else
+    do_roadblock engine-init-begin $leader $client_server_script_start_timeout
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
 fi
+do_roadblock engine-init-end $leader $client_server_script_start_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+
+do_roadblock get-data-begin $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+get_data
+
+do_roadblock get-data-end $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+
+do_roadblock collect-sysinfo-begin $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+collect_sysinfo
+
+do_roadblock collect-sysinfo-end $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+
+do_roadblock start-tools-begin $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+start_tools
+
+do_roadblock start-tools-end $leader $default_timeout
+roadblock_rc=$?
+roadblock_exit_on_error ${roadblock_rc}
+
+
+run_tests
+
+
+do_roadblock stop-tools-begin $leader $default_timeout
+stop_tools
+do_roadblock stop-tools-end $leader $default_timeout
+
+
+do_roadblock send-data-begin $leader $default_timeout
+send_data
+do_roadblock send-data-end $leader $default_timeout
+
+
 echo -e "\nAll client/server scripts are finished"
 /bin/rm -rf $cs_dir
