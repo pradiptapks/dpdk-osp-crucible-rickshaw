@@ -1816,8 +1816,7 @@ sub deploy_endpoints() {
                     " --client-server-script-start-timeout=" . $client_server_script_start_timeout .
                     $endpoint_image_opt .
                     $endpoint_roadblock_opt .
-                    " >" . $this_endpoint_run_dir . "/endpoint-stdout.txt" .
-                    " 2>" . $this_endpoint_run_dir . "/endpoint-stderr.txt";
+                    " >" . $this_endpoint_run_dir . "/endpoint-stderrout.txt 2>&1";
             # The below 'system' needs to be forked, then wait for all to finish.
             # The endpoint program should get all clients/servers "ready", that is,
             # waiting for instructions from roadblock.  The above command needs
