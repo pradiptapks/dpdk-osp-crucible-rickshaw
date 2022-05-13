@@ -84,7 +84,7 @@ roadblock_rc=$?
 roadblock_exit_on_error ${roadblock_rc}
 
 
-run_tests
+process_bench_roadblocks
 
 
 do_roadblock stop-tools-begin $leader $default_timeout

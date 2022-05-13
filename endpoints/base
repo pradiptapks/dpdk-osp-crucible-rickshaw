@@ -385,6 +385,78 @@ function do_roadblock() {
     return $rc
 }
 
+function prepare_roadblock_msgs_file {
+    local iteration_sample_directory=$1; shift
+    local roadblock_name=$1; shift
+
+    local pending_tx_msgs=$(/bin/ls -1 ${cs_tx_msgs_dir})
+    if [ ! -z "${pending_tx_msgs}" ]; then
+        echo "Found messages in ${cs_tx_msgs_dir}, preparing them to send"
+
+        mkdir -p ${cs_tx_msgs_dir}-sent
+        msgs_json_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
+
+        echo "[" > "${msgs_json_file}"
+        for msg in "${pending_tx_msgs}"; do
+            # TODO validate JSON schema
+            echo "Adding ${msg} to ${msgs_json_file}"
+            cat "${cs_tx_msgs_dir}/${msg}" >> "${msgs_json_file}"
+            /bin/mv "${cs_tx_msgs_dir}/${msg}" "${cs_tx_msgs_dir}-sent"
+            echo "," >> "${msgs_json_file}"
+        done
+        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'${roadblock_name}'"}}]' >> "${msgs_json_file}"
+
+        echo "Contents of ${msgs_json_file}:"
+        cat "${msgs_json_file}"
+    else
+        echo "No messages found in ${cs_tx_msgs_dir}"
+        msgs_json_file=""
+    fi
+}
+
+function evaluate_test_roadblock {
+    local roadblock_name=$1; shift;
+    local roadblock_rc=$1; shift;
+    local iter_array_idx=$1; shift;
+
+    if [ ${roadblock_rc} != 0 ]; then
+        # something bad happened
+        if [ ${roadblock_rc} == ${rb_exit_timeout} ]; then
+            printf "[ERROR] roadblock '%s' timed out, attempting to exit and cleanly finish the run\n" "${roadblock_name}"
+
+            quit=1
+        elif [ ${roadblock_rc} == ${rb_exit_abort} ]; then
+            printf "[WARNING] roadblock '%s' received an abort, stopping sample\n" "${roadblock_name}"
+            sample_data_attempt_fail[${iter_array_idx}]=1;
+
+            (( sample_data_failures[${iter_array_idx}]++ ))
+            printf "sample failures is now: %d\n", ${sample_data_failures[${iter_array_idx}]}
+
+            if [ ${sample_data_failures[${iter_array_idx}]} -ge ${max_sample_failures} ]; then
+                sample_data_complete[${iter_array_idx}]=1
+
+                printf "[ERROR] A maximum of %d failures for iteration %d has been reached\n" \
+                       ${sample_data_failures[${iter_array_idx}]} \
+                       ${sample_data_iteration_id[${iter_array_idx}]}
+            fi
+
+            abort=1
+        fi
+    fi
+
+    local msgs_file="${roadblock_msgs_dir}/${roadblock_name}.json"
+    if [ -f "${msgs_file}" ]; then
+        count=1
+        echo "Found messages file: ${msgs_file}"
+        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_file} | while read line; do
+            msg="${roadblock_name}:${count}"
+            echo "Found user-object message: ${line}"
+            echo "${line}" | jq '."user-object"' >"${cs_rx_msgs_dir}/${msg}"
+            let count=${count}+1
+        done
+    fi
+}
+
 function roadblock_exit_on_error() {
     local roadblock_rc=$1; shift
 
@@ -399,159 +471,235 @@ function process_bench_roadblocks() {
     if [ $# -gt 0 ]; then
         endpoint_type=$1; shift
     fi
-    local abort=0
-    if [ $# -gt 0 ]; then
-        abort=$1; shift
-    fi
-    local timeout=$default_timeout
+
     local quit=0
-    abort_run_on_iter_fail=0
+    local abort
+    local timeout=$default_timeout
+    local total_tests=0
+
+    declare -A sample_data_iteration_id
+    declare -A sample_data_sample_id
+    declare -A sample_data_failures
+    declare -A sample_data_complete
+    declare -A sample_data_attempt_num
+    declare -A sample_data_attempt_fail
+
+    echo "Initializing data structures:"
     while read -u 9 line; do
-        iter_samp=`echo $line | awk '{print $1}'`
-        iter=`echo $iter_samp | awk -F- '{print $1}'`
-        let iter_idx=$iter-1
-        sample_failures[$iter_idx]=0
-    done 9< "$client_server_bench_cmds_dir/client/1/start"
+        iter_samp=`echo ${line} | awk '{print $1}'`
+        iter_id=`echo ${iter_samp} | awk -F- '{print $1}'`
+        samp_id=`echo ${iter_samp} | awk -F- '{print $2}'`
+        iter_array_idx=${total_tests}
+        echo "iter_samp=${iter_samp} iter_id=${iter_id} samp_id=${samp_id} iter_array_idx=${iter_array_idx}"
+
+        sample_data_iteration_id[${iter_array_idx}]=${iter_id}
+        sample_data_sample_id[${iter_array_idx}]=${samp_id}
+        sample_data_failures[${iter_array_idx}]=0
+        sample_data_complete[${iter_array_idx}]=0
+        sample_data_attempt_num[${iter_array_idx}]=0
+        sample_data_attempt_fail[${iter_array_idx}]=0
+
+        (( total_tests += 1 ))
+    done 9< "${client_server_bench_cmds_dir}/client/1/start"
+
+    echo "Total tests: ${total_tests}"
+
+    local current_test=0
     while read -u 9 line; do
         if [ $quit -gt 0 ]; then
-            echo "quit = 1, so breaking out of tests"
             break
         fi
-        iter_samp=`echo $line | awk '{print $1}'`
-        iter=`echo $iter_samp | awk -F- '{print $1}'`
-        let iter_idx=$iter-1
-        samp=`echo $iter_samp | awk -F- '{print $2}'`
-        iter_samp_dir="$endpoint_run_dir/iteration-$iter/sample-$samp"
-        cs_msgs_dir="$iter_samp_dir/msgs"
-        cs_tx_msgs_dir="$cs_msgs_dir/tx" # Messages a client, server, or endpoint wants to transmit
-        cs_rx_msgs_dir="$cs_msgs_dir/rx" # Messages a client, server, or endpoint has received
-        for this_dir in "$iter_samp_dir" "$cs_msgs_dir" "$cs_tx_msgs_dir" "$cs_rx_msgs_dir"; do
-            echo "mkdir -p $this_dir"
-            mkdir -p "$this_dir" || exit_error "Could not mkdir $this_dir"
+
+        (( current_test += 1 ))
+
+        iter_samp=`echo ${line} | awk '{print $1}'`
+        iter_id=`echo ${iter_samp} | awk -F- '{print $1}'`
+        samp_id=`echo ${iter_samp} | awk -F- '{print $2}'`
+        let iter_array_idx=${current_test}-1
+        #echo "iter_samp=${iter_samp} iter_id=${iter_id} samp_id=${samp_id} iter_array_idx=${iter_array_idx}"
+
+        iter_samp_dir="${endpoint_run_dir}/iteration-${iter_id}/sample-${samp_id}"
+        cs_msgs_dir="${iter_samp_dir}/msgs"
+        cs_tx_msgs_dir="${cs_msgs_dir}/tx" # Messages a client, server, or endpoint wants to transmit
+        cs_rx_msgs_dir="${cs_msgs_dir}/rx" # Messages a client, server, or endpoint has received
+        for this_dir in "${iter_samp_dir}" "${cs_msgs_dir}" "${cs_tx_msgs_dir}" "${cs_rx_msgs_dir}"; do
+            echo "mkdir -p ${this_dir}"
+            mkdir -p "${this_dir}" || exit_error "Could not mkdir ${this_dir}"
         done
-        this_attempt_num=1
-        sample_complete=0
-        while [ $sample_complete -eq 0 -a ${sample_failures[$iter_idx]} -lt $max_sample_failures ]; do
-            this_attempt_fail=0
-            printf "Sample %d attempt number %d\n" $samp $this_attempt_num
+
+        abort=0
+        while [ $quit -eq 0 -a \
+                $abort -eq 0 -a \
+                ${sample_data_complete[${iter_array_idx}]} -eq 0 -a \
+                ${sample_data_failures[${iter_array_idx}]} -lt ${max_sample_failures} ]; do
+
+            sample_data_attempt_fail[${iter_array_idx}]=0
+            (( sample_data_attempt_num[${iter_array_idx}]++ ))
+
+            printf "Starting iteration %d sample %d (test %d of %d) attempt number %d of %d\n" \
+                   ${iter_id} \
+                   ${samp_id} \
+                   ${current_test} \
+                   ${total_tests} \
+                   ${sample_data_attempt_num[${iter_array_idx}]} \
+                   ${max_sample_failures}
+
             msgs_json_file=""
-            syncs=""
-            stop_syncs=""
-            for start_stop in "start" "stop"; do
-                if [ "$start_stop" == "start" ]; then
-                    syncs="infra server endpoint client"
-                else
-                    syncs="$stop_syncs"
+            rb_name=""
+            test_id=$(printf "%d-%d-%d" ${sample_data_iteration_id[${iter_array_idx}]} ${sample_data_sample_id[${iter_array_idx}]} ${sample_data_attempt_num[${iter_array_idx}]})
+            rb_prefix=$(printf "%s:" ${test_id})
+
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "server-start-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "server-start-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            echo "about to call endpoint_${endpoint_type}_test_start"
+            endpoint_${endpoint_type}_test_start "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
+            echo "returning from endpoint_${endpoint_type}_test_start"
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "client-start-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "client-start-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            msgs_file="${roadblock_msgs_dir}/${rb_name}.json"
+            if [ -f ${msgs_file} ]; then
+                next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' ${msgs_file} | grep -v null`
+                if [ ! -z "${next_timeout}" ]; then
+                    timeout=${next_timeout}
+                    printf "Found new client-stop timeout value: %s\n", ${timeout}
                 fi
-                for sync in $syncs; do
-                    this_sync="$sync-$start_stop"
-                    if [ "$start_stop" == "start" ]; then
-                        # Build the syncs needed for stop, may end up being fewer than all syncs if start syncs abort early
-                        stop_syncs="$sync $stop_syncs"
-                    fi
-                    local test_id="$iter-$samp-$this_attempt_num"
-                    local label="$test_id:$this_sync"
-                    local msgs_file="$roadblock_msgs_dir/$label.json"
-                    if [ $abort -eq 0 ]; then
-                        do_roadblock "$label" "follower" $timeout "$msgs_json_file"
-                    else # This would come from process_roadblocks having an abort on start-tests
-                        do_roadblock "$label" "follower" "abort" "$msgs_json_file"
-                    fi
-                    rb_rc=$?
-                    echo "roadblock $label exit code: $rb_rc"
-                    if [ $rb_rc -eq $rb_exit_abort ]; then
-                        this_attempt_fail=1
-                        let sample_failures[$iter_idx]=${sample_failures[$iter_idx]}+1
-                        echo -e "\nAbort exit code from iteration $iter, sample $samp"
-                        if [ ${sample_failures[$iter_idx]} -ge $max_sample_failures ]; then
-                            sample_complete=1
-                            printf "[ERROR]All A maximum of %d failures for iteration %d have been reached, failing this iteration\n" \
-                                $max_sample_failures $iter
-                        fi
-                        if [ $abort_run_on_iter_fail -eq 1 ]; then
-                            printf "[ERROR]Since this interation failed, skipping all other tests\n"
-                            quit=1
-                        fi
-                        if [ "$start_stop" == "start" ]; then
-                            # There is no reason to continue the rest of the start syncs
-                            break
-                        fi
-                    else
-                        # Allow to break out of inner while loop if no aborts all the way to the last sync
-                        if [ $this_attempt_fail -eq 0 ]; then
-                            if [ "$this_sync" == "server-stop" ]; then 
-                                sample_complete=1
-                                let num_fail=$this_attempt_num-1
-                                printf "Sample %d completed successfully with %d failed attempts (%d total sample failures for this iteration)\n" \
-                                    $samp $num_fail ${sample_failures[$iter_idx]}
-                            fi
-                        fi
-                    fi
-                    # Below checks for a specific timeout message from the benchmark client, and all endpoints
-                    # process this the same way
-                    timeout=$default_timeout
-                    if [ -f $msgs_file ]; then
-                        next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' $msgs_file | grep -v null`
-                        if [ ! -z "$next_timeout" ]; then
-                            echo "Applying timeout value of $next_timeout to next roadblock sync"
-                            timeout=$next_timeout
-                        fi
-                    fi
-                # The following is organizing any received messages into the $cs_rx_msgs_dir, in case any
-                # specific endpoint wants to read them (via endpoint_${endpoint_type}_test_start() further below)
-                if [ -f $msgs_file ]; then
-                        count=1
-                        echo "Found messages file: $msgs_file"
-                        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' $msgs_file\
-                        | while read line; do
-                            msg="$this_sync:$count"
-                            echo "Found user-object message: $line"
-                            echo "$line" | jq '."user-object"' >"$cs_rx_msgs_dir/$msg"
-                            let count=$count+1
-                        done
-                    fi
-                    # This is the opportunity for the endpoints to make any changes
-                    # before the actual test starts (client-start).  For example, this
-                    # may be used to provide a route to a benchmark-server.  The endpoint
-                    # may also create a message to be sent to other participants on
-                    # on the next roadblock.
-                    if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-start" ]; then
-                        echo "about to call endpoint_${endpoint_type}_test_start"
-                    endpoint_${endpoint_type}_test_start "$roadblock_msgs_dir" "$test_id" "$cs_tx_msgs_dir"
-                        echo "returning from endpoint_${endpoint_type}_test_start"
-                    fi
-                    if [ ! -z "$endpoint_type" -a "$this_sync" == "endpoint-stop" ]; then
-                    echo "Attempting to call endpoint_${endpoint_type}_test_stop"
-                    endpoint_${endpoint_type}_test_stop "$roadblock_msgs_dir" "$test_id"
-                    fi
-                    # Check for any messages to send, typically from endpoint_${endpoint_type}_test_start()
-                    pending_tx_msgs="`/bin/ls -1 $cs_tx_msgs_dir`"
-                    if [ ! -z "$pending_tx_msgs" ]; then
-                        echo "Found messages in $cs_tx_msgs_dir, preparing them to send"
-                        mkdir -p ${cs_tx_msgs_dir}-sent
-                        msgs_json_file="$iter_samp_dir/rb-msgs-$this_sync"
-                        echo "[" >"$msgs_json_file"
-                        for msg in $pending_tx_msgs; do
-                            # TODO validate JSON schema
-                            echo "Adding $msg to $msgs_json_file"
-                            cat "$cs_tx_msgs_dir/$msg" >>"$msgs_json_file"
-                            /bin/mv "$cs_tx_msgs_dir/$msg" "${cs_tx_msgs_dir}-sent"
-                            echo "," >>"$msgs_json_file"
-                        done
-                        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'$this_sync'"}}]' >>$msgs_json_file
-                        echo "full message to send:"
-                        cat "$msgs_json_file"
-                    else
-                        msgs_json_file=""
-                    fi
-                done #for
-            done #for
-            let this_attempt_num=$this_attempt_num+1
-        done #while
+            fi
+
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            # reset the timeout value in case it was changed
+            if [ ${timeout} != ${default_timeout} ]; then
+                timeout=${default_timeout}
+                printf "Resetting timeout value: %s\n", ${timeout}
+            fi
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            echo "about to call endpoint_${endpoint_type}_test_stop"
+            endpoint_${endpoint_type}_test_stop "${roadblock_msgs_dir}" "${test_id}"
+            echo "returning from endpoint_${endpoint_type}_test_stop"
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+            rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-begin")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+            rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-end")
+            prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
+            do_roadblock "${rb_name}" "follower" ${timeout} "${msgs_json_file}"
+            roadblock_rc=$?
+            evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+            ####################################################################
+
+            local sample_result
+            if [ ${sample_data_attempt_fail[${iter_array_idx}]} -eq 0 -a \
+                 $abort == 0 -a \
+                 $quit == 0 ]; then
+                sample_data_complete[${iter_array_idx}]=1
+
+                sample_result="successfully"
+            else
+                sample_result="unsuccessfully"
+
+                if [ $abort != 0 ]; then
+                    printf "[WARNING] An abort signal has been encountered for this sample!\n";
+                fi
+
+                if [ $quit != 0 ]; then
+                    printf "[ERROR] A quit signal has been encountered!\n";
+                fi
+            fi
+
+            printf "Completed iteration %d sample %d (test %d of %d) attempt number %d of %d %s\n" \
+                   ${iter_id} \
+                   ${samp_id} \
+                   ${current_test} \
+                   ${total_tests} \
+                   ${sample_data_attempt_num[${iter_array_idx}]} \
+                   ${max_sample_failures} \
+                   ${sample_result}
+        done
     done 9< "$client_server_bench_cmds_dir/client/1/start"
-    # Process the first client's bench-commands to participate in the roadblocks
-    # What the start or stop command is not important; we just need to know
-    # the number of tests in the right order
 }
 
 function process_roadblocks() {
@@ -618,7 +766,7 @@ function process_roadblocks() {
     roadblock_exit_on_error ${roadblock_rc}
 
 
-    process_bench_roadblocks $endpoint_type 0
+    process_bench_roadblocks $endpoint_type
 
 
     do_roadblock "stop-tools-begin" "follower" $default_timeout
