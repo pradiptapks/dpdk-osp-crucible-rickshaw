@@ -306,12 +306,14 @@ function do_roadblock() {
     local label=$1; shift
     local role=$1; shift
     local timeout=$1; shift
+    local message=""
     if [ $# -gt 0 ]; then
-        local message="$1"; shift # A file for user-messages or "" if none
-        echo "pwd: `/bin/pwd`"
-        echo "Going to send this user message file: $message"
-    else
-        local message=""
+        if [ -n "${1}" ]; then
+            message="$1"; shift # A file for user-messages or "" if none
+            echo "Going to send this user message file: $message"
+        fi
+    fi
+    if [ -z "${message}" ]; then
         echo "Not going to send user message file"
     fi
     ###  followers or members remain in $@  ###
@@ -335,10 +337,10 @@ function do_roadblock() {
         echo "Going to send abort signal"
         abort_opt=" --abort"
     fi
-    local msgs_file="$roadblock_msgs_dir/$label.json"
+    local msgs_log_file="$roadblock_msgs_dir/$label.json"
     local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server localhost --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_file $abort_opt"
-    if [ ! -z "$message" ]; then
+    cmd+=" --redis-server localhost --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_log_file $abort_opt"
+    if [ -n "$message" ]; then
         cmd+=" --user-message $message"
     fi
     if [ "$role" == "follower" ]; then
@@ -373,9 +375,9 @@ function do_roadblock() {
         rc=$?
         echo "roadblock output END"
         echo "roadblock exit code: $rc"
-        if [ -f ${msgs_file} ]; then
+        if [ -f ${msgs_log_file} ]; then
             echo "messages from roadblock:"
-            cat ${msgs_file}
+            cat ${msgs_log_file}
         fi
     done
     echo "total attempts: $attempts"
@@ -444,12 +446,13 @@ function evaluate_test_roadblock {
         fi
     fi
 
-    local msgs_file="${roadblock_msgs_dir}/${roadblock_name}.json"
-    if [ -f "${msgs_file}" ]; then
+    local msgs_log_file="${roadblock_msgs_dir}/${roadblock_name}.json"
+    if [ -f "${msgs_log_file}" ]; then
         count=1
-        echo "Found messages file: ${msgs_file}"
-        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_file} | while read line; do
-            msg="${roadblock_name}:${count}"
+        echo "Found messages file: ${msgs_log_file}"
+        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_log_file} | while read line; do
+            local roadblock_label=$(echo "${roadblock_name}" | awk -F: '{ print $2 }')
+            msg="${roadblock_label}:${count}"
             echo "Found user-object message: ${line}"
             echo "${line}" | jq '."user-object"' >"${cs_rx_msgs_dir}/${msg}"
             let count=${count}+1
@@ -602,9 +605,9 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            msgs_file="${roadblock_msgs_dir}/${rb_name}.json"
-            if [ -f ${msgs_file} ]; then
-                next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' ${msgs_file} | grep -v null`
+            msgs_log_file="${roadblock_msgs_dir}/${rb_name}.json"
+            if [ -f ${msgs_log_file} ]; then
+                next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' ${msgs_log_file} | grep -v null`
                 if [ ! -z "${next_timeout}" ]; then
                     timeout=${next_timeout}
                     printf "Found new client-stop timeout value: %s\n", ${timeout}
