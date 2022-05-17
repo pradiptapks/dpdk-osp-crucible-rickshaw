@@ -1055,31 +1055,33 @@ sub process_bench_roadblocks {
             ($abort, $quit) = evaluate_test_roadblock($rb_name, $roadblock_rc, \$sample_data[$iter_array_idx], \@active_followers, \@dropped_followers, $abort, $quit);
             remove_dropped_followers(\@active_followers, \@dropped_followers);
 
-            $rb_name = $rb_prefix . "client-start-end";
-            ($roadblock_rc, @dropped_followers) = roadblock_leader($rb_name, $timeout, $messages_ref, @active_followers);
-            ($abort, $quit) = evaluate_test_roadblock($rb_name, $roadblock_rc, \$sample_data[$iter_array_idx], \@active_followers, \@dropped_followers, $abort, $quit);
-            remove_dropped_followers(\@active_followers, \@dropped_followers);
-
             my %messages = %{ $messages_ref };
             if (exists $messages{'received'}) {
                 for my $message (@{ $messages{'received'} }) {
                     if (exists $$message{'payload'}{'message'}{'user-object'}{'timeout'}) {
                         $timeout = $$message{'payload'}{'message'}{'user-object'}{'timeout'};
-                        printf "Found new client-stop timeout value: %s\n", $timeout;
+                        printf "Found new client-start-end timeout value: %s\n", $timeout;
                     }
                 }
+            } else {
+                printf "No messages received\n";
             }
-            ####################################################################
-            $rb_name = $rb_prefix . "client-stop-begin";
+
+            $rb_name = $rb_prefix . "client-start-end";
             ($roadblock_rc, @dropped_followers) = roadblock_leader($rb_name, $timeout, $messages_ref, @active_followers);
             ($abort, $quit) = evaluate_test_roadblock($rb_name, $roadblock_rc, \$sample_data[$iter_array_idx], \@active_followers, \@dropped_followers, $abort, $quit);
             remove_dropped_followers(\@active_followers, \@dropped_followers);
-
+            ####################################################################
             # reset the timeout value in case it was changed
             if ($timeout != $default_rb_timeout) {
                 $timeout = $default_rb_timeout;
                 printf "Resetting timeout value: %s\n", $timeout;
             }
+
+            $rb_name = $rb_prefix . "client-stop-begin";
+            ($roadblock_rc, @dropped_followers) = roadblock_leader($rb_name, $timeout, $messages_ref, @active_followers);
+            ($abort, $quit) = evaluate_test_roadblock($rb_name, $roadblock_rc, \$sample_data[$iter_array_idx], \@active_followers, \@dropped_followers, $abort, $quit);
+            remove_dropped_followers(\@active_followers, \@dropped_followers);
 
             $rb_name = $rb_prefix . "client-stop-end";
             ($roadblock_rc, @dropped_followers) = roadblock_leader($rb_name, $timeout, $messages_ref, @active_followers);

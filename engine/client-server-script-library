@@ -821,11 +821,54 @@ function process_bench_roadblocks() {
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
+                if [ "${abort}" == "0" -a \
+                     "${quit}" == "0" -a \
+                     "${cs_type}" == "client" -a \
+                     "${cs_id}" == "1" -a \
+                     -n "${runtime_cmd}" ]; then
+                    echo "Going to run this command to get the estimated runtime: ${runtime_cmd}"
+
+                    local runtime runtime_rc tmp_timeout
+
+                    runtime=$(${runtime_cmd})
+                    runtime_rc=$?
+
+                    if [ "${runtime_rc}" -eq 0 -a \
+                         -n "${runtime}" ]; then
+                        # add padding to benchmark runtime so that
+                        # there is flexibility on benchmark end
+                        # behavior
+                        let tmp_timeout=${runtime}+${runtime_padding}
+                        echo "updated timeout value is ${tmp_timeout}"
+
+                        echo "adding timeout message to ${cs_tx_msgs_dir}"
+                        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"timeout":"'${tmp_timeout}'"}}' > "${cs_tx_msgs_dir}/timeout"
+                    fi
+                fi
+
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-start-begin")
                 prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
                 do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
+
+                if [ -n "${tmp_timeout}" ]; then
+                    timeout=${tmp_timeout}
+                    printf "Using self discovered new client-start-end timeout value: %s\n" ${timeout}
+                else
+                    msgs_log_file="${roadblock_msgs_dir}/${rb_name}.json"
+                    if [ -f ${msgs_log_file} ]; then
+                        next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' ${msgs_log_file} | grep -v null`
+                        if [ ! -z "${next_timeout}" ]; then
+                            timeout=${next_timeout}
+                            printf "Found new client-start-end timeout value: %s\n" ${timeout}
+                        else
+                            printf "Could not find new client-start-end timeout value!\n"
+                        fi
+                    else
+                        printf "Could not find %s\n" ${msgs_log_file}
+                    fi
+                fi
 
                 run_bench_cmd "client" "client" "${abort}" "${abort}" "0" "${start_cmd}"
                 abort=$?
@@ -835,28 +878,18 @@ function process_bench_roadblocks() {
                 do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
-
-                mysgs_file="${roadblock_msgs_dir}/${rb_name}.json"
-                if [ -f ${msgs_log_file} ]; then
-                    next_timeout=`jq -r '.received[] | .payload.message."user-object".timeout ' ${msgs_log_file} | grep -v null`
-                    if [ ! -z "${next_timeout}" ]; then
-                        timeout=${next_timeout}
-                        printf "Found new client-stop timeout value: %s\n", ${timeout}
-                    fi
+                ####################################################################
+                # reset the timeout value in case it was changed
+                if [ ${timeout} != ${default_timeout} ]; then
+                    timeout=${default_timeout}
+                    printf "Resetting timeout value: %s\n" ${timeout}
                 fi
 
-                ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-begin")
                 prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
                 do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
-
-                # reset the timeout value in case it was changed
-                if [ ${timeout} != ${default_timeout} ]; then
-                    timeout=${default_timeout}
-                    printf "Resetting timeout value: %s\n", ${timeout}
-                fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-end")
                 prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
