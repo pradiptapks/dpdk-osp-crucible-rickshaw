@@ -393,7 +393,7 @@ function prepare_roadblock_msgs_file {
 
     local pending_tx_msgs=$(/bin/ls -1 ${cs_tx_msgs_dir})
     if [ ! -z "${pending_tx_msgs}" ]; then
-        echo "Found messages in ${cs_tx_msgs_dir}, preparing them to send"
+        echo "Found queued messages in ${cs_tx_msgs_dir}, preparing them to send"
 
         mkdir -p ${cs_tx_msgs_dir}-sent
         msgs_json_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
@@ -411,7 +411,7 @@ function prepare_roadblock_msgs_file {
         echo "Contents of ${msgs_json_file}:"
         cat "${msgs_json_file}"
     else
-        echo "No messages found in ${cs_tx_msgs_dir}"
+        echo "No queued messages found in ${cs_tx_msgs_dir}"
         msgs_json_file=""
     fi
 }
@@ -448,15 +448,26 @@ function evaluate_test_roadblock {
 
     local msgs_log_file="${roadblock_msgs_dir}/${roadblock_name}.json"
     if [ -f "${msgs_log_file}" ]; then
-        count=1
-        echo "Found messages file: ${msgs_log_file}"
-        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_log_file} | while read line; do
-            local roadblock_label=$(echo "${roadblock_name}" | awk -F: '{ print $2 }')
-            msg="${roadblock_label}:${count}"
-            echo "Found user-object message: ${line}"
-            echo "${line}" | jq '."user-object"' >"${cs_rx_msgs_dir}/${msg}"
+        echo "Found received messages file: ${msgs_log_file}"
+
+        local count=0
+        local roadblock_label=$(echo "${roadblock_name}" | awk -F: '{ print $2 }')
+
+        local tmp_message_file=$(mktemp)
+        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_log_file} \
+           > ${tmp_message_file}
+        while read -u 9 line; do
             let count=${count}+1
-        done
+            local msg="${roadblock_label}:${count}"
+            local outfile="${cs_rx_msgs_dir}/${msg}"
+
+            echo "Found user-object message:"
+            echo -e "\tMessage:  ${line}"
+            echo -e "\tSaved to: ${outfile}"
+
+            echo "${line}" | jq '."user-object"' > "${outfile}"
+        done 9< ${tmp_message_file}
+        rm ${tmp_message_file}
     fi
 }
 

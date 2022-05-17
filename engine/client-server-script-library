@@ -440,7 +440,7 @@ function prepare_roadblock_msgs_file {
 
     local pending_tx_msgs=$(/bin/ls -1 ${cs_tx_msgs_dir})
     if [ ! -z "${pending_tx_msgs}" ]; then
-        echo "Found messages in ${cs_tx_msgs_dir}, preparing them to send"
+        echo "Found queued messages in ${cs_tx_msgs_dir}, preparing them to send"
 
         mkdir -p ${cs_tx_msgs_dir}-sent
         msgs_json_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
@@ -458,7 +458,7 @@ function prepare_roadblock_msgs_file {
         echo "Contents of ${msgs_json_file}:"
         cat "${msgs_json_file}"
     else
-        echo "No messages found in ${cs_tx_msgs_dir}"
+        echo "No queued messages found in ${cs_tx_msgs_dir}"
         msgs_json_file=""
     fi
 }
@@ -495,15 +495,67 @@ function evaluate_test_roadblock {
 
     local msgs_log_file="${roadblock_msgs_dir}/${roadblock_name}.json"
     if [ -f "${msgs_log_file}" ]; then
-        count=1
-        echo "Found messages file: ${msgs_log_file}"
-        jq -cr '.received[] | select(.payload.message.command == "user-object") | .payload.message' ${msgs_log_file} | while read line; do
+        echo "Found received messages file: ${msgs_log_file}"
+
+        if [ "${cs_type}" == "client" -o "${cs_type}" == "server" ]; then
+            echo "Processing message file:"
+
+            local cs_buddy=""
+            local count=0
             local roadblock_label=$(echo "${roadblock_name}" | awk -F: '{ print $2 }')
-            msg="${roadblock_label}:${count}"
-            echo "Found user-object message: ${line}"
-            echo "${line}" | jq '."user-object"' >"${cs_rx_msgs_dir}/${msg}"
-            let count=${count}+1
-        done
+
+            case "${cs_type}" in
+                "client")
+                    cs_buddy="server-${cs_id}"
+                    ;;
+                "server")
+                    cs_buddy="client-${cs_id}"
+                    ;;
+            esac
+
+            echo "My cs_buddy=${cs_buddy}"
+
+            # First look for a message to "all" but sent by my client-server buddy
+            # (to be deprecated)
+            local tmp_message_file=$(mktemp)
+            jq -cr '.received[] | select(.payload.sender.id == "'${cs_buddy}'" and
+                    .payload.message.command == "user-object") | .payload.message' ${msgs_log_file} \
+                   > ${tmp_message_file}
+            while read -u 9 line; do
+                let count=${count}+1
+                local msg="${roadblock_label}:${count}"
+                local outfile="${cs_rx_msgs_dir}/${msg}"
+
+                echo "Found user-object message from ${cs_buddy} sent to 'all':"
+                echo -e "\tMessage:  ${line}"
+                echo -e "\tSaved to: ${outfile}"
+
+                echo "${line}" | jq '."user-object"' > "${outfile}"
+            done 9< ${tmp_message_file}
+            rm ${tmp_message_file}
+
+            # Next look for a message sent specifically to this client/server
+            local tmp_message_file=$(mktemp)
+            jq -cr '.received[] | select(.payload.recipient.id == "'${cs_label}'" and
+                    .payload.message.command == "user-object") | .payload.message' ${msgs_log_file} \
+                   > ${tmp_message_file}
+            while read -u 9 line; do
+                let count=${count}+1
+                local msg="${roadblock_name}:${count}"
+                local outfile="${cs_rx_msgs_dir}/${msg}"
+
+                echo "Found user-object message sent to 'me':"
+                echo -e "\tMessage:  ${line}"
+                echo -e "\tSaved to: ${outfile}"
+
+                echo "${line}" | jq '."user-object"' > "${outfile}"
+            done 9< ${tmp_message_file}
+            rm ${tmp_message_file}
+
+            echo "Found ${count} message(s) for me"
+        else
+            echo "Skipping message file processing because I am not a 'client' or a 'server'"
+        fi
     fi
 }
 
