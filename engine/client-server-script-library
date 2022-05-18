@@ -434,7 +434,7 @@ function start_tools() {
     fi
 }
 
-function prepare_roadblock_msgs_file {
+function prepare_roadblock_user_msgs_file {
     local iteration_sample_directory=$1; shift
     local roadblock_name=$1; shift
 
@@ -443,23 +443,23 @@ function prepare_roadblock_msgs_file {
         echo "Found queued messages in ${cs_tx_msgs_dir}, preparing them to send"
 
         mkdir -p ${cs_tx_msgs_dir}-sent
-        msgs_json_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
+        user_msgs_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
 
-        echo "[" > "${msgs_json_file}"
+        echo "[" > "${user_msgs_file}"
         for msg in "${pending_tx_msgs}"; do
             # TODO validate JSON schema
-            echo "Adding ${msg} to ${msgs_json_file}"
-            cat "${cs_tx_msgs_dir}/${msg}" >> "${msgs_json_file}"
+            echo "Adding ${msg} to ${user_msgs_file}"
+            cat "${cs_tx_msgs_dir}/${msg}" >> "${user_msgs_file}"
             /bin/mv "${cs_tx_msgs_dir}/${msg}" "${cs_tx_msgs_dir}-sent"
-            echo "," >> "${msgs_json_file}"
+            echo "," >> "${user_msgs_file}"
         done
-        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'${roadblock_name}'"}}]' >> "${msgs_json_file}"
+        echo '{"recipient":{"type":"all","id":"all"},"user-object":{"sync":"'${roadblock_name}'"}}]' >> "${user_msgs_file}"
 
-        echo "Contents of ${msgs_json_file}:"
-        cat "${msgs_json_file}"
+        echo "Contents of ${user_msgs_file}:"
+        cat "${user_msgs_file}"
     else
         echo "No queued messages found in ${cs_tx_msgs_dir}"
-        msgs_json_file=""
+        user_msgs_file=""
     fi
 }
 
@@ -770,7 +770,7 @@ function process_bench_roadblocks() {
             if pushd ${iter_samp_dir}; then
                 echo PWD: `/bin/pwd`
 
-                msgs_json_file=""
+                user_msgs_file=""
                 rb_name=""
                 test_id=$(printf "%d-%d-%d" ${sample_data_iteration_id[${iter_array_idx}]} ${sample_data_sample_id[${iter_array_idx}]} ${sample_data_attempt_num[${iter_array_idx}]})
                 rb_prefix=$(printf "%s:" ${test_id})
@@ -779,8 +779,8 @@ function process_bench_roadblocks() {
 
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -788,14 +788,14 @@ function process_bench_roadblocks() {
                 abort=$?
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-start-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -804,20 +804,20 @@ function process_bench_roadblocks() {
                 force_server_stop=1
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-start-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
@@ -847,8 +847,8 @@ function process_bench_roadblocks() {
                 fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-start-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -874,8 +874,8 @@ function process_bench_roadblocks() {
                 abort=$?
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-start-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
@@ -886,32 +886,32 @@ function process_bench_roadblocks() {
                 fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -919,20 +919,20 @@ function process_bench_roadblocks() {
                 abort=$?
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
                 rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-begin")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-end")
-                prepare_roadblock_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" "controller" ${timeout} "${msgs_json_file}"
+                prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
+                do_roadblock "${rb_name}" "controller" ${timeout} "${user_msgs_file}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
