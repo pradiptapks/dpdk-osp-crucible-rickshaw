@@ -541,7 +541,7 @@ function evaluate_test_roadblock {
                    > ${tmp_message_file}
             while read -u 9 line; do
                 let count=${count}+1
-                local msg="${roadblock_name}:${count}"
+                local msg="${roadblock_label}:${count}"
                 local outfile="${cs_rx_msgs_dir}/${msg}"
 
                 echo "Found user-object message sent to 'me':"
