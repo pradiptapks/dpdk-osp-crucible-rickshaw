@@ -399,7 +399,7 @@ function prepare_roadblock_user_msgs_file {
         user_msgs_file="${iteration_sample_directory}/rb-msgs-${roadblock_name}.json"
 
         echo "[" > "${user_msgs_file}"
-        for msg in "${pending_tx_msgs}"; do
+        for msg in ${pending_tx_msgs}; do
             # TODO validate JSON schema
             echo "Adding ${msg} to ${user_msgs_file}"
             cat "${cs_tx_msgs_dir}/${msg}" >> "${user_msgs_file}"
