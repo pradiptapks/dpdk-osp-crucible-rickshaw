@@ -93,8 +93,7 @@ do_roadblock stop-tools-end $leader $default_timeout
 
 
 do_roadblock send-data-begin $leader $default_timeout
-send_data
-do_roadblock send-data-end $leader $default_timeout
+do_roadblock send-data-end $leader $default_timeout wait-for "/usr/local/bin/client-server-script-library send_data '${ssh_id_file}' '${cs_dir}' '${rickshaw_host}' '${archives_dir}/${cs_label}-data.tgz'"
 
 
 echo -e "\nAll client/server scripts are finished"
