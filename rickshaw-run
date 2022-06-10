@@ -79,6 +79,7 @@ my $client_server_logs_dir;
 my $client_server_archives_dir;
 my $client_server_run_script;
 my $client_server_library_script;
+my $client_server_roadblock_script;
 my $iterations_dir;
 my $rickshaw_project_dir;
 my $roadblock_msgs_dir;
@@ -730,45 +731,10 @@ sub build_reqs {
     push (@$req_ref, "--requirement " . $ENV{'TOOLBOX_HOME'} .  "/workshop.json");
 
     if ($use_roadblock) {
-        my $rb_script_req_file = $config_dir . "/roadblock-script-req.json";
-        # The first rb req ensures the roadblock script is installed in /usr/local/bin
-        my %rb_script_req = (
-                        'workshop' => {
-                            'schema' => {
-                                'version' => '2020.03.02'
-                            }
-                        },
-                        'userenvs' => [
-                            {
-                                'name' => 'default',
-                                    'requirements' => [
-                                        'roadblock'
-                                    ]
-                            }
-                        ],
-                        'requirements' => [
-                            {
-                                'name' => 'roadblock',
-                                'type' => 'files',
-                                'files_info' => {
-                                    'files' => [
-                                        {
-                                            'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                            'dst' => '/usr/local/bin/'
-                                        }
-                                    ]
-                                }
-                            }
-                        ] 
-                    );
-        if (put_json_file($rb_script_req_file, \%rb_script_req) > 0) {
-            printf "build_container_image(): put_json_file() failed\n";
-            exit 1;
-        }
-        push (@$req_ref, "--requirement " . $rb_script_req_file);
-        # The second rb req ensures the proper python libraies are installed
+        # ensure the proper python libraies are installed
         push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
     }
+
     push (@$req_ref, "--requirement " . $rickshaw_project_dir . "/engine/workshop.json");
     foreach my $utility (@utilities) {
         if (exists $run{$utility . '-dir'}) {
@@ -1395,6 +1361,7 @@ sub make_run_dirs() {
     mkdir($client_server_archives_dir);
     $client_server_run_script = $client_server_config_dir . "/client-server-script";
     $client_server_library_script = $client_server_config_dir . "/client-server-script-library";
+    $client_server_roadblock_script = $client_server_config_dir . "/roadblock.py";
     $iterations_dir = $run_dir . "/iterations";
     mkdir($iterations_dir);
     $roadblock_msgs_dir = $run_dir . "/roadblock-msgs";
@@ -1705,6 +1672,9 @@ sub prepare_bench_tool_engines() {
     copy($rickshaw_project_dir . "/engine/client-server-script-library", $client_server_library_script)
         || die "Could not copy client-server-script-library to " . $client_server_library_script;
     chmod 0755, "$client_server_library_script";
+    copy($run{'roadblock-dir'} . "/roadblock.py", $client_server_roadblock_script)
+        || die "Could not copy roadblock.py to " . $client_server_roadblock_script;
+    chmod 0755, "$client_server_roadblock_script";
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
     # to see if we need to build a command file for any of these collectors.
