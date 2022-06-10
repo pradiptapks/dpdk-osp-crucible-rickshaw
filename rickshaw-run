@@ -44,7 +44,6 @@ my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => 
 my @utilities = ( "packrat" );
 
 my $jsonsettings;
-my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
 my @endpoints;
@@ -166,80 +165,76 @@ sub find_files {
 }
 
 sub do_roadblock {
-    if ($use_roadblock) {
-        my $attempts = 0;
-        my $rc = 99;
-        my $file_rc;
-        my $label = shift;
-        my $timeout = shift;
-        my $output;
-        my $role = "leader";
-        my $uuid = $run{'id'} . ":" . $label;
-        # save $_[0] for by ref later to store json ref
-        my $follower_param = "";
-        for (my $i=1; $i < scalar @_; $i++) {
-            $follower_param .= " --followers=" . $_[$i];
+    my $attempts = 0;
+    my $rc = 99;
+    my $file_rc;
+    my $label = shift;
+    my $timeout = shift;
+    my $output;
+    my $role = "leader";
+    my $uuid = $run{'id'} . ":" . $label;
+    # save $_[0] for by ref later to store json ref
+    my $follower_param = "";
+    for (my $i=1; $i < scalar @_; $i++) {
+        $follower_param .= " --followers=" . $_[$i];
+    }
+    my $msgs_log_file = $roadblock_msgs_dir . "/" . $label . ".json";
+    (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
+    chomp $date;
+    printf "Roadblock: %s ", $date;
+    while ($attempts < $run{'max-rb-attempts'} and $rc != $roadblock_exit_success and $rc != $roadblock_exit_abort) {
+        $attempts++;
+        my $this_uuid = $attempts . ":" . $uuid;
+        printf "role: %s ", $role;
+        printf "attempt number: %d ", $attempts;
+        printf "uuid: %s\n", $this_uuid;
+        my $cmd = $base_rb_leader_cmd .
+            " --leader-id=controller" .
+            " --uuid=" . $this_uuid .
+            " --timeout=" . $timeout .
+            " --message-log=" . $msgs_log_file .
+            $follower_param;
+        debug_log(sprintf "roadblock leader command:%s\n", $cmd);
+        ($cmd, $output, $rc) = run_cmd($cmd);
+        debug_log(sprintf "roadblock leader rc:%s\n", $rc);
+        debug_log(sprintf "roadblock leader output:\n%s\n", $output);
+        ($file_rc, $_[0]) = get_json_file($msgs_log_file);
+        if ($file_rc > 0 or ! defined $_[0]) {
+            print "Could not open the message file\n";
+            exit 1;
         }
-        my $msgs_log_file = $roadblock_msgs_dir . "/" . $label . ".json";
-        (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
-        chomp $date;
-        printf "Roadblock: %s ", $date;
-        while ($attempts < $run{'max-rb-attempts'} and $rc != $roadblock_exit_success and $rc != $roadblock_exit_abort) {
-            $attempts++;
-            my $this_uuid = $attempts . ":" . $uuid;
-            printf "role: %s ", $role;
-            printf "attempt number: %d ", $attempts;
-            printf "uuid: %s\n", $this_uuid;
-            my $cmd = $base_rb_leader_cmd .
-                    " --leader-id=controller" .
-                    " --uuid=" . $this_uuid .
-                    " --timeout=" . $timeout .
-                    " --message-log=" . $msgs_log_file .
-                    $follower_param;
-            debug_log(sprintf "roadblock leader command:%s\n", $cmd);
-            ($cmd, $output, $rc) = run_cmd($cmd);
-            debug_log(sprintf "roadblock leader rc:%s\n", $rc);
-            debug_log(sprintf "roadblock leader output:\n%s\n", $output);
-            ($file_rc, $_[0]) = get_json_file($msgs_log_file);
-            if ($file_rc > 0 or ! defined $_[0]) {
-                print "Could not open the message file\n";
-                exit 1;
-            }
-            if ( $rc != $roadblock_exit_success) {
-                printf "roadblock output BEGIN\n";
-                printf "%s", $output;
-                printf "roadblock rc: %d\n", $rc;
-                printf "roadblock output END\n";
-            }
-            if ( $rc == $roadblock_exit_abort ) {
-                printf "roadblock messages\n";
-                foreach my $msg (@{ $_[0]{'received'} }) {
-                    if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
-                        printf "\nError from %s:\n%s\n\n", $$msg{'payload'}{'sender'}{'id'}, $$msg{'payload'}{'message'}{'user-object'}{'error'};
-                    }
+        if ( $rc != $roadblock_exit_success) {
+            printf "roadblock output BEGIN\n";
+            printf "%s", $output;
+            printf "roadblock rc: %d\n", $rc;
+            printf "roadblock output END\n";
+        }
+        if ( $rc == $roadblock_exit_abort ) {
+            printf "roadblock messages\n";
+            foreach my $msg (@{ $_[0]{'received'} }) {
+                if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
+                    printf "\nError from %s:\n%s\n\n", $$msg{'payload'}{'sender'}{'id'}, $$msg{'payload'}{'message'}{'user-object'}{'error'};
                 }
             }
         }
-        if ($rc == $roadblock_exit_abort or $rc == $roadblock_exit_success) {
-            ($file_rc, $_[0]) = get_json_file($msgs_log_file);
-            if ($file_rc > 0 or ! defined $_[0]) {
-                print "Could not open the message file\n";
-                exit 1;
-            }
-            return $rc;
-        } else {
-            my @dropped_followers = ();
-            foreach my $line (split(/\n/, $output)) {
-                if ($line =~ /These followers/) {
-                    my @line_pieces = split(/: /, $line);
-                    push @dropped_followers, split(/\s/, $line_pieces[1]);
-                }
-            }
-            debug_log(sprintf "roadblock dropped followers: %s\n", join(" ", @dropped_followers));
-            return $rc, @dropped_followers;
+    }
+    if ($rc == $roadblock_exit_abort or $rc == $roadblock_exit_success) {
+        ($file_rc, $_[0]) = get_json_file($msgs_log_file);
+        if ($file_rc > 0 or ! defined $_[0]) {
+            print "Could not open the message file\n";
+            exit 1;
         }
+        return $rc;
     } else {
-        return 0;
+        my @dropped_followers = ();
+        foreach my $line (split(/\n/, $output)) {
+            if ($line =~ /These followers/) {
+                my @line_pieces = split(/: /, $line);
+                push @dropped_followers, split(/\s/, $line_pieces[1]);
+            }
+        }
+        debug_log(sprintf "roadblock dropped followers: %s\n", join(" ", @dropped_followers));
+        return $rc, @dropped_followers;
     }
 }
 
@@ -730,10 +725,8 @@ sub build_reqs {
     # The second toolbox req ensures the proper dependencies are installed
     push (@$req_ref, "--requirement " . $ENV{'TOOLBOX_HOME'} .  "/workshop.json");
 
-    if ($use_roadblock) {
-        # ensure the proper python libraies are installed
-        push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
-    }
+    # ensure the proper python libraies are installed that roadblock needs
+    push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
 
     push (@$req_ref, "--requirement " . $rickshaw_project_dir . "/engine/workshop.json");
     foreach my $utility (@utilities) {
@@ -1196,7 +1189,6 @@ sub validate_controller_env() {
     if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
         copy($run{'roadblock-dir'} . "/roadblock.py", $rb_bin);
         chmod 0755, "$rb_bin";
-        $use_roadblock = 1;
     }
     if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
         $use_workshop = 1;
@@ -1532,32 +1524,10 @@ sub validate_endpoints() {
     printf "There will be %d client(s)", $clients_present;
     printf " and %d server(s)", $servers_present if exists $bench_config{'server'} && $servers_present;
     printf "\n";
-    if ($use_roadblock) {
-        $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
-                                " --roadblock-passwd=" . $redis_passwd;
-        $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
-                                "/workshop.json ";
-    } else {
-        # If for some reason the user has opted to not use roadblock, then only allow
-        # tests which use only one client and no server, which is the only possible
-        # combination we can support without syncronization
-        my $do_exit = 0;
-        if (scalar @{ $clients_servers{'server'} } > 0) {
-            printf "[ERROR}since --roadblock-dir was not used or the directory does not exist," .
-                "rickshaw cannot run a test with servers because it cannot syncornize the test " .
-                "without roadblock.\n";
-                $do_exit = 1;
-        }
-        if (scalar @{ $clients_servers{'client'} } > 1) {
-            printf "[ERROR}since --roadblock-dir was not used or the directory does not exist," .
-                "rickshaw cannot run a test with multiple clients because it cannot synchronize " .
-                "the test without roadblock.\n";
-                $do_exit = 1;
-        }
-        if ($do_exit) {
-            exit 1;
-        }
-    }
+    $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
+        " --roadblock-passwd=" . $redis_passwd;
+    $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
+        "/workshop.json ";
     $run{'endpoints'} = \@endpoints;
 }
 
