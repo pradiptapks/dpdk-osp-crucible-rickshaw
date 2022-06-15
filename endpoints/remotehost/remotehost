@@ -193,7 +193,7 @@ function process_remotehost_opts() {
                 ;;
             osruntime)
                 case "$val" in
-                    builtin|chroot|podman)
+                    chroot|podman)
                         osruntime=$val
                         ;;
                     *)
