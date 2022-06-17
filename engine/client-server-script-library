@@ -27,7 +27,7 @@ function abort_error() {
     local sync=$1; shift
     local leader=$1; shift
     echo -e "[ERROR]client-server-script: $msg\n"
-    local msg_file=error.json
+    local msg_file=$(mktemp)
     echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"error":"'$msg'"}}]' >$msg_file
     do_roadblock ${sync} ${leader} 90 abort messages "${msg_file}"
     abort=1
