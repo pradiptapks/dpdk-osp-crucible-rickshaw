@@ -79,7 +79,7 @@ function cleanup_json() {
     if jq . ${json}.tmp > ${json}; then
         rm ${json}.tmp
     else
-        exit_error "cleanup_json failed to process ${json}"
+        abort_error "cleanup_json failed to process ${json}" endpoint-deploy-begin
     fi
 }
 
