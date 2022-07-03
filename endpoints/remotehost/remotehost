@@ -162,7 +162,13 @@ function cleanup_osruntime() {
         else
             echo "WARNING: the file with container base mount [$endpoint_run_dir/chroot-container-id.txt] could not be found"
         fi
+    elif [ "${osruntime}" == "podman" ]; then
+        for this_cs_label in ${clients[@]} ${servers[@]}; do
+            container_name="${endpoint_label}_${run_id}_${this_cs_label}"
+            do_ssh $user@$host podman rm ${container_name}
+        done
     fi
+
     # manage container image cache on the host
     echo "Performing container image cache management:"
     ${endpoint_base_dir}/remotehost/container-image-manager --remote-host ${user}@${host} --cache-size ${image_cache_size} --debug 0
@@ -491,7 +497,7 @@ function move_remotehost_logs() {
                 mv $remote_cs_log_file $client_server_logs_dir
             popd >/dev/null
         elif [ "${osruntime}" == "podman" ]; then
-            container_name="${endpoint_label}_${run_id}"
+            container_name="${endpoint_label}_${run_id}_${this_cs_label}"
             do_ssh $user@$host podman logs ${container_name} > "${client_server_logs_dir}/${this_cs_label}.txt"
         fi
     done
