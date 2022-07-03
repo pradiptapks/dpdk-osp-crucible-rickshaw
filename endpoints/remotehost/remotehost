@@ -488,14 +488,16 @@ function move_remotehost_logs() {
             remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
             pushd / >/dev/null
             do_scp "$user@$host" "$remote_cs_log_file" "" / && \
-                mv $remote_cs_log_file $client_server_logs_dir && \
-                do_ssh $user@$host /bin/rm -r $remote_dir
+                mv $remote_cs_log_file $client_server_logs_dir
             popd >/dev/null
         elif [ "${osruntime}" == "podman" ]; then
             container_name="${endpoint_label}_${run_id}"
             do_ssh $user@$host podman logs ${container_name} > "${client_server_logs_dir}/${this_cs_label}.txt"
         fi
     done
+    if [ "${osruntime}" == "chroot" ]; then
+        do_ssh ${user}@${host} /bin/rm -r ${remote_dir}
+    fi
 }
 
 function endpoint_remotehost_cleanup() {
