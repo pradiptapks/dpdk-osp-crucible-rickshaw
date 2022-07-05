@@ -80,10 +80,21 @@ echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
 longopts+=",cpu-partitioning:,max-rb-attempts:,client-server-script-start-timeout:"
+longopts+=",cpu-partitions:,cpu-partition-index:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 eval set -- "$opts";
 while true; do
     case "$1" in
+        --cpu-partitions)
+            shift;
+            export cpu_partitions="${1}"
+            shift;
+            ;;
+        --cpu-partition-index)
+            shift;
+            export cpu_partition_index="${1}"
+            shift;
+            ;;
         --cpu-partitioning)
             shift;
             export cpu_partitioning="$1"
@@ -203,16 +214,40 @@ if [ "${cpu_partitioning}" == "1" ]; then
     if [ "${endpoint}" == "k8s" ]; then
 	environment="container"
     fi
-    cpu_data=$(/usr/local/bin/discover-cpu-partitioning.py --environment=${environment})
+
+    discover_cmd="/usr/local/bin/discover-cpu-partitioning.py --environment=${environment}"
+    echo "Determining CPU isolation setup by running: ${discover_cmd}"
+    cpu_data=$(${discover_cmd})
 
     # log the data returned
     echo -e "${cpu_data}"
 
+    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
+
+    isolated_cpu_args=""
+    for cpu in $(echo "${isolated_cpus}" | sed -e "s/,/ /g"); do
+        isolated_cpu_args+=" --cpu ${cpu}"
+    done
+    if [ -z "${cpu_partitions}" ]; then
+        cpu_partitions=1
+    fi
+    if [ -z "${cpu_partition_index}" ]; then
+        cpu_partition_index=1
+    fi
+    partition_cmd="/usr/local/bin/partition-cpus.py --partitions ${cpu_partitions} --partition-index ${cpu_partition_index} ${isolated_cpu_args}"
+    echo "Finding the CPU partition by running: ${partition_cmd}"
+    partition_cpu_data=$(${partition_cmd})
+
+    # log the data returned
+    echo -e "${partition_cpu_data}"
+
     housekeeping_cpus=$(echo -e "${cpu_data}" | grep housekeeping | awk '{ print $3 }')
     export HK_CPUS=${housekeeping_cpus}
+    echo "HK_CPUS=${HK_CPUS}"
 
-    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
-    export WORKLOAD_CPUS=${isolated_cpus}
+    partition_cpus=$(echo -e "${partition_cpu_data}" | grep partition | awk '{ print $3 }')
+    export WORKLOAD_CPUS=${partition_cpus}
+    echo "WORKLOAD_CPUS=${WORKLOAD_CPUS}"
 
     # pin myself to the housekeeping cpus so that I and my children
     # are contained there
