@@ -25,6 +25,10 @@
 		    {
 			"src": "%rickshaw-dir%/engine/discover-cpu-partitioning.py",
 			"dst": "/usr/local/bin"
+		    },
+		    {
+			"src": "%rickshaw-dir%/engine/partition-cpus.py",
+			"dst": "/usr/local/bin"
 		    }
 		]
 	    }

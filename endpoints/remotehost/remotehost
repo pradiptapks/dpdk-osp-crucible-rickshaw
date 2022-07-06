@@ -292,6 +292,7 @@ function remotehost_req_check() {
 function launch_osruntime() {
     local this_cs_label this_cs_log_file base_cmd cs_cmd cs_rb_env env_file
     local env_opts existing_container container_id container_mount container_name fs
+    local total_cpu_partitions
     echo "osruntime: $osruntime"
 
     # create working directories
@@ -306,6 +307,22 @@ function launch_osruntime() {
     do_ssh $user@$host "echo '$image $(date -u +%s)' >> ${remote_base_dir}/remotehost-container-image-census"
 
     echo "$image" >$endpoint_run_dir/chroot-container-image.txt
+
+    total_cpu_partitions=0
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        set +u
+        cpu_partitioning=0
+        if [ ! -z "${cpuPartitioning[$this_cs_label]}" ]; then
+            cpu_partitioning=${cpuPartitioning[$this_cs_label]}
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            cpu_partitioning=${cpuPartitioning[default]}
+        fi
+        set -u
+
+        if [ "${cpu_partitioning}" == "1" ]; then
+            (( total_cpu_partitions++ ))
+        fi
+    done
 
     # For each client and server launch the actual script which will run it.
     count=1
@@ -402,6 +419,8 @@ function launch_osruntime() {
             base_cmd+=" --osruntime=$osruntime"
             base_cmd+=" --max-sample-failures=$max_sample_failures"
             base_cmd+=" --max-rb-attempts=$max_rb_attempts"
+            base_cmd+=" --cpu-partitions=${total_cpu_partitions}"
+            base_cmd+=" --cpu-partition-index=${count}"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
             base_cmd+=" --client-server-script-start-timeout=$client_server_script_start_timeout"
             base_cmd+=" --disable-tools=$this_disable_tools"
@@ -423,6 +442,8 @@ function launch_osruntime() {
             echo "cs_label=$this_cs_label"                  >> ${endpoint_run_dir}/${env_file}
             echo "base_run_dir=$base_run_dir"               >> ${endpoint_run_dir}/${env_file}
             echo "cpu_partitioning=$cpu_partitioning"       >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partitions=${total_cpu_partitions}"   >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partition_index=${count}"             >> ${endpoint_run_dir}/${env_file}
             echo "endpoint=remotehost"                      >> ${endpoint_run_dir}/${env_file}
             echo "osruntime=$osruntime"                     >> ${endpoint_run_dir}/${env_file}
             echo "max_sample_failures=$max_sample_failures" >> ${endpoint_run_dir}/${env_file}
