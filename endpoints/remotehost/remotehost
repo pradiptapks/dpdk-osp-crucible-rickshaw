@@ -212,10 +212,10 @@ function process_remotehost_opts() {
                 ;;
             osruntime)
                 # osruntime is per engine:
-                # option format:: osruntime:<engine-name>:<value>
-                # <engine-name> can be 'default' to any engine that is not explicitly specified
+                # option format:: osruntime:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # for backwards compability values in the form of 'osruntime:<value>' will map to 'osruntime:default:<value>'
-                #TODO: validate correct format of <client-server-label>
+                #TODO: validate correct format of <engine-label>
 
                 # backwards compability transformation
                 if ! echo "${val}" | grep -q -e '[a-zA-Z0-9\-]:[a-zA-Z0-9\-]'; then
@@ -240,9 +240,9 @@ function process_remotehost_opts() {
                 ;;
             numa-node)
                 # node-node is per engine:
-                # option format:: numa-node:<engine-name>:<value>
-                # <engine-name> can be 'default' to apply to any engine that is not explicitly specified
-                #TODO: validate correct format of <client-server-label>
+                # option format:: numa-node:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                #TODO: validate correct format of <engine-label>
                 name=`echo $val | awk -F: '{ print $1 }'`
                 value=`echo $val | awk -F: '{ print $2 }'`
                 if [ ! -z "$name}" -a ! -z "$value" ]; then
@@ -271,9 +271,9 @@ function process_remotehost_opts() {
                 ;;
             cpu-partitioning)
                 # cpu-partitioning is per engine:
-                # option format:: cpu-partitioning:<engine-name>:<value>
-                # <engine-name> can be 'default' to apply to any engine that is no explicitly specified
-                #TODO: validate correct format of <client-server-label>
+                # option format:: cpu-partitioning:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is no explicitly specified
+                #TODO: validate correct format of <label-label>
                 name=`echo $val | awk -F: '{ print $1 }'`
                 value=`echo $val | awk -F: '{ print $2 }'`
                 if [ ! -z "${name}" -a ! -z "${value}" ]; then
@@ -456,7 +456,7 @@ function launch_osruntime() {
             base_cmd+=" --cpu-partitions=${total_cpu_partitions}"
             base_cmd+=" --cpu-partition-index=${count}"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
-            base_cmd+=" --client-server-script-start-timeout=$client_server_script_start_timeout"
+            base_cmd+=" --engine-script-start-timeout=$engine_script_start_timeout"
             base_cmd+=" --disable-tools=$this_disable_tools"
             if [ $numa_node -gt -1 ]; then
                 base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
@@ -544,7 +544,7 @@ function launch_osruntime() {
 function move_remotehost_logs() {
     local this_cs_label remote_cs_log_file container_name delete_remote_dir
     delete_remote_dir=0
-    mkdir -p "$client_server_logs_dir"
+    mkdir -p "$engine_logs_dir"
     for this_cs_label in ${clients[@]} ${servers[@]}; do
         tmp_osruntime=${osruntime[default]}
         set +u
@@ -558,11 +558,11 @@ function move_remotehost_logs() {
             remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
             pushd / >/dev/null
             do_scp "$user@$host" "$remote_cs_log_file" "" / && \
-                mv $remote_cs_log_file $client_server_logs_dir
+                mv $remote_cs_log_file $engine_logs_dir
             popd >/dev/null
         elif [ "${tmp_osruntime}" == "podman" ]; then
             container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
-            do_ssh $user@$host podman logs ${container_name} > "${client_server_logs_dir}/${this_cs_label}.txt"
+            do_ssh $user@$host podman logs ${container_name} > "${engine_logs_dir}/${this_cs_label}.txt"
         fi
     done
     if [ "${delete_remote_dir}" == "1" ]; then

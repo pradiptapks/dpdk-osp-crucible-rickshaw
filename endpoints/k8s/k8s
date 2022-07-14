@@ -33,7 +33,7 @@
 #           registry
 #         - all endpoint scripts will need to make this change when rickshaw supports this
 #
-# All of the functions that a client-server-script performs works in this endpoint, such as:
+# All of the functions that a engine-script performs works in this endpoint, such as:
 # - benchmark iteration/sample execution
 # - using a container image which has the required software
 # - tool execution
@@ -116,7 +116,7 @@ function endpoint_k8s_test_start() {
     # the client is in relation to the server.  If the client is within the same k8s cluster,
     # we create a k8s-service, so the client can use an IP which is more persistent
     # than a pod's IP (this allows pods to come and go while keeping the same IP).  This is not
-    # absolutely necessary for client-server benchnarks, but it is a best practice for cloud-native
+    # absolutely necessary for our  benchmarks, but it is a best practice for cloud-native
     # aps, so we do it anyway.  If the client is not in the k8s cluster, then we must assume 
     # it does not have direct access to the pod cluster network, and some form of 'ingress' must
     # be set up.  Currently, this endpoint implements 'NodePort', which provides a port for
@@ -421,10 +421,10 @@ function process_k8s_opts() {
                 workers_tool_collect=$val
                 ;;
             cpu-partitioning)
-                # cpu-partitioning is per pod:
-                # option format::  cpu-partitioning:<pod-name>:<value>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
-                #TODO: validate correct format of <client-server-label>
+                # cpu-partitioning is per engine:
+                # option format::  cpu-partitioning:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                #TODO: validate correct format of <engine-label>
                 name=`echo $val | awk -F: '{print $1}'`
                 value=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$name" -a ! -z "$value" ]; then
@@ -443,14 +443,14 @@ function process_k8s_opts() {
                 runtimeClassName="$val"
                 ;;
             nodeSelector)
-                # nodeSelector is per pod:
-                # option format::  nodeSelector:<pod-name>:<full-path-to-json-with-nodeSelector>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # nodeSelector is per engine:
+                # option format::  nodeSelector:<engine-label>:<full-path-to-json-with-nodeSelector>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "nodeSelector": {
                 #    "kubernetes.io/hostname": "worker000"
                 # }
-                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$file" -o -e $file ]; then
@@ -460,9 +460,9 @@ function process_k8s_opts() {
                 fi
                 ;;
             securityContext)
-                # securityContext is per container:
-                # option format::  securityContext:<pod-name>:<full-path-to-json-with-securityContext>
-                # <pod-name> can be 'default' to apply to any pod's containers that is not explicitly specified
+                # securityContext is per engine:
+                # option format::  securityContext:<engine-label>:<full-path-to-json-with-securityContext>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "securityContext": {
                 #   "privileged": false,
@@ -470,7 +470,7 @@ function process_k8s_opts() {
                 #     "add": [ "IPC_LOCK", "SYS_ADMIN", "SYS_RAWIO", "SYS_NICE" ]
                 #   }
                 # }
-                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$file" -o -e $file ]; then
@@ -480,9 +480,9 @@ function process_k8s_opts() {
                 fi
                 ;;
             PsecurityContext)
-                # PsecurityContext is per pod:
-                # option format::  PsecurityContext:<pod-name>:<full-path-to-json-with-securityContext>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # PsecurityContext is per engine:
+                # option format::  PsecurityContext:<engine-label>:<full-path-to-json-with-securityContext>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "securityContext": {
                 #       "sysctls": [
@@ -492,7 +492,7 @@ function process_k8s_opts() {
                 #          }
                 #       ]
                 # }
-                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$file" -o -e $file ]; then
@@ -502,9 +502,9 @@ function process_k8s_opts() {
                 fi
                 ;;
             resources)
-                # resources is per pod:
-                # option format::  resources:<pod-name>:<full-path-to-json-with-resources>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # resources is per engine:
+                # option format::  resources:<engine-label>:<full-path-to-json-with-resources>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "resources": {
                 #   "requests": {
@@ -516,7 +516,7 @@ function process_k8s_opts() {
                 #     "memory": "2048Mi"
                 #   }
                 # }
-                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$file" -o -e $file ]; then
@@ -526,14 +526,14 @@ function process_k8s_opts() {
                 fi
                 ;;
             annotations)
-                # resources is per pod:
-                # option format::  annotations:<pod-name>:<full-path-to-json-with-annotations>
-                # <pod-name> can be 'default' to apply to any pod that is not explicitly specified
+                # resources is per engine:
+                # option format::  annotations:<engine-label>:<full-path-to-json-with-annotations>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 # json file example (note no outer {}'s)
                 # "annotations": {
                 #   "k8s.v1.cni.cncf.io/networks": "sriov-mellanox-b-pod, sriov-mellanox-a-pod"
                 # }
-                #TODO: validate correct format of <client-server-label>:<path-to-file>
+                #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=`echo $val | awk -F: '{print $1}'`
                 file=`echo $val | awk -F: '{print $2}'`
                 if [ ! -z "$file" -o -e $file ]; then
@@ -692,8 +692,8 @@ function build_pod_spec() {
     echo "            \"value\": \"$max_rb_attempts\"" >>$json
     echo "          }," >>$json
     echo "          {" >>$json
-    echo "            \"name\": \"client_server_script_start_timeout\"," >>$json
-    echo "            \"value\": \"$client_server_script_start_timeout\"" >>$json
+    echo "            \"name\": \"engine_script_start_timeout\"," >>$json
+    echo "            \"value\": \"$engine_script_start_timeout\"" >>$json
     echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"ssh_id\"," >>$json
@@ -798,7 +798,7 @@ function create_pods() {
     typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
     ref1=""
     local type="$1"; shift
-    # remaining args are pod-names (for client-server pods) or worker/master node names
+    # remaining args are engine labels or worker/master node names
     local dir="$endpoint_run_dir/$type-pod-objects"
     local pods=""
     if [ -z "$*" ]; then
@@ -923,7 +923,7 @@ function get_pod_logs() {
         local name="$1"; shift
         echo "Getting logs from pod $name"
         pod_name="rickshaw-$name"
-        do_ssh $user@$host kubectl -n $project_name logs $pod_name >"$client_server_logs_dir/$name.txt"
+        do_ssh $user@$host kubectl -n $project_name logs $pod_name >"$engine_logs_dir/$name.txt"
     done
 }
 
@@ -1062,7 +1062,7 @@ if [ ! -z "$regular_pods" ]; then
     cs_pods+=" $these_pods"
 fi
 echo "Total client/server pods that were created: $cs_pods"
-echo "These nodes are hosting the client-server pods: $active_worker_nodes"
+echo "These nodes are hosting the engine pods: $active_worker_nodes"
 all_pods+=" $cs_pods"
 
 if [ "${workers_tool_collect}" == "1" ]; then

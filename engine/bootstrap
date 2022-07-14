@@ -2,7 +2,8 @@
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 #
-# The following is the minimum amount of code to copy over the client-server-script and no more.
+# The following is the minimum amount of code to start the engine and
+# copy over all remaining files that are needed
 exec 2>&1
 
 echo "BASH_VERSION=${BASH_VERSION}"
@@ -79,7 +80,7 @@ echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
-longopts+=",cpu-partitioning:,max-rb-attempts:,client-server-script-start-timeout:"
+longopts+=",cpu-partitioning:,max-rb-attempts:,engine-script-start-timeout:"
 longopts+=",cpu-partitions:,cpu-partition-index:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 eval set -- "$opts";
@@ -160,10 +161,10 @@ while true; do
             export max_rb_attempts="$1"
             shift;
             ;;
-        --client-server-script-start-timeout)
+        --engine-script-start-timeout)
             shift;
-            export client_server_script_start_timeout="$1"
-            echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
+            export engine_script_start_timeout="$1"
+            echo "setting engine_script_start_timeout to $engine_script_start_timeout"
             shift;
             ;;
         --)
@@ -200,7 +201,7 @@ if [ ! -e $ssh_id_file ]; then
     exit_error "ssh key $ssh_id_file was not found"
 fi
 export config_dir="$base_run_dir/config"
-export client_server_config_dir="$config_dir/client-server"
+export engine_config_dir="$config_dir/engine"
 
 if [ -z "${TOOLBOX_HOME}" ]; then
     export TOOLBOX_HOME="/opt/toolbox"
@@ -264,12 +265,12 @@ if [ ! -e ${json_settings_file} ]; then
     exit_error "Could not find rickshaw-settings.json.xz"
 fi
 
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script-library" /usr/local/bin/
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/roadblock.py" /usr/local/bin
-if [ -e /usr/local/bin/client-server-script -a -e /usr/local/bin/client-server-script-library ]; then
-    echo "Execing client-server-script:"
-    exec /usr/local/bin/client-server-script
+scp_from_controller "$ssh_id_file" "$engine_config_dir/engine-script" /usr/local/bin/
+scp_from_controller "$ssh_id_file" "$engine_config_dir/engine-script-library" /usr/local/bin/
+scp_from_controller "$ssh_id_file" "$engine_config_dir/roadblock.py" /usr/local/bin
+if [ -e /usr/local/bin/engine-script -a -e /usr/local/bin/engine-script-library ]; then
+    echo "Execing engine-script:"
+    exec /usr/local/bin/engine-script
 else
-    exit_error "Could not find client-server-script or client-server-script-library"
+    exit_error "Could not find engine-script or engine-script-library"
 fi

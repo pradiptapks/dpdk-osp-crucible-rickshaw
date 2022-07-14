@@ -46,7 +46,7 @@ function exit_error() {
 function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
-    local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,client-server-script-start-timeout:"
+    local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,engine-script-start-timeout:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -111,10 +111,10 @@ function process_opts() {
                 echo "setting endpoint_deploy_timeout to $endpoint_deploy_timeout"
                 shift;
                 ;;
-            --client-server-script-start-timeout)
+            --engine-script-start-timeout)
                 shift;
-                client_server_script_start_timeout="$1"
-                echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
+                engine_script_start_timeout="$1"
+                echo "setting engine_script_start_timeout to $engine_script_start_timeout"
                 shift;
                 ;;
             --)
@@ -190,16 +190,16 @@ function echo_clients_servers() {
 function init_common_dirs() {
     if [ "$do_validate" != 1 ]; then
         config_dir="$base_run_dir/config"
-        client_server_config_dir="$config_dir/client-server"
-        client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
+        engine_config_dir="$config_dir/engine"
+        engine_bench_cmds_dir="$engine_config_dir/bench-cmds"
         run_dir="$base_run_dir/run"
-        client_server_logs_dir="$run_dir/client-server/logs"
+        engine_logs_dir="$run_dir/engine/logs"
         endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
         bootstrap_script="/usr/local/bin/bootstrap"
-        client_server_run_script="/usr/local/bin/client-server-script"
+        engine_run_script="/usr/local/bin/engine-script"
         roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
         mkdir -p "$endpoint_run_dir"
-        mkdir -p "$client_server_logs_dir"
+        mkdir -p "$engine_logs_dir"
         mkdir -p "$roadblock_msgs_dir"
     fi
 }
@@ -236,8 +236,8 @@ function base_req_check() {
     if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
         exit_error "Could not find $config_dir/rickshaw_id.rsa" endpoint-deploy-begin
     fi
-    if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
-        exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found" endpoint-deploy-begin
+    if [ ! -e "$engine_bench_cmds_dir/client/1" ]; then
+        exit_error "client bench cmd file $engine_bench_cmds_dir/client/1 not found" endpoint-deploy-begin
     fi
 }
 
@@ -550,7 +550,7 @@ function process_bench_roadblocks() {
         sample_data_attempt_fail[${iter_array_idx}]=0
 
         (( total_tests += 1 ))
-    done 9< "${client_server_bench_cmds_dir}/client/1/start"
+    done 9< "${engine_bench_cmds_dir}/client/1/start"
 
     echo "Total tests: ${total_tests}"
 
@@ -756,7 +756,7 @@ function process_bench_roadblocks() {
                    ${max_sample_failures} \
                    ${sample_result}
         done
-    done 9< "$client_server_bench_cmds_dir/client/1/start"
+    done 9< "$engine_bench_cmds_dir/client/1/start"
 }
 
 function process_roadblocks() {
@@ -787,11 +787,11 @@ function process_roadblocks() {
     roadblock_exit_on_error ${roadblock_rc}
 
 
-    do_roadblock "engine-init-begin" ${client_server_script_start_timeout}
+    do_roadblock "engine-init-begin" ${engine_script_start_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    do_roadblock "engine-init-end" ${client_server_script_start_timeout}
+    do_roadblock "engine-init-end" ${engine_script_start_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
@@ -917,7 +917,7 @@ function load_settings() {
     if [ "$do_validate" != 1 ]; then
         load_json_setting "roadblock.timeouts.default" default_timeout
         load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
-        load_json_setting "roadblock.timeouts.client-server-start" client_server_script_start_timeout
+        load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
     fi
 }

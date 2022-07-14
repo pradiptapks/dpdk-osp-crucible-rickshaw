@@ -55,7 +55,7 @@ my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout;
 my $endpoint_deploy_timeout;
-my $client_server_script_start_timeout;
+my $engine_script_start_timeout;
 my $endpoint_move_data_rb_timeout;
 (my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
 chomp ($hostname);
@@ -68,17 +68,17 @@ my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
 my $config_dir;
-my $client_server_config_dir;
-my $client_server_bench_cmds_dir;
+my $engine_config_dir;
+my $engine_bench_cmds_dir;
 my $tool_cmds_dir;
 my $run_dir;
 my $base_endpoint_run_dir;
-my $client_server_run_dir;
-my $client_server_logs_dir;
-my $client_server_archives_dir;
-my $client_server_run_script;
-my $client_server_library_script;
-my $client_server_roadblock_script;
+my $engine_run_dir;
+my $engine_logs_dir;
+my $engine_archives_dir;
+my $engine_run_script;
+my $engine_library_script;
+my $engine_roadblock_script;
 my $iterations_dir;
 my $rickshaw_project_dir;
 my $roadblock_msgs_dir;
@@ -286,7 +286,7 @@ sub file_newer_than {
     {
         (my $cmd, my $file_time, my $cmd_rc) = run_cmd("/bin/ls -l --time-style=+%s $file");
         chomp($file_time);
-        # -rwxrwxr-x. 1 someuser somegroup 4656 1582742663 client-server-script
+        # -rwxrwxr-x. 1 someuser somegroup 4656 1582742663 engine-script
         if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
             if ($1 > $epoch_sec) {
                 return 1;
@@ -531,7 +531,7 @@ sub workshop_build_image {
                              . " --proj " . $proj
                              . " --label " . $run{'reg-label'}
                              . " --tag " . $image_tag;
-    debug_log(sprintf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
+    debug_log(sprintf "Going to generate a new engine container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
     ($workshop_build_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_build_cmd);
     my @workshop_output = split(/\n/, $workshop_output);
     my $workshop_output_file = $run_dir . "/workshop.stage-" . $stage . "." . $image_tag . ".stdout.txt";
@@ -639,7 +639,7 @@ sub build_reqs {
     # change frequently, we should consider sourcing this requirement
     # after a container image is provisioned, but that generally only works
     # if the contents of the requirment is of type "files".  An example of
-    # this is the client-server-script from subproject 'engine' and various
+    # this is the engine-script from the engine subdirectory and various
     # scripts from benchmarks and tools..
     #
     # Why is this order important?  We build container images incrementally,
@@ -1350,25 +1350,25 @@ sub make_run_dirs() {
     debug_log(sprintf("Bench helper subproject directory: [%s]\n", $run{'bench-dir'}));
     $config_dir = $run{'base-run-dir'} . "/config";
     mkdir($config_dir);
-    $client_server_config_dir = $config_dir . "/client-server";
-    mkdir($client_server_config_dir);
-    $client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
-    mkdir($client_server_bench_cmds_dir);
+    $engine_config_dir = $config_dir . "/engine";
+    mkdir($engine_config_dir);
+    $engine_bench_cmds_dir = $engine_config_dir . "/bench-cmds";
+    mkdir($engine_bench_cmds_dir);
     $tool_cmds_dir = $config_dir . "/tool-cmds";
     mkdir($tool_cmds_dir);
     $run_dir = $run{'base-run-dir'} . "/run";
     mkdir($run_dir);
     $base_endpoint_run_dir = $run_dir . "/endpoint/";
     mkdir($base_endpoint_run_dir);
-    $client_server_run_dir = $run_dir . "/client-server/";
-    mkdir($client_server_run_dir);
-    $client_server_logs_dir = $client_server_run_dir . "/logs/";
-    mkdir($client_server_logs_dir);
-    $client_server_archives_dir = $client_server_run_dir . "/archives/";
-    mkdir($client_server_archives_dir);
-    $client_server_run_script = $client_server_config_dir . "/client-server-script";
-    $client_server_library_script = $client_server_config_dir . "/client-server-script-library";
-    $client_server_roadblock_script = $client_server_config_dir . "/roadblock.py";
+    $engine_run_dir = $run_dir . "/engine/";
+    mkdir($engine_run_dir);
+    $engine_logs_dir = $engine_run_dir . "/logs/";
+    mkdir($engine_logs_dir);
+    $engine_archives_dir = $engine_run_dir . "/archives/";
+    mkdir($engine_archives_dir);
+    $engine_run_script = $engine_config_dir . "/engine-script";
+    $engine_library_script = $engine_config_dir . "/engine-script-library";
+    $engine_roadblock_script = $engine_config_dir . "/roadblock.py";
     $iterations_dir = $run_dir . "/iterations";
     mkdir($iterations_dir);
     $roadblock_msgs_dir = $run_dir . "/roadblock-msgs";
@@ -1402,9 +1402,9 @@ sub load_settings_info() {
         exit 1;
     }
 
-    ($rc, $client_server_script_start_timeout) = get_json_setting("roadblock.timeouts.client-server-start", $jsonsettings);
+    ($rc, $engine_script_start_timeout) = get_json_setting("roadblock.timeouts.engine-start", $jsonsettings);
     if ($rc != 0) {
-        print "load_settings_info(): failed to load client-server-start roadblock timeout\n";
+        print "load_settings_info(): failed to load engine-start roadblock timeout\n";
         exit 1;
     }
 
@@ -1464,18 +1464,18 @@ sub validate_endpoints() {
         foreach my $line (@output) {
             chomp $line;
             if ($line =~ /(client|server|profiler)\s+(.+)$/) {
-                my $client_server = $1;
+                my $engine = $1;
                 my $ids = $2;
                 foreach my $id (split(/\s+/, $ids)) {
                     die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
                     my %info = ( 'endpoint-type' => $$endpoint{'type'}, 'id' => $id );
-                    $clients_servers{$client_server}[$id - 1] = \%info;
-                    push(@rb_cs_ids, $client_server . "-" . $id);
-                    if ($client_server =~ /(client|server)/) {
+                    $clients_servers{$engine}[$id - 1] = \%info;
+                    push(@rb_cs_ids, $engine . "-" . $id);
+                    if ($engine =~ /(client|server)/) {
                         $min_id = $id if (! defined $min_id or $id < $min_id);
                         $max_id = $id if (! defined $max_id or $id > $max_id);
                     }
-                    if ($client_server =~ /(collector)/) {
+                    if ($engine =~ /(collector)/) {
                         $collectors_present++;
                     }
                 }
@@ -1514,8 +1514,8 @@ sub validate_endpoints() {
         # 1:N can have as many servers with just 1 client
         if (defined $clients_servers{'client'}[$id - 1]) {
             $clients_present++;
-        } elsif (exists $bench_config{'client'}{'client-server-ratio'} and $bench_config{'client'}{'client-server-ratio'} eq "1:N") {
-            debug_log(sprintf "Did not find same client ID for server ID %d, but client-server-ratio is 1:N\n", $id);
+        } elsif (exists $bench_config{'client'}{'engine-ratio'} and $bench_config{'client'}{'engine-ratio'} eq "1:N") {
+            debug_log(sprintf "Did not find same client ID for server ID %d, but engine-ratio is 1:N\n", $id);
         } else {
             printf "[ERROR]client ID %d is not defined in ID range %d - %d\n", $id, $min_id, $max_id;
             exit 1;
@@ -1658,15 +1658,15 @@ sub prepare_bench_tool_engines() {
         }
         debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
-    copy($rickshaw_project_dir . "/engine/client-server-script", $client_server_run_script)
-        || die "Could not copy client-server-script to " . $client_server_run_script;
-    chmod 0755, "$client_server_run_script";
-    copy($rickshaw_project_dir . "/engine/client-server-script-library", $client_server_library_script)
-        || die "Could not copy client-server-script-library to " . $client_server_library_script;
-    chmod 0755, "$client_server_library_script";
-    copy($run{'roadblock-dir'} . "/roadblock.py", $client_server_roadblock_script)
-        || die "Could not copy roadblock.py to " . $client_server_roadblock_script;
-    chmod 0755, "$client_server_roadblock_script";
+    copy($rickshaw_project_dir . "/engine/engine-script", $engine_run_script)
+        || die "Could not copy engine-script to " . $engine_run_script;
+    chmod 0755, "$engine_run_script";
+    copy($rickshaw_project_dir . "/engine/engine-script-library", $engine_library_script)
+        || die "Could not copy engine-script-library to " . $engine_library_script;
+    chmod 0755, "$engine_library_script";
+    copy($run{'roadblock-dir'} . "/roadblock.py", $engine_roadblock_script)
+        || die "Could not copy roadblock.py to " . $engine_roadblock_script;
+    chmod 0755, "$engine_roadblock_script";
 
     my @collectors = grep(/[^client|^server]/, keys %clients_servers);
     my @all_collector_types = qw(client server worker master profiler);
@@ -1764,7 +1764,7 @@ sub prepare_bench_tool_engines() {
                 push(@cmd_type_files, "infra");
             }
             my $cs_id = $$cs_ref{'id'};
-            my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
+            my $this_cmds_dir = $engine_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
             make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
             foreach my $cmd_type (@cmd_type_files) {
                 next if ($cmd_type eq "runtime" and $cs_id > 1); # runtime cmds only for client-1
@@ -1807,10 +1807,10 @@ sub prepare_bench_tool_engines() {
     }
     # Build the client/server "from-controller" files list and put them in the base endpoint run dir.
     # These are files the client/server must copy from the controller before running any tests.
-    # The "client-server-script" will first scp the list (client-files-list or server-files-list).
+    # The "engine-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
     foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
+        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
         open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
         if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
             for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
@@ -1850,7 +1850,7 @@ sub prepare_bench_tool_engines() {
     }
     # Create empty files for any not created above
     foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
+        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
         if ( ! -e $cs_file_list) {
             open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
             close FH;
@@ -1871,8 +1871,8 @@ sub deploy_endpoints() {
     print "Deploying endpoints\n";
     $endpoint_deploy_timeout += scalar @endpoints * 120;
     printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
-    $client_server_script_start_timeout += scalar @endpoints * 120;
-    printf "client-server-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
+    $engine_script_start_timeout += scalar @endpoints * 120;
+    printf "engine-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     debug_log(sprintf "\nendpoint output:\n");
     for (my $i = 0; $i < scalar @endpoints; $i++) {
         my $type = $endpoints[$i]{'type'};
@@ -1897,7 +1897,7 @@ sub deploy_endpoints() {
                     " --max-sample-failures=" . $run{'max-sample-failures'} .
                     " --max-rb-attempts=" . $run{'max-rb-attempts'} .
                     " --endpoint-deploy-timeout=" . $endpoint_deploy_timeout .
-                    " --client-server-script-start-timeout=" . $client_server_script_start_timeout .
+                    " --engine-script-start-timeout=" . $engine_script_start_timeout .
                     $endpoint_image_opt .
                     $endpoint_roadblock_opt .
                     " >" . $this_endpoint_run_dir . "/endpoint-stderrout.txt 2>&1";
@@ -1950,10 +1950,10 @@ sub process_roadblocks() {
 
     push @active_followers, @new_followers, @rb_cs_ids;
     ####################################################################
-    $roadblock_rc = do_roadblock("engine-init-begin", $client_server_script_start_timeout, $messages_ref, @active_followers);
+    $roadblock_rc = do_roadblock("engine-init-begin", $engine_script_start_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
 
-    $roadblock_rc = do_roadblock("engine-init-end", $client_server_script_start_timeout, $messages_ref, @active_followers);
+    $roadblock_rc = do_roadblock("engine-init-end", $engine_script_start_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
     ####################################################################
     $roadblock_rc = do_roadblock("get-data-begin", $default_rb_timeout, $messages_ref, @active_followers);
@@ -2015,10 +2015,10 @@ sub organize_run_data() {
     {
         mkdir($tmp_data_dir);
         my $pushd_dir = pushd($tmp_data_dir);
-        foreach my $archive (dir_entries($client_server_archives_dir,
+        foreach my $archive (dir_entries($engine_archives_dir,
                                         qr/^(\w+)-(\d+)-data\.tgz$/)) {
             $archive =~ /^(\w+)-(\d+)-data\.tgz$/ or next;
-            my $archive_full_path = $client_server_archives_dir . "/" . $archive;
+            my $archive_full_path = $engine_archives_dir . "/" . $archive;
             my $cs_type = $1;
             my $cs_id = $2;
             my $tar_cmd = "tar zmxf " . $archive_full_path;

@@ -16,7 +16,7 @@ function exit_error() {
     local msg=$1; shift
     local sync=$1; shift
     local leader=$1; shift
-    echo -e "[ERROR]client-server-script: $msg\n"
+    echo -e "[ERROR]engine-script-library: $msg\n"
     echo "Exiting"
     exit 1
 }
@@ -26,7 +26,7 @@ function abort_error() {
     local msg=$1; shift
     local sync=$1; shift
     local leader=$1; shift
-    echo -e "[ERROR]client-server-script: $msg\n"
+    echo -e "[ERROR]engine-script-library: $msg\n"
     local msg_file=$(mktemp)
     echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"error":"'$msg'"}}]' >$msg_file
     do_roadblock ${sync} ${leader} 90 abort messages "${msg_file}"
@@ -190,7 +190,7 @@ function archive_to_controller() {
 function process_opts() {
     longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
     longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,endpoint:,osruntime:,max-sample-failures:"
-    longopts+=",max-rb-attempts:,client-server-script-start-timeout:"
+    longopts+=",max-rb-attempts:,engine-script-start-timeout:"
     opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     eval set -- "$opts";
     while true; do
@@ -250,10 +250,10 @@ function process_opts() {
                 max_rb_attempts="$1"
                 shift;
                 ;;
-            --client-server-script-start-timeout)
+            --engine-script-start-timeout)
                 shift;
-                client_server_script_start_timeout="$1"
-                echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
+                engine_script_start_timeout="$1"
+                echo "setting engine_script_start_timeout to $engine_script_start_timeout"
                 shift;
                 ;;
             --)
@@ -267,8 +267,8 @@ function process_opts() {
                 ;;
         esac
     done
-    if [ -z "$client_server_script_start_timeout" ]; then
-        load_json_setting "roadblock.timeouts.client-server-start" client_server_script_start_timeout
+    if [ -z "$engine_script_start_timeout" ]; then
+        load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
     fi
 }
 
@@ -298,7 +298,7 @@ function validate_core_env() {
         exit_error "The client/server label (--cs-label) was not defined"
     fi
     if echo $cs_label | grep -q -P '^(\w+)-\d+$'; then
-        echo "client-server-label \"$cs_label\" is valid"
+        echo "engine-label \"$cs_label\" is valid"
     else
         exit_error 'cs_label "'$cs_label'" does not adhere to regex /^(\w+)-\d+$/'
     fi
@@ -321,7 +321,7 @@ function validate_core_env() {
 	echo "endpoint_run_dir=${endpoint_run_dir}"
     fi
     echo
-    echo "client_server_script_start_timeout: $client_server_script_start_timeout"
+    echo "engine_script_start_timeout: $engine_script_start_timeout"
 }
 
 function setup_core_env() {
@@ -341,12 +341,12 @@ function setup_core_env() {
 
     # Directories on the controller
     config_dir="$base_run_dir/config"
-    client_server_config_dir="$config_dir/client-server"
+    engine_config_dir="$config_dir/engine"
     tool_cmds_dir="$config_dir/tool-cmds/$cs_type"
     tool_cmds_dir="$config_dir/tool-cmds/$cs_type"
     run_dir="$base_run_dir/run"
-    archives_dir="$run_dir/client-server/archives"
-    sync_prefix=client-server
+    archives_dir="$run_dir/engine/archives"
+    sync_prefix=engine
     sync=$sync_prefix-script-start
 }
 
@@ -354,7 +354,7 @@ function get_data() {
     # Get files required to run benchmark and tools
     cs_files_list="$cs_type-files-list"
     # First get the file that tells us what other files to get
-    scp_from_controller "$ssh_id_file" "$client_server_config_dir/$cs_files_list" "$cs_files_list"
+    scp_from_controller "$ssh_id_file" "$engine_config_dir/$cs_files_list" "$cs_files_list"
     if [ ! -e "$cs_files_list" ]; then
         abort_error "Could not find $cs_files_list" get-data-end $leader
     fi
@@ -386,23 +386,23 @@ function get_data() {
     cs_start_bench_cmds="$cs_label-start-bench.cmds"
     # Everyone gets the bench-start-cmds (the client's start cmds) because that tells everyone how many tests there are
     if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
-        scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/start" "bench-start-cmds"
+        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/start" "bench-start-cmds"
     else
         # All tool-only osruntimes just copy from client-1
-        scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/client/1/start" "bench-start-cmds"
+        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/client/1/start" "bench-start-cmds"
     fi
     if [ ! -e "bench-start-cmds" ]; then
         abort_error "bench cmds file bench-start-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`" get-data-end $leader
     fi
     if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         if [ "$cs_type" == "client" ]; then
-            scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/infra" "bench-infra-cmds"
+            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/infra" "bench-infra-cmds"
             if [ "$cs_id" == "1" ]; then
-                scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/runtime" "bench-runtime-cmds"
+                scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/runtime" "bench-runtime-cmds"
             fi
         fi
         if [ "$cs_type" == "server" ]; then
-            scp_from_controller "$ssh_id_file" "$client_server_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds"
+            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds"
             if [ ! -e "bench-stop-cmds" ]; then
                 abort_error "bench cmds file bench-stop-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`" get-data-end $leader
             fi
@@ -551,7 +551,7 @@ function evaluate_test_roadblock {
 
             echo "My cs_buddy=${cs_buddy}"
 
-            # First look for a message to "all" but sent by my client-server buddy
+            # First look for a message to "all" but sent by my engine buddy
             # (to be deprecated)
             local tmp_message_file=$(mktemp)
             jq -cr '.received[] | select(.payload.sender.id == "'${cs_buddy}'" and
@@ -1113,7 +1113,7 @@ function load_json_setting() {
 # another script that sources this file or by a discrete caller from
 # the command line or similar
 #
-# ex. 'client-server-script-library <function-name> <function-args>'
+# ex. 'engine-script-library <function-name> <function-args>'
 function direct_script_function_call() {
     local func
 
