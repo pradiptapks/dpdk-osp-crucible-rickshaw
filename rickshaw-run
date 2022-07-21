@@ -2057,20 +2057,22 @@ sub evaluate_test_roadblock {
 
             $quit = 1;
         } elsif ($roadblock_rc == $roadblock_exit_abort) {
-            printf "[WARNING] roadblock '%s' received an abort, stopping sample\n", $roadblock_name;
-            $$sample_info->{'attempt-fail'} = 1;
+            if ($abort == 0) {
+                printf "[WARNING] roadblock '%s' received an abort, stopping sample\n", $roadblock_name;
+                $$sample_info->{'attempt-fail'} = 1;
 
-            $$sample_info->{'failures'}++;
-            printf "sample failures is now: %d\n", $$sample_info->{'failures'};
+                $$sample_info->{'failures'}++;
+                printf "sample failures is now: %d\n", $$sample_info->{'failures'};
 
-            if ($$sample_info->{'failures'} >= $run{'max-sample-failures'}) {
-                $$sample_info->{'complete'} = 1;
-                printf "[ERROR] A maximum of %d failures for iteration %d has been reached\n",
-                    $$sample_info->{'failures'},
-                    $$sample_info->{'iteration-id'};
+                if ($$sample_info->{'failures'} >= $run{'max-sample-failures'}) {
+                    $$sample_info->{'complete'} = 1;
+                    printf "[ERROR] A maximum of %d failures for iteration %d has been reached\n",
+                        $$sample_info->{'failures'},
+                        $$sample_info->{'iteration-id'};
+                }
+
+                $abort = 1;
             }
-
-            $abort = 1;
         } else {
             printf "[ERROR] roadblock '%s' has reached an unknown state with RC=%d\n", $roadblock_name, $roadblock_rc;
 
