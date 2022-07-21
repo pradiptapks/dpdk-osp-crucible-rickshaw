@@ -17,12 +17,14 @@ cs_rb_opts=""
 do_validate="0"
 num_clients=0
 num_servers=0
+num_collectors=0
 disable_tools=0
 abort=0
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
 declare -A servers
+declare -A collectors # For a remotehost that has no client or server, but runs tools
 
 function abort_error() {
     local msg="$1"; shift
@@ -153,6 +155,9 @@ function addto_clients_servers() {
                 elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                     servers[$j]="server-$j"
                     let num_servers=$num_servers+1
+                elif [ "$arg" == "profiler" ]; then
+                    collectors[$j]="profiler-$j"
+                    let num_collectors=$num_collectors+1
                 fi
             done
         else
@@ -162,6 +167,9 @@ function addto_clients_servers() {
             elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                 servers[$ids]="server-$ids"
                 let num_servers=$num_servers+1
+            elif [ "$arg" == "profiler" ]; then
+                collectors[$ids]="profiler-$ids"
+                let num_collectors=$num_collectors+1
             fi
         fi
     done
@@ -173,6 +181,9 @@ function echo_clients_servers() {
     fi
     if [ $num_servers -gt 0 ]; then
         echo "server ${!servers[@]}"
+    fi
+    if [ $num_collectors -gt 0 ]; then
+        echo "profiler ${!collectors[@]}"
     fi
 }
 
