@@ -45,7 +45,10 @@ function do_roadblock() {
     local do_abort=0
 
     while [ ${#} -gt 0 ]; do
-        if [ -n "${1}" -a "${1}" == "messages" ]; then
+        if [ -z "${1}" ]; then
+            shift
+            continue
+        elif [ -n "${1}" -a "${1}" == "messages" ]; then
             shift
             message="${1}"; shift
             echo "Going to send this user message file: ${message}"
@@ -716,7 +719,7 @@ function process_bench_roadblocks() {
     fi
 
     local quit=0
-    local abort
+    local abort abort_rc
     local timeout=${default_timeout}
     local total_tests=${#bench_start_cmds[@]}
 
@@ -826,11 +829,17 @@ function process_bench_roadblocks() {
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 run_bench_cmd "client" "infra" "${abort}" "${quit}" "0" "${infra_cmd}"
-                abort=$?
+                abort_rc=$?
+                if [ "${abort_rc}" == "0" ]; then
+                    abort_arg=""
+                else
+                    abort_arg="abort"
+                    abort=${abort_rc}
+                fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-end")
                 prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
+                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}" "${abort_arg}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
@@ -841,12 +850,18 @@ function process_bench_roadblocks() {
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 run_bench_cmd "server" "server" "${abort}" "${quit}" "0" "${start_cmd}"
-                abort=$?
+                abort_rc=$?
+                if [ "${abort_rc}" == "0" ]; then
+                    abort_arg=""
+                else
+                    abort_arg="abort"
+                    abort=${abort_rc}
+                fi
                 force_server_stop=1
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-start-end")
                 prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
+                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}" "${abort_arg}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
@@ -912,11 +927,17 @@ function process_bench_roadblocks() {
                 fi
 
                 run_bench_cmd "client" "client" "${abort}" "${abort}" "0" "${start_cmd}"
-                abort=$?
+                abort_rc=$?
+                if [ "${abort_rc}" == "0" ]; then
+                    abort_arg=""
+                else
+                    abort_arg="abort"
+                    abort=${abort_rc}
+                fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "client-start-end")
                 prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
+                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}" "${abort_arg}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
@@ -957,11 +978,17 @@ function process_bench_roadblocks() {
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
                 run_bench_cmd "server" "server" "${abort}" "${quit}" "${force_server_stop}" "${stop_cmd}"
-                abort=$?
+                abort_rc=$?
+                if [ "${abort_rc}" == "0" ]; then
+                    abort_arg=""
+                else
+                    abort_arg="abort"
+                    abort=${abort_rc}
+                fi
 
                 rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
                 prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
+                do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}" "${abort_arg}"
                 roadblock_rc=$?
                 evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
                 ####################################################################
