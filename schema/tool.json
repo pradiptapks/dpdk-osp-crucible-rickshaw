@@ -48,7 +48,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
-                  "local",
+                  "remotehost",
                   "k8s"
                 ]
               }
@@ -64,7 +64,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
-                  "local",
+                  "remotehost",
                   "k8s"
                 ]
               }

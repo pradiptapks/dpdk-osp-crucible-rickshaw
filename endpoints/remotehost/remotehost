@@ -207,7 +207,7 @@ function process_remotehost_opts() {
         # The $val may have : in it, so don't use awk to get only the second field
         val=`echo $this_opt | sed -e s/^$arg://`
         case "$arg" in
-            client|server|clients|servers)
+            client|server|clients|servers|profiler)
                 addto_clients_servers "$arg" "$val"
                 ;;
             osruntime)
@@ -355,7 +355,7 @@ function launch_osruntime() {
 
     # For each client and server launch the actual script which will run it.
     count=1
-    for this_cs_label in ${clients[@]} ${servers[@]}; do
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
         tmp_osruntime=${osruntime[default]}
         set +u
         if [ ! -z "${osruntime[$this_cs_label]}" ]; then

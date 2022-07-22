@@ -1438,6 +1438,7 @@ sub validate_endpoints() {
     # and not rickshaw.
     my $min_id;
     my $max_id;
+    my $collectors_present = 0;
     printf "Confirming the endpoints will satisfy the benchmark-client ";
     printf "and benchmark-server " if exists $bench_config{'server'};
     printf "requirements\n";
@@ -1460,7 +1461,7 @@ sub validate_endpoints() {
         # server <int> [int]
         foreach my $line (@output) {
             chomp $line;
-            if ($line =~ /(client|server)\s+(.+)$/) {
+            if ($line =~ /(client|server|profiler)\s+(.+)$/) {
                 my $client_server = $1;
                 my $ids = $2;
                 foreach my $id (split(/\s+/, $ids)) {
@@ -1468,8 +1469,13 @@ sub validate_endpoints() {
                     my %info = ( 'endpoint-type' => $$endpoint{'type'}, 'id' => $id );
                     $clients_servers{$client_server}[$id - 1] = \%info;
                     push(@rb_cs_ids, $client_server . "-" . $id);
-                    $min_id = $id if (! defined $min_id or $id < $min_id);
-                    $max_id = $id if (! defined $max_id or $id > $max_id);
+                    if ($client_server =~ /(client|server)/) {
+                        $min_id = $id if (! defined $min_id or $id < $min_id);
+                        $max_id = $id if (! defined $max_id or $id > $max_id);
+                    }
+                    if ($client_server =~ /(collector)/) {
+                        $collectors_present++;
+                    }
                 }
             } elsif ($line =~ /(userenv)\s+(.+)$/) {
                 $$endpoint{'userenv'} = $2;
@@ -1536,6 +1542,7 @@ sub validate_endpoints() {
     }
     printf "There will be %d client(s)", $clients_present;
     printf " and %d server(s)", $servers_present if exists $bench_config{'server'} && $servers_present;
+    printf " and %d collector(s)", $collectors_present if $collectors_present;
     printf "\n";
     $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
         " --roadblock-passwd=" . $redis_passwd;
@@ -1658,10 +1665,14 @@ sub prepare_bench_tool_engines() {
     copy($run{'roadblock-dir'} . "/roadblock.py", $client_server_roadblock_script)
         || die "Could not copy roadblock.py to " . $client_server_roadblock_script;
     chmod 0755, "$client_server_roadblock_script";
+
+    my @collectors = grep(/[^client|^server]/, keys %clients_servers);
+    my @all_collector_types = qw(client server worker master profiler);
+
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
     # to see if we need to build a command file for any of these collectors.
-    my %collectors;
+    my %collector_tools;
     foreach my $tool_entry (@tools_params) {
         my $tool_name = $$tool_entry{'tool'};
         if (exists $tools_configs{$tool_name}{'collector'}{'whitelist'}) {
@@ -1671,27 +1682,40 @@ sub prepare_bench_tool_engines() {
                 if (grep(/^$endpoint$/, dump_endpoint_types(\@endpoints))) {
                     # Then add this tool to the list of tools for this collector
                     for my $collector (@{ $$i{'collector-types'} }) {
-                        if (! exists($collectors{$collector})) {
-                            $collectors{$collector} = ();
+                        if (! exists($collector_tools{$collector})) {
+                            $collector_tools{$collector} = ();
                         }
-                        push(@{ $collectors{$collector} }, $tool_name);
+                        debug_log("Adding " . $tool_name . " to " . $collector . "\n");
+                        push(@{ $collector_tools{$collector} }, $tool_name);
                     }
                 }
             }
         }
     }
     # Now build all of the tool start and stop cmd files for each collector
-    for my $collector (keys %collectors) {
+    for my $collector (@all_collector_types) {
         for my $start_stop ("start", "stop") {
             my $collector_tool_cmds_dir = $tool_cmds_dir . "/" . $collector;
             -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
                 die "[ERROR]Create collector directory failed: [" . $collector_tool_cmds_dir . "]\n";
             my $tool_cmd_file = $collector_tool_cmds_dir . "/" . $start_stop; 
+            my $tool_count = 0;
             open(my $fh, ">" . $tool_cmd_file) ||
                 die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
             debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
             foreach my $tool_entry (@tools_params) {
-                build_tool_cmd($tool_entry, $start_stop, $fh);
+                my $tool_name = $$tool_entry{'tool'};
+                debug_log(sprintf "tool_name: [%s]\n", $tool_name);
+                for my $i (@{ $tools_configs{$tool_name}{'collector'}{'whitelist'} }) {
+                    debug_log(sprintf "endpoint: [%s]\n", $$i{'endpoint'});
+                    if (grep(/^$collector$/, @{ $$i{'collector-types'} })) {
+                        debug_log(sprintf "building tool cmd for [%s]\n", $tool_name);
+                        build_tool_cmd($tool_entry, $start_stop, $fh);
+                        $tool_count++;
+                    } else {
+                        debug_log(sprintf "collector [%s] was not found in collector-types: [%s]\n", $collector, join(" ", @{ $$i{'collector-types'} }));
+                    }
+                }
             }
             close($fh);
             chmod 0755, $tool_cmd_file;
@@ -1704,6 +1728,7 @@ sub prepare_bench_tool_engines() {
     # and/or server would be collecting duplicate data).  For this reason tool
     # cmd files are built specifically for each client and server.
     foreach my $cs_type (keys %clients_servers) {
+        next if ($cs_type eq "profiler"); # Currently we do not generate specific tools cmds for each profiler
         for my $start_stop ("start", "stop") {
             foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
                 my $cs_tool_cmds_dir = $tool_cmds_dir . "/" . $cs_type . "/" . $$cs_ref{'id'};
@@ -1711,6 +1736,7 @@ sub prepare_bench_tool_engines() {
                 my $tool_cmd_file = $cs_tool_cmds_dir . "/" . $start_stop;
                 open(my $fh, ">" . $tool_cmd_file) ||
                     die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
+                debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
                 foreach my $tool_entry (@tools_params) {
                     build_tool_cmd($tool_entry, $start_stop, $fh, $$cs_ref{'endpoint-type'});
                 }
@@ -1721,7 +1747,9 @@ sub prepare_bench_tool_engines() {
     }
     # Build the client and server bench-cmd files
     # Each benchmark has to define the commands used in their rickshaw.json
+    debug_log(sprintf "clients_servers: [%s]\n", join(" ", keys %clients_servers));
     foreach my $cs_type (keys %clients_servers) {
+        next if ($cs_type eq "profiler"); # This does not use bench-cmds
         foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
             my @cmd_type_files = ("start");
             if ($cs_type eq "server") {
@@ -1779,9 +1807,7 @@ sub prepare_bench_tool_engines() {
     # These are files the client/server must copy from the controller before running any tests.
     # The "client-server-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
-    #
-    # TODO: build these files for other collectors
-    foreach my $cs_type (keys %clients_servers, keys %collectors) {
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
         my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
         open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
         if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
@@ -1821,7 +1847,7 @@ sub prepare_bench_tool_engines() {
         close FH;
     }
     # Create empty files for any not created above
-    foreach my $cs_type ("client", "server", "worker") {
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
         my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
         if ( ! -e $cs_file_list) {
             open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
