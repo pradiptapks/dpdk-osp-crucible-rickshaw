@@ -1667,6 +1667,7 @@ sub prepare_bench_tool_engines() {
     chmod 0755, "$client_server_roadblock_script";
 
     my @collectors = grep(/[^client|^server]/, keys %clients_servers);
+    my @all_collector_types = qw(client server worker master profiler);
 
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
@@ -1692,7 +1693,7 @@ sub prepare_bench_tool_engines() {
         }
     }
     # Now build all of the tool start and stop cmd files for each collector
-    for my $collector (@collectors) {
+    for my $collector (@all_collector_typess) {
         for my $start_stop ("start", "stop") {
             my $collector_tool_cmds_dir = $tool_cmds_dir . "/" . $collector;
             -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
@@ -1716,9 +1717,6 @@ sub prepare_bench_tool_engines() {
                     }
                 }
             }
-            #if ($tool_count == 0) {
-                #printf $fh "# this tool file is empty because there are no tools to run\n";
-            #}
             close($fh);
             chmod 0755, $tool_cmd_file;
         }
@@ -1809,9 +1807,7 @@ sub prepare_bench_tool_engines() {
     # These are files the client/server must copy from the controller before running any tests.
     # The "client-server-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
-    #
-    # TODO: build these files for other collectors
-    foreach my $cs_type (keys %clients_servers, @collectors) {
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
         my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
         open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
         if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
@@ -1851,7 +1847,7 @@ sub prepare_bench_tool_engines() {
         close FH;
     }
     # Create empty files for any not created above
-    foreach my $cs_type ("client", "server", "worker") {
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
         my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
         if ( ! -e $cs_file_list) {
             open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
