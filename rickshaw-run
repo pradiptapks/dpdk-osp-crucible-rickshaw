@@ -1693,7 +1693,7 @@ sub prepare_bench_tool_engines() {
         }
     }
     # Now build all of the tool start and stop cmd files for each collector
-    for my $collector (@all_collector_typess) {
+    for my $collector (@all_collector_types) {
         for my $start_stop ("start", "stop") {
             my $collector_tool_cmds_dir = $tool_cmds_dir . "/" . $collector;
             -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
