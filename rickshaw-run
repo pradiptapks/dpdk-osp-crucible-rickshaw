@@ -539,7 +539,9 @@ sub workshop_build_image {
     printf $fh "%s\n", join("\n", @workshop_output);
     close($fh);
     if ($workshop_rc > 0) {
-        printf "Workshop build failed:\n";
+        printf "Workshop build failed: rc=%d\n", $workshop_rc;
+        printf "Workshop build command: %s\n", $workshop_build_cmd;
+        printf "Workshop build output:\n";
         printf "%s\n", join("\n", @workshop_output);
         exit 1;
     }
