@@ -7,21 +7,21 @@ echo "BASH_VERSION=${BASH_VERSION}"
 
 test -e /etc/profile && . /etc/profile
 
-if [ ! -e /usr/local/bin/client-server-script-library ]; then
-    echo "ERROR: Could not location client-server-script-library"
+if [ ! -e /usr/local/bin/engine-script-library ]; then
+    echo "ERROR: Could not location engine-library"
 else
-    echo "source client-server-script-library: BEGIN"
-    source client-server-script-library
-    echo "source client-server-script-library: END"
+    echo "source engine-script-library: BEGIN"
+    source engine-script-library
+    echo "source engine-script-library: END"
 fi
 
-# Depending on how client-server-script is started, "/usr/local/bin" is not
+# Depending on how engine-script is started, "/usr/local/bin" is not
 # always in the $PATH
 PATH="/usr/local/bin:$PATH"
 
-echo "client-server-script env:"
+echo "engine-script env:"
 env
-echo "client-server-script params:"
+echo "engine-script params:"
 echo "$@"
 echo
 echo os-release:
@@ -44,11 +44,11 @@ if ! pushd $cs_dir; then
     abort_error "Could not chdir to $cs_dir" engine-init-begin $leader
     exit 1
 else
-    do_roadblock engine-init-begin ${client_server_script_start_timeout}
+    do_roadblock engine-init-begin ${engine_script_start_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 fi
-do_roadblock engine-init-end ${client_server_script_start_timeout}
+do_roadblock engine-init-end ${engine_script_start_timeout}
 roadblock_rc=$?
 roadblock_exit_on_error ${roadblock_rc}
 
@@ -95,7 +95,7 @@ do_roadblock stop-tools-end ${default_timeout}
 
 
 do_roadblock send-data-begin ${default_timeout}
-do_roadblock send-data-end ${default_timeout} wait-for "/usr/local/bin/client-server-script-library send_data '${ssh_id_file}' '${cs_dir}' '${rickshaw_host}' '${archives_dir}/${cs_label}-data.tgz'"
+do_roadblock send-data-end ${default_timeout} wait-for "/usr/local/bin/engine-script-library send_data '${ssh_id_file}' '${cs_dir}' '${rickshaw_host}' '${archives_dir}/${cs_label}-data.tgz'"
 
 
 echo -e "\nAll client/server scripts are finished"
