@@ -732,8 +732,10 @@ if (exists $result{'iterations'}) {
                 my @samples;
                 my $primary_metric;
                 my $primary_period;
-                my $sample_num = 1;
+                my $sample_num;
                 for my $samp_dir (@samp_dirs) {
+                    $samp_dir =~ /^sample-(\d+)$/;
+                    $sample_num = $1;
                     my $sample_idx = $sample_num - 1;
                     $$iter{'samples'}[$sample_idx] = {};
                     my $this_sample = $$iter{'samples'}[$sample_idx];
@@ -854,7 +856,6 @@ if (exists $result{'iterations'}) {
                                 } #opendir csnames
                             } #cs_names
                             queue_es_doc("sample", $run_dir . "/" . $this_samp_dir, $iter_idx, $sample_idx);
-                            $sample_num++;
                         } #opendir samp
                     } #samp pass
                 } #samp_dirs
