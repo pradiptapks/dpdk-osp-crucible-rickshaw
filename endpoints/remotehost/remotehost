@@ -141,7 +141,7 @@ function cleanup_osruntime() {
     do_ssh $user@$host podman mount
     echo
 
-    for this_cs_label in ${clients[@]} ${servers[@]}; do
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
         tmp_osruntime=${osruntime[default]}
         set +u
         if [ ! -z "${osruntime[$this_cs_label]}" ]; then
@@ -545,7 +545,7 @@ function move_remotehost_logs() {
     local this_cs_label remote_cs_log_file container_name delete_remote_dir
     delete_remote_dir=0
     mkdir -p "$engine_logs_dir"
-    for this_cs_label in ${clients[@]} ${servers[@]}; do
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
         tmp_osruntime=${osruntime[default]}
         set +u
         if [ ! -z "${osruntime[$this_cs_label]}" ]; then
