@@ -864,6 +864,16 @@ function get_controller_ip() {
     if [ -z "${host}" ]; then
         exit_error "No controller hostname provided to determine IP address"
         return 1
+    else
+        if [ "${host}" == "localhost" ]; then
+            # get IPv4 address by forcing it via the grep
+            host=$(ip addr show lo | grep "inet\s" | awk '{ print $2 }' | awk -F/ '{ print $1 }')
+
+            if [ -z "${host}" ] || ! is_ip ${host}; then
+                exit_error "Failed to map localhost to loopback IP address (got '${host}')"
+                return 1
+            fi
+        fi
     fi
 
     if is_ip ${host}; then
