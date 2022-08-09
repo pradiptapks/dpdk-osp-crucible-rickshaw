@@ -861,6 +861,21 @@ function get_controller_ip() {
     host=$1
     shift
 
+    if [ -z "${host}" ]; then
+        exit_error "No controller hostname provided to determine IP address"
+        return 1
+    else
+        if [ "${host}" == "localhost" ]; then
+            # get IPv4 address by forcing it via the grep
+            host=$(ip addr show lo | grep "inet\s" | awk '{ print $2 }' | awk -F/ '{ print $1 }')
+
+            if [ -z "${host}" ] || ! is_ip ${host}; then
+                exit_error "Failed to map localhost to loopback IP address (got '${host}')"
+                return 1
+            fi
+        fi
+    fi
+
     if is_ip ${host}; then
         if ip addr | grep -q ${host}; then
             # the provided IP address is mine so it is the one to use
@@ -873,7 +888,7 @@ function get_controller_ip() {
     else
         endpoint_ip=$(host ${host} | grep "has address" | head -1 | awk -F"has address " '{ print $2 }')
 
-        if ! is_ip ${endpoint_ip}; then
+        if [ -z "${endpoint_ip}" ] || ! is_ip ${endpoint_ip}; then
             exit_error "Failed to determine endpoint IP address (got '${endpoint_ip}')"
             return 1
         fi
@@ -883,7 +898,7 @@ function get_controller_ip() {
     # IP this endpoint will need to use to contact the controller
     controller_ip=$(ip route get ${endpoint_ip} | head -1 | awk -F"src " '{ print $2 }' | awk '{ print $1 }')
 
-    if ! is_ip ${controller_ip}; then
+    if [ -z "${controller_ip}" ] || ! is_ip ${controller_ip}; then
         exit_error "Failed to determine controller IP address (got '${controller_ip}')"
         return 1
     else
