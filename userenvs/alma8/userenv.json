@@ -2,7 +2,7 @@
     "name": "alma8",
     "label": "AlmaLinux 8",
     "origin": {
-      "image": "docker.io/library/almalinux",
+      "image": "quay.io/almalinux/almalinux",
       "tag": "8"
     },
     "properties": {
