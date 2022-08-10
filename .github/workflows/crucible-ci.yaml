@@ -9,6 +9,63 @@ on:
   workflow_dispatch:
 
 jobs:
+  crucible-ci-all-userenvs-oslat-remotehost:
+    name: crucible-ci-all-userenvs-oslat-remotehost
+
+    runs-on: [self-hosted, cpu-partitioning, remotehost]
+
+    steps:
+    - name: Checkout rickshaw
+      uses: actions/checkout@v2
+      with:
+        path: rickshaw
+
+    - name: Checkout crucible-ci
+      uses: actions/checkout@v2
+      with:
+        repository: perftool-incubator/crucible-ci
+        ref: main
+        path: crucible-ci
+
+    - name: run crucible-ci->integration-tests
+      uses: ./crucible-ci/.github/actions/integration-tests
+      with:
+        artifact_tag: "oslat-remotehost"
+        ci_target: "rickshaw"
+        ci_target_dir: ${{ github.workspace }}/rickshaw
+        scenarios: "oslat"
+        userenvs: "all"
+        ci_endpoint: "remotehost"
+
+  crucible-ci-samples-iteration-repeat-runs-oslat-remotehost:
+    name: crucible-ci-samples-iteration-repeat-runs-oslat-remotehost
+
+    runs-on: [self-hosted, cpu-partitioning, remotehost]
+
+    steps:
+    - name: Checkout rickshaw
+      uses: actions/checkout@v2
+      with:
+        path: rickshaw
+
+    - name: Checkout crucible-ci
+      uses: actions/checkout@v2
+      with:
+        repository: perftool-incubator/crucible-ci
+        ref: main
+        path: crucible-ci
+
+    - name: run crucible-ci->integration-tests
+      uses: ./crucible-ci/.github/actions/integration-tests
+      with:
+        artifact_tag: "samples-iteration-repeat-runs-remotehost"
+        ci_target: "rickshaw"
+        ci_target_dir: ${{ github.workspace }}/rickshaw
+        scenarios: "oslat"
+        repeat_runs: "yes"
+        run_samples: "3"
+        ci_endpoint: "remotehost"
+
   crucible-ci-samples-iteration-repeat-runs-fio-remotehost:
     name: crucible-ci-samples-iteration-repeat-runs-fio-remotehost
     runs-on: ubuntu-latest
