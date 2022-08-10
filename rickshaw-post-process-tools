@@ -6,12 +6,12 @@
 #
 # Rickshaw-post-process-tools will run each tool-specific post-process script
 # for every tool it finds from each "collector".  A collector is just an instance
-# of a client-server-script execution which also executed tools.  This script should
+# of a engine-script execution which also executed tools.  This script should
 # only be run after those are complete and the data has been moved to
 # $base_run_dir/run/tool-data (a completed execution of rickshaw-run).
 #
 # Depending on the endpoint types used, a collector could be in a container on a remote
-# host, could be a pod/container, a VM, etc.  If a client-server-script execution
+# host, could be a pod/container, a VM, etc.  If a engine-script execution
 # was also running a benchmark client or server (common for localhost and remotehost
 # endpoints), then the name of the collector is "client" or "server".  If it was
 # not running a benchmark client or server, the collector name will be dependent

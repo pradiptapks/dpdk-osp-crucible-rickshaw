@@ -17,20 +17,22 @@ cs_rb_opts=""
 do_validate="0"
 num_clients=0
 num_servers=0
+num_collectors=0
 disable_tools=0
 abort=0
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
 declare -A servers
+declare -A collectors # For a remotehost that has no client or server, but runs tools
 
 function abort_error() {
     local msg="$1"; shift
     local sync="$1"; shift
     echo "[ERROR] ${msg}" 1>&2
-    local msg_file=error.json
+    local msg_file=$(mktemp)
     echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"error":"'$msg'"}}]' >$msg_file
-    do_roadblock "$sync" "follower" "abort" "$msg_file"
+    do_roadblock ${sync} 90 abort messages "${msg_file}"
     abort=1
 }
 
@@ -44,7 +46,7 @@ function exit_error() {
 function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
-    local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,client-server-script-start-timeout:"
+    local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,engine-script-start-timeout:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -109,10 +111,10 @@ function process_opts() {
                 echo "setting endpoint_deploy_timeout to $endpoint_deploy_timeout"
                 shift;
                 ;;
-            --client-server-script-start-timeout)
+            --engine-script-start-timeout)
                 shift;
-                client_server_script_start_timeout="$1"
-                echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
+                engine_script_start_timeout="$1"
+                echo "setting engine_script_start_timeout to $engine_script_start_timeout"
                 shift;
                 ;;
             --)
@@ -153,6 +155,9 @@ function addto_clients_servers() {
                 elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                     servers[$j]="server-$j"
                     let num_servers=$num_servers+1
+                elif [ "$arg" == "profiler" ]; then
+                    collectors[$j]="profiler-$j"
+                    let num_collectors=$num_collectors+1
                 fi
             done
         else
@@ -162,6 +167,9 @@ function addto_clients_servers() {
             elif [ "$arg" == "servers" -o "$arg" == "server" ]; then
                 servers[$ids]="server-$ids"
                 let num_servers=$num_servers+1
+            elif [ "$arg" == "profiler" ]; then
+                collectors[$ids]="profiler-$ids"
+                let num_collectors=$num_collectors+1
             fi
         fi
     done
@@ -174,21 +182,24 @@ function echo_clients_servers() {
     if [ $num_servers -gt 0 ]; then
         echo "server ${!servers[@]}"
     fi
+    if [ $num_collectors -gt 0 ]; then
+        echo "profiler ${!collectors[@]}"
+    fi
 }
 
 function init_common_dirs() {
     if [ "$do_validate" != 1 ]; then
         config_dir="$base_run_dir/config"
-        client_server_config_dir="$config_dir/client-server"
-        client_server_bench_cmds_dir="$client_server_config_dir/bench-cmds"
+        engine_config_dir="$config_dir/engine"
+        engine_bench_cmds_dir="$engine_config_dir/bench-cmds"
         run_dir="$base_run_dir/run"
-        client_server_logs_dir="$run_dir/client-server/logs"
+        engine_logs_dir="$run_dir/engine/logs"
         endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
         bootstrap_script="/usr/local/bin/bootstrap"
-        client_server_run_script="/usr/local/bin/client-server-script"
+        engine_run_script="/usr/local/bin/engine-script"
         roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
         mkdir -p "$endpoint_run_dir"
-        mkdir -p "$client_server_logs_dir"
+        mkdir -p "$engine_logs_dir"
         mkdir -p "$roadblock_msgs_dir"
     fi
 }
@@ -214,19 +225,19 @@ function base_req_check() {
         use_rb=1
     fi
     if [ -z "$run_id" ]; then
-        exit_error "The run ID was not provided" endpoint-deploy
+        exit_error "The run ID was not provided" endpoint-deploy-begin
     fi
     if [ -z "$base_run_dir" ]; then
-        exit_error "--base-run-dir was not provided" endpoint-deploy
+        exit_error "--base-run-dir was not provided" endpoint-deploy-begin
     fi
     if [ ! -d "$base_run_dir" ]; then
-        exit_error "The run directory [$base_run_dir] does not exist" endpoint-deploy
+        exit_error "The run directory [$base_run_dir] does not exist" endpoint-deploy-begin
     fi
     if [ ! -e "$config_dir/rickshaw_id.rsa" ]; then
-        exit_error "Could not find $config_dir/rickshaw_id.rsa" endpoint-deploy
+        exit_error "Could not find $config_dir/rickshaw_id.rsa" endpoint-deploy-begin
     fi
-    if [ ! -e "$client_server_bench_cmds_dir/client/1" ]; then
-        exit_error "client bench cmd file $client_server_bench_cmds_dir/client/1 not found" endpoint-deploy
+    if [ ! -e "$engine_bench_cmds_dir/client/1" ]; then
+        exit_error "client bench cmd file $engine_bench_cmds_dir/client/1 not found" endpoint-deploy-begin
     fi
 }
 
@@ -268,123 +279,144 @@ function do_scp() {
     # no password prompt required.
     local src dst dst_sudo_cmd dst_path dst_user_host dst_user dst_cmd
     local src_sudo_cmd src_path src_user_host src_user src_sudo_cmd src_cmd
-    src=$1; shift # [<user>@<host>:]<source> source can be a dir or file
-                        # If a dir, the full dir is used when copied to the destination
-    dst=$1; shift # [<user>@<host>:]<destination> destination should be a dir, not a file
+    src_userhost=$1; shift # [<user>@<host>]
+    src_path=$1; shift # <path> path can be a dir or file
+                       # If a dir, the full dir is used when copied to the destination
+    dst_userhost=$1; shift # [<user>@<host>]
+    dst_path=$1; shift # <path> path can be a dir or file
+                       # if src_path is a dir, dst_path must also be a dir
 
-    if echo $dst | grep -q -- "@"; then
+    if echo $dst_userhost | grep -q -- "@"; then
         dst_sudo_cmd=""
-        dst_path=`echo $dst | awk -F: '{print $2}'`
-        dst_user_host=`echo $dst | awk -F: '{print $1}'`
-        dst_user=`echo $dst_user_host | awk -F@ '{print $1}'`
+        dst_user=`echo $dst_userhost | awk -F@ '{print $1}'`
         if [ "$dst_user" != "root" ]; then
             local dst_sudo_cmd="sudo"
         fi
-        dst_cmd="ssh $ssh_opts $dst_user_host $dst_sudo_cmd tar -C $dst_path -xf -"
+        dst_host=`echo $dst_userhost | awk -F@ '{print $2}'`
+        dst_cmd="ssh $ssh_opts ${dst_user}@$dst_host $dst_sudo_cmd tar -C $dst_path -xf -"
     else
-        dst_cmd="tar -C $dst -xf -"
+        dst_cmd="tar -C $dst_path -xf -"
     fi
 
-    if echo $src | grep -q -- "@"; then
+    if echo $src_userhost | grep -q -- "@"; then
         src_sudo_cmd=""
-        src_path=`echo $src | awk -F: '{print $2}'`
-        src_user_host=`echo $src | awk -F: '{print $1}'`
-        src_user=`echo $src_user_host | awk -F@ '{print $1}'`
+        src_user=`echo $src_userhost | awk -F@ '{print $1}'`
         if [ "$src_user" != "root" ]; then
             src_sudo_cmd="sudo"
         fi
-        src_cmd="ssh $ssh_opts $src_user_host $src_sudo_cmd tar -cf - $src_path"
+        src_host=`echo $src_userhost | awk -F@ '{print $2}'`
+        src_cmd="ssh $ssh_opts ${src_user}@$src_host $src_sudo_cmd tar -cf - $src_path"
     else
-        src_cmd="tar -cf - $src"
+        src_cmd="tar -cf - $src_path"
     fi
 
+    echo "Going to run:"
+    echo "$src_cmd | $dst_cmd"
     $src_cmd | $dst_cmd
 }
 
 function do_roadblock() {
     echo "do_roadblock() ARGC: $#"
+    echo "do_roadblock() ARGS: $@"
     local label=$1; shift
-    local role=$1; shift
     local timeout=$1; shift
+    local leader="controller"
     local message=""
-    if [ $# -gt 0 ]; then
-        if [ -n "${1}" ]; then
-            message="$1"; shift # A file for user-messages or "" if none
-            echo "Going to send this user message file: $message"
+    local wait_for=""
+    local wait_for_log=""
+    local do_abort=0
+
+    while [ $# -gt 0 ]; do
+        if [ -n "${1}" -a "${1}" == "messages" ]; then
+            shift
+            message="${1}"; shift
+            echo "Going to send this user message file: ${message}"
+        elif [ -n "${1}" -a "${1}" == "wait-for" ]; then
+            shift
+            wait_for="${1}"; shift
+            wait_for_log=$(mktemp)
+            echo "Going to run this wait-for command: ${wait_for}"
+            echo "Going to log wait-for to this file: ${wait_for_log}"
+        elif [ -n "${1}" -a "${1}" == "abort" ]; then
+            shift
+            do_abort=1
+            echo "Going to send an abort"
+        else
+            exit_error "[ERROR]do_roadblock() encountered invalid option parameter(s) [$@]"
         fi
-    fi
+    done
+
     if [ -z "${message}" ]; then
         echo "Not going to send user message file"
     fi
-    ###  followers or members remain in $@  ###
-    if [ -z "$role" ]; then
-        exit_error "do_roadblock(): role not defined"
+    if [ -z "${wait_for}" ]; then
+        echo "Not going to use wait-for"
     fi
-    if [ $use_rb -eq 0 ]; then
-        echo "Not running roadblock"
-        return 0
+    if [ -z "${label}" ]; then
+        exit_error "[ERROR]do_roadblock() label not provided"
+    fi
+    if [ -z "${timeout}" ]; then
+        exit_error "[ERROR]do_roadblock() timeout not provided"
     fi
 
+    local msgs_log_file="$roadblock_msgs_dir/$label.json"
+    local cmd=""
+    local role="follower"
+    ping -c 4 localhost || exit_error "Could not ping controller"
+    cmd="${cmd} /usr/local/bin/roadblock.py --role=${role} --redis-server=localhost"
+    cmd="${cmd} --leader-id=${leader} --timeout=${timeout} --redis-password=${rb_passwd}"
+    cmd="${cmd} --follower-id=${endpoint_label} --message-log=${msgs_log_file}"
+    if [ -n "${message}" ]; then
+        cmd="${cmd} --user-message ${message}"
+    fi
+    if [ -n "${wait_for}" ]; then
+        cmd="${cmd} --wait-for \"${wait_for}\""
+        cmd="${cmd} --wait-for-log ${wait_for_log}"
+    fi
+    if [ ${do_abort} -eq 1 ]; then
+        cmd="${cmd} --abort"
+    fi
+
+    local uuid="${rb_id}:${label}"
     printf "\n\n"
     echo "Starting roadblock [`date`]"
-    echo "role: $role"
-    local uuid="$rb_id:$label"
-    echo "uuid (without attempt ID embedded): $uuid"
-    echo "timeout: $timeout"
-    abort_opt=""
-    if [ "$timeout" == "abort" ]; then
-        timeout="90"
-        echo "Going to send abort signal"
-        abort_opt=" --abort"
-    fi
-    local msgs_log_file="$roadblock_msgs_dir/$label.json"
-    local cmd="/usr/local/bin/roadblock.py"
-    cmd+=" --redis-server localhost --timeout $timeout --redis-password $rb_passwd --role=$role --message-log=$msgs_log_file $abort_opt"
-    if [ -n "$message" ]; then
-        cmd+=" --user-message $message"
-    fi
-    if [ "$role" == "follower" ]; then
-        cmd+=" --leader-id controller --follower-id $endpoint_label"
-    elif [ "$role" == "leader" ]; then
-        if [ -z "$1" ]; then
-            exit_error "do_roadblock(): follower(s) not defined"
-        fi
-        cmd+=" --leader-id endpoint"
-        local followers=""
-        while [ $# -gt 0 ]; do
-            cmd+=" --followers $1"
-            followers+=" $1"
-            shift
-        done
-        echo "followers: $followers"
-    else
-        exit_error "Roadblock role \"$role\" invalid"
-    fi
+    echo "server: localhost"
+    echo "role: ${role}"
+    echo "uuid (without attempt ID embedded): ${uuid}"
+    echo "timeout: ${timeout}"
 
     local attempts=0
     local rc=99
     local output=""
-    while [ $attempts -lt $max_rb_attempts -a $rc -ne $rb_exit_success -a $rc -ne $rb_exit_abort ]; do
-        let attempts=$attempts+1
-        echo "attempt number: $attempts"
-        echo "uuid: $attempts:$uuid"
-        local rb_cmd="$cmd --uuid $attempts:$uuid"
+    while [ ${attempts} -lt ${max_rb_attempts} -a ${rc} -ne ${rb_exit_success} -a ${rc} -ne ${rb_exit_abort} ]; do
+        let attempts=${attempts}+1
+        echo "attempt number: ${attempts}"
+        echo "uuid: ${attempts}:${uuid}"
+        local rb_cmd="${cmd} --uuid ${attempts}:${uuid}"
         echo "going to run this roadblock command: ${rb_cmd}"
         echo "roadblock output BEGIN"
-        ${rb_cmd}
+        # use eval to make the quoting behave properly
+        eval ${rb_cmd}
         rc=$?
         echo "roadblock output END"
-        echo "roadblock exit code: $rc"
+        echo "roadblock exit code: ${rc}"
         if [ -f ${msgs_log_file} ]; then
             echo "messages from roadblock:"
             cat ${msgs_log_file}
         fi
+        if [ -n "${wait_for_log}" -a -f "${wait_for_log}" ]; then
+            echo "wait-for log:"
+            cat ${wait_fir_log}
+            rm ${wait_for_log}
+        fi
     done
-    echo "total attempts: $attempts"
+
+    echo "total attempts: ${attempts}"
     echo "Completed roadblock [`date`]"
     printf "\n\n"
 
-    return $rc
+    echo "returning ${rc}"
+    return ${rc}
 }
 
 function prepare_roadblock_user_msgs_file {
@@ -486,6 +518,10 @@ function process_bench_roadblocks() {
         endpoint_type=$1; shift
     fi
 
+    do_roadblock "setup-bench-begin" ${default_timeout}
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
     local quit=0
     local abort
     local timeout=$default_timeout
@@ -514,9 +550,13 @@ function process_bench_roadblocks() {
         sample_data_attempt_fail[${iter_array_idx}]=0
 
         (( total_tests += 1 ))
-    done 9< "${client_server_bench_cmds_dir}/client/1/start"
+    done 9< "${engine_bench_cmds_dir}/client/1/start"
 
     echo "Total tests: ${total_tests}"
+
+    do_roadblock "setup-bench-end" ${default_timeout}
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
 
     local current_test=0
     while read -u 9 line; do
@@ -566,31 +606,31 @@ function process_bench_roadblocks() {
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
             rb_name=$(printf "%s%s" ${rb_prefix} "infra-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "server-start-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
             rb_name=$(printf "%s%s" ${rb_prefix} "server-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -600,13 +640,13 @@ function process_bench_roadblocks() {
 
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "client-start-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -625,7 +665,7 @@ function process_bench_roadblocks() {
 
             rb_name=$(printf "%s%s" ${rb_prefix} "client-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
@@ -637,31 +677,31 @@ function process_bench_roadblocks() {
 
             rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
             rb_name=$(printf "%s%s" ${rb_prefix} "client-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
@@ -671,19 +711,19 @@ function process_bench_roadblocks() {
 
             rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
             rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-begin")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
             rb_name=$(printf "%s%s" ${rb_prefix} "infra-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
-            do_roadblock "${rb_name}" "follower" ${timeout} "${user_msgs_file}"
+            do_roadblock "${rb_name}" ${timeout} messages "${user_msgs_file}"
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
             ####################################################################
@@ -716,7 +756,7 @@ function process_bench_roadblocks() {
                    ${max_sample_failures} \
                    ${sample_result}
         done
-    done 9< "$client_server_bench_cmds_dir/client/1/start"
+    done 9< "$engine_bench_cmds_dir/client/1/start"
 }
 
 function process_roadblocks() {
@@ -725,6 +765,7 @@ function process_roadblocks() {
     local msg_file=""
     local roadblock_rc
 
+    local msgs_arg=""
     if [ ! -z "$new_followers" ]; then
         echo "pwd: `/bin/pwd`"
         msg_file="$endpoint_run_dir/new-followers.json"
@@ -733,52 +774,53 @@ function process_roadblocks() {
         echo $new_followers | sed  -re 's/^\s+//' -re 's/\s+$//' -re 's/\s+/,/g' -re 's/([^,]+)/"\1"/g' >>$msg_file
         echo ']}}]' >>$msg_file
         echo "ls: `/bin/ls`"
+        msgs_arg="messages ${msg_file}"
     fi
 
 
-    do_roadblock "endpoint-deploy-begin" "follower" $endpoint_deploy_timeout $msg_file
+    do_roadblock "endpoint-deploy-begin" ${endpoint_deploy_timeout} ${msgs_arg}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    do_roadblock "endpoint-deploy-end" "follower" $endpoint_deploy_timeout
-    roadblock_rc=$?
-    roadblock_exit_on_error ${roadblock_rc}
-
-
-    do_roadblock "engine-init-begin" "follower" $client_server_script_start_timeout
-    roadblock_rc=$?
-    roadblock_exit_on_error ${roadblock_rc}
-
-    do_roadblock "engine-init-end" "follower" $client_server_script_start_timeout
+    do_roadblock "endpoint-deploy-end" ${endpoint_deploy_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
 
-    do_roadblock "get-data-begin" "follower" $default_timeout
+    do_roadblock "engine-init-begin" ${engine_script_start_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    do_roadblock "get-data-end" "follower" $default_timeout
+    do_roadblock "engine-init-end" ${engine_script_start_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
 
-    do_roadblock "collect-sysinfo-begin" "follower" $default_timeout
+    do_roadblock "get-data-begin" ${default_timeout}
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+    do_roadblock "get-data-end" ${default_timeout}
+    roadblock_rc=$?
+    roadblock_exit_on_error ${roadblock_rc}
+
+
+    do_roadblock "collect-sysinfo-begin" ${default_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
     # run packrat here somehow eventually
 
-    do_roadblock "collect-sysinfo-end" "follower" $default_timeout
+    do_roadblock "collect-sysinfo-end" ${default_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
 
-    do_roadblock "start-tools-begin" "follower" $default_timeout
+    do_roadblock "start-tools-begin" ${default_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    do_roadblock "start-tools-end" "follower" $default_timeout
+    do_roadblock "start-tools-end" ${default_timeout}
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
@@ -786,25 +828,27 @@ function process_roadblocks() {
     process_bench_roadblocks $endpoint_type
 
 
-    do_roadblock "stop-tools-begin" "follower" $default_timeout
-    do_roadblock "stop-tools-end" "follower" $default_timeout
+    do_roadblock "stop-tools-begin" ${default_timeout}
+    do_roadblock "stop-tools-end" ${default_timeout}
 
 
-    do_roadblock "send-data-begin" "follower" $default_timeout
-    do_roadblock "send-data-end" "follower" $default_timeout
+    do_roadblock "send-data-begin" ${default_timeout}
+    do_roadblock "send-data-end" ${default_timeout}
 
 
-    do_roadblock "endpoint-cleanup-begin" "follower" $default_timeout
+    do_roadblock "endpoint-cleanup-begin" ${default_timeout}
     if [ ! -z "$endpoint_type" ]; then
         endpoint_${endpoint_type}_cleanup
     fi
-    do_roadblock "endpoint-cleanup-end" "follower" $default_timeout
+    do_roadblock "endpoint-cleanup-end" ${default_timeout}
 }
 
 function is_ip() {
     local ip=$1; shift
 
     if echo "$ip" | egrep --silent '[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}\.[[:digit:]]{1,3}'; then
+        return 0
+    elif echo "$ip" | egrep --silent '[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]{1,4}\:[[:xdigit:]]'; then
         return 0
     else
         return 1
@@ -816,6 +860,21 @@ function get_controller_ip() {
 
     host=$1
     shift
+
+    if [ -z "${host}" ]; then
+        exit_error "No controller hostname provided to determine IP address"
+        return 1
+    else
+        if [ "${host}" == "localhost" ]; then
+            # get IPv4 address by forcing it via the grep
+            host=$(ip addr show lo | grep "inet\s" | awk '{ print $2 }' | awk -F/ '{ print $1 }')
+
+            if [ -z "${host}" ] || ! is_ip ${host}; then
+                exit_error "Failed to map localhost to loopback IP address (got '${host}')"
+                return 1
+            fi
+        fi
+    fi
 
     if is_ip ${host}; then
         if ip addr | grep -q ${host}; then
@@ -829,7 +888,7 @@ function get_controller_ip() {
     else
         endpoint_ip=$(host ${host} | grep "has address" | head -1 | awk -F"has address " '{ print $2 }')
 
-        if ! is_ip ${endpoint_ip}; then
+        if [ -z "${endpoint_ip}" ] || ! is_ip ${endpoint_ip}; then
             exit_error "Failed to determine endpoint IP address (got '${endpoint_ip}')"
             return 1
         fi
@@ -839,7 +898,7 @@ function get_controller_ip() {
     # IP this endpoint will need to use to contact the controller
     controller_ip=$(ip route get ${endpoint_ip} | head -1 | awk -F"src " '{ print $2 }' | awk '{ print $1 }')
 
-    if ! is_ip ${controller_ip}; then
+    if [ -z "${controller_ip}" ] || ! is_ip ${controller_ip}; then
         exit_error "Failed to determine controller IP address (got '${controller_ip}')"
         return 1
     else
@@ -873,7 +932,7 @@ function load_settings() {
     if [ "$do_validate" != 1 ]; then
         load_json_setting "roadblock.timeouts.default" default_timeout
         load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
-        load_json_setting "roadblock.timeouts.client-server-start" client_server_script_start_timeout
+        load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
     fi
 }

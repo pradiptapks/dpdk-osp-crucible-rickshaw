@@ -1,7 +1,7 @@
 {
   "workshop": {
     "schema": {
-      "version": "2020.03.02"
+      "version": "2022.07.25"
     }
   },
   "userenv": {
@@ -67,10 +67,10 @@
     },
     {
       "name": "epel7",
-      "type": "manual",
-      "manual_info": {
-        "commands": [
-          "yum -v -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
+      "type": "distro-manual",
+      "distro-manual_info": {
+        "packages": [
+          "https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
         ]
       }
     },

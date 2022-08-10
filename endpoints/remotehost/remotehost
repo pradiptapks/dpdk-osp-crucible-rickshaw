@@ -43,11 +43,13 @@ fi
 chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
 
 endpoint_name="remotehost"
-osruntime="chroot"
+image_cache_size=3
 userenv="rhubi8"
 user="root"
 declare -A cpuPartitioning
 declare -A numaNode
+declare -A osruntime
+osruntime[default]="chroot"
 host_mounts=""
 
 function endpoint_remotehost_test_stop() {
@@ -126,7 +128,7 @@ function endpoint_remotehost_test_start() {
 }
 
 function cleanup_osruntime() {
-    local container_name container_image
+    local container_name container_image this_cs_label tmp_osruntime data_file
     echo "Doing osruntime cleanup"
     echo
     echo "All mounts on this remote host:"
@@ -138,32 +140,50 @@ function cleanup_osruntime() {
     echo "All podman container mounts:"
     do_ssh $user@$host podman mount
     echo
-    container_name="${endpoint_label}_${run_id}"
-    if [ "$osruntime" == "chroot" ]; then
 
-        if [ -e $endpoint_run_dir/chroot-container-mount.txt ]; then
-            container_mount=`cat $endpoint_run_dir/chroot-container-mount.txt`
-            for fs in ${chroot_rbind_mounts}; do
-                echo "Removing ${fs} from ${container_mount}"
-                do_ssh $user@$host umount --verbose --recursive ${container_mount}/${fs}
-                echo
-            done
-            echo "Unmounting container base mount [$container_mount] for chroot using container [$container_name]"
-            do_ssh $user@$host podman umount $container_name
-        else
-            echo "WARNING: the file with container base mount [$endpoint_run_dir/chroot-container-mount.txt] could not be found"
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        tmp_osruntime=${osruntime[default]}
+        set +u
+        if [ ! -z "${osruntime[$this_cs_label]}" ]; then
+            tmp_osruntime=${osruntime[$this_cs_label]}
         fi
-    #elif [ "${osruntime}" == "podman" ]; then
-        # podman specific things would go here...
-    fi
+        set -u
 
-    echo "Removing container with name [$container_name]"
-    do_ssh $user@$host podman rm $container_name
-    echo
+        if [ "${tmp_osruntime}" == "chroot" ]; then
+            data_file=${endpoint_run_dir}/chroot-container-mount.txt
+            if [ -e ${data_file} ]; then
+                while read tmp_cs_label container_mount; do
+                    if [ "${this_cs_label}" == "${tmp_cs_label}" ]; then
+                        for fs in ${chroot_rbind_mounts}; do
+                            echo "Removing ${fs} from ${container_mount}"
+                            do_ssh ${user}@${host} umount --verbose --recursive ${container_mount}/${fs}
+                        done
+                    fi
+                done < ${data_file}
+            else
+                echo "WARNING: the file with container base mount [${data_file}] could not be found"
+            fi
+
+            data_file=$endpoint_run_dir/chroot-container-id.txt
+            if [ -e ${data_file} ]; then
+                while read tmp_cs_label container_id; do
+                    if [ "${this_cs_label}" == "${tmp_cs_label}" ]; then
+                        echo "Removing container with id [${container_id}]"
+                        do_ssh ${user}@${host} podman rm ${container_id}
+                    fi
+                done < ${data_file}
+            else
+                echo "WARNING: the file with container base mount [${data_file}] could not be found"
+            fi
+        elif [ "${tmp_osruntime}" == "podman" ]; then
+            container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
+            do_ssh $user@$host podman rm ${container_name}
+        fi
+    done
 
     # manage container image cache on the host
     echo "Performing container image cache management:"
-    $endpoint_base_dir/remotehost/container-image-manager --remote-host $user@$host --debug 0
+    ${endpoint_base_dir}/remotehost/container-image-manager --remote-host ${user}@${host} --cache-size ${image_cache_size} --debug 0
     echo
 
     echo "Remaining containers on this remote host:"
@@ -187,24 +207,42 @@ function process_remotehost_opts() {
         # The $val may have : in it, so don't use awk to get only the second field
         val=`echo $this_opt | sed -e s/^$arg://`
         case "$arg" in
-            client|server|clients|servers)
+            client|server|clients|servers|profiler)
                 addto_clients_servers "$arg" "$val"
                 ;;
             osruntime)
-                case "$val" in
-                    builtin|chroot|podman)
-                        osruntime=$val
-                        ;;
-                    *)
-                        exit_error "osruntime $val not supported"
-                        ;;
-                esac
+                # osruntime is per engine:
+                # option format:: osruntime:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # for backwards compability values in the form of 'osruntime:<value>' will map to 'osruntime:default:<value>'
+                #TODO: validate correct format of <engine-label>
+
+                # backwards compability transformation
+                if ! echo "${val}" | grep -q -e '[a-zA-Z0-9\-]:[a-zA-Z0-9\-]'; then
+                    val="default:${val}"
+                fi
+
+                name=$(echo "${val}" | awk -F: '{ print $1 }')
+                value=$(echo "${val}" | awk -F: '{ print $2 }')
+
+                if [ -z "${name}" -o -z "${value}" ]; then
+                    exit_error "Could not properly decode osruntime for '${val}'"
+                else
+                    case "${value}" in
+                        chroot|podman)
+                            osruntime[${name}]=${value}
+                            ;;
+                        *)
+                            exit_error "osruntime '${value}' for '${name}' not supported"
+                            ;;
+                    esac
+                fi
                 ;;
             numa-node)
                 # node-node is per engine:
-                # option format:: numa-node:<engine-name>:<value>
-                # <engine-name> can be 'default' to apply to any engine that is not explicitly specified
-                #TODO: validate correct format of <client-server-label>
+                # option format:: numa-node:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                #TODO: validate correct format of <engine-label>
                 name=`echo $val | awk -F: '{ print $1 }'`
                 value=`echo $val | awk -F: '{ print $2 }'`
                 if [ ! -z "$name}" -a ! -z "$value" ]; then
@@ -233,12 +271,12 @@ function process_remotehost_opts() {
                 ;;
             cpu-partitioning)
                 # cpu-partitioning is per engine:
-                # option format:: cpu-partitioning:<engine-name>:<value>
-                # <engine-name> can be 'default' to apply to any engine that is no explicitly specified
-                #TODO: validate correct format of <client-server-label>
+                # option format:: cpu-partitioning:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is no explicitly specified
+                #TODO: validate correct format of <label-label>
                 name=`echo $val | awk -F: '{ print $1 }'`
                 value=`echo $val | awk -F: '{ print $2 }'`
-                if [ ! -z "$name}" -a ! -z "$value" ]; then
+                if [ ! -z "${name}" -a ! -z "${value}" ]; then
                     cpuPartitioning[$name]=$value
                 else
                     exit_error "Could not properly decode cpu-partitioning for '$val'"
@@ -246,6 +284,9 @@ function process_remotehost_opts() {
                 ;;
             disable-tools)
                 disable_tools="$val"
+                ;;
+            image-cache-size)
+                image_cache_size=$val
                 ;;
             *)
                 if echo $arg | grep -q -- "="; then
@@ -281,7 +322,7 @@ function remotehost_req_check() {
 function launch_osruntime() {
     local this_cs_label this_cs_log_file base_cmd cs_cmd cs_rb_env env_file
     local env_opts existing_container container_id container_mount container_name fs
-    echo "osruntime: $osruntime"
+    local total_cpu_partitions tmp_osruntime
 
     # create working directories
     do_ssh $user@$host /bin/mkdir -p $remote_cfg_dir
@@ -294,58 +335,40 @@ function launch_osruntime() {
     echo "Recording container image usage"
     do_ssh $user@$host "echo '$image $(date -u +%s)' >> ${remote_base_dir}/remotehost-container-image-census"
 
-    container_name="${endpoint_label}_${run_id}"
-    existing_container=`do_ssh $user@$host podman ps --all --format "{{.Names}}" | grep ^$container_name$`
-    if [ ! -z "$existing_container" ]; then
-        echo "WARNING: found existing container '$existing_container', deleting"
-        do_ssh $user@$host podman rm $container_name
-    fi
     echo "$image" >$endpoint_run_dir/chroot-container-image.txt
-    if [ "$osruntime" == "chroot" ]; then
-        echo "Adding mount for chroot osruntime"
-        container_id=`do_ssh $user@$host podman create --name $container_name $image`
-        echo "$container_id"
-        container_mount=`do_ssh $user@$host podman mount "$container_id"`
-        echo "$container_id" >$endpoint_run_dir/chroot-container-id.txt
-        echo "$container_mount" >$endpoint_run_dir/chroot-container-mount.txt
-        if [ ! -z "$container_mount" ]; then
-            echo "Container mount: $container_mount"
-            # Allow the user to more easily inspect failed runs
-            echo "Mapping container /tmp to host $remote_data_dir"
-            do_ssh $user@$host mkdir -p $container_mount/tmp
-            do_ssh $user@$host mount --verbose --options bind $remote_data_dir $container_mount/tmp
-            echo "Adding host directories to container mount"
-            if [ "$host_mounts" != "" ]; then
-                local oldIFS=$IFS
-                IFS=" "
-                for fs in $host_mounts; do
-                    chroot_rbind_mounts+=" $fs"
-                done
-                IFS=$oldIFS
-            fi
-            for fs in ${chroot_rbind_mounts}; do
-                echo "Adding ${fs} to ${container_mount}"
-                do_ssh $user@$host mkdir -p $container_mount/$fs
-                do_ssh $user@$host mount --verbose --options rbind /$fs $container_mount/$fs
-                do_ssh $user@$host mount --verbose --make-rslave $container_mount/$fs
-                echo
-            done
-            # for chroot osruntime we can also simply copy the ssh key
-            echo "Copying ssh key to $user@$host:$container_mount/tmp/ for chroot runtime"
-            pushd "$config_dir" >/dev/null
-            do_scp "rickshaw_id.rsa" "$user@$host:$container_mount/tmp/"
-            popd >/dev/null
-            do_ssh $user@$host /bin/cp /etc/hosts $container_mount/etc/
-            do_ssh $user@$host /bin/cp /etc/resolv.conf $container_mount/etc/
-        else
-            echo "Container mount not found, exiting"
-            exit 1
+
+    total_cpu_partitions=0
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        set +u
+        cpu_partitioning=0
+        if [ ! -z "${cpuPartitioning[$this_cs_label]}" ]; then
+            cpu_partitioning=${cpuPartitioning[$this_cs_label]}
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            cpu_partitioning=${cpuPartitioning[default]}
         fi
-    fi
+        set -u
+
+        if [ "${cpu_partitioning}" == "1" ]; then
+            (( total_cpu_partitions++ ))
+        fi
+    done
 
     # For each client and server launch the actual script which will run it.
     count=1
-    for this_cs_label in ${clients[@]} ${servers[@]}; do
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        tmp_osruntime=${osruntime[default]}
+        set +u
+        if [ ! -z "${osruntime[$this_cs_label]}" ]; then
+            tmp_osruntime=${osruntime[$this_cs_label]}
+        fi
+        set -u
+
+        container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
+        existing_container=`do_ssh $user@$host podman ps --all --format "{{.Names}}" | grep ^$container_name$`
+        if [ ! -z "$existing_container" ]; then
+            echo "WARNING: found existing container '$existing_container', deleting"
+            do_ssh $user@$host podman rm $container_name
+        fi
         this_cs_log_file="$this_cs_label.txt"
 
         set +u
@@ -374,8 +397,51 @@ function launch_osruntime() {
             this_disable_tools="$disable_tools"
         fi
 
-        if [ "$osruntime" == "chroot" ]; then
+        if [ "${tmp_osruntime}" == "chroot" ]; then
             echo "using chroot"
+
+            echo "Adding mount for chroot osruntime"
+            container_id=$(do_ssh ${user}@${host} podman create --name ${container_name} ${image})
+            echo "container_id: ${container_id}"
+            echo "${this_cs_label} ${container_id}" >>${endpoint_run_dir}/chroot-container-id.txt
+            container_mount=$(do_ssh ${user}@${host} podman mount "${container_id}")
+            echo "container_mount: ${container_mount}"
+            echo "${this_cs_label} ${container_mount}" >>${endpoint_run_dir}/chroot-container-mount.txt
+            echo "container_name: $container_name"
+            echo "${this_cs_label} ${container_name}" >>${endpoint_run_dir}/chroot-container-name.txt
+            if [ ! -z "${container_mount}" ]; then
+                echo "Container mount: ${container_mount}"
+                # Allow the user to more easily inspect failed runs
+                echo "Mapping container /tmp to host ${remote_data_dir}"
+                do_ssh ${user}@${host} mkdir -p ${container_mount}/tmp
+                do_ssh ${user}@${host} mount --verbose --options bind ${remote_data_dir} ${container_mount}/tmp
+                echo "Adding host directories to container mount"
+                if [ "${host_mounts}" != "" ]; then
+                    local oldIFS=${IFS}
+                    IFS=" "
+                    for fs in ${host_mounts}; do
+                        chroot_rbind_mounts+=" ${fs}"
+                    done
+                    IFS=${oldIFS}
+                fi
+                for fs in ${chroot_rbind_mounts}; do
+                    echo "Adding ${fs} to ${container_mount}"
+                    do_ssh ${user}@${host} mkdir -p ${container_mount}/${fs}
+                    do_ssh ${user}@${host} mount --verbose --options rbind /${fs} ${container_mount}/${fs}
+                    do_ssh ${user}@${host} mount --verbose --make-rslave ${container_mount}/${fs}
+                    echo
+                done
+                # for chroot osruntime we can also simply copy the ssh key
+                echo "Copying ssh key to ${user}@${host}:${container_mount}/tmp/ for chroot runtime"
+                pushd "${config_dir}" >/dev/null
+                do_scp "" "rickshaw_id.rsa" "${user}@${host}" "${container_mount}/tmp/"
+                popd >/dev/null
+                do_ssh ${user}@${host} /bin/cp /etc/hosts ${container_mount}/etc/
+                do_ssh ${user}@${host} /bin/cp /etc/resolv.conf ${container_mount}/etc/
+            else
+                echo "Container mount not found, exiting"
+                exit 1
+            fi
 
             base_cmd="/usr/local/bin/bootstrap"
             base_cmd+=" --rickshaw-host=$controller_ipaddr"
@@ -384,11 +450,13 @@ function launch_osruntime() {
             base_cmd+=" --cs-label=$this_cs_label"
             base_cmd+=" --base-run-dir=$base_run_dir"
             base_cmd+=" --endpoint=remotehost"
-            base_cmd+=" --osruntime=$osruntime"
+            base_cmd+=" --osruntime=${tmp_osruntime}"
             base_cmd+=" --max-sample-failures=$max_sample_failures"
             base_cmd+=" --max-rb-attempts=$max_rb_attempts"
+            base_cmd+=" --cpu-partitions=${total_cpu_partitions}"
+            base_cmd+=" --cpu-partition-index=${count}"
             base_cmd+=" --cpu-partitioning=$cpu_partitioning"
-            base_cmd+=" --client-server-script-start-timeout=$client_server_script_start_timeout"
+            base_cmd+=" --engine-script-start-timeout=$engine_script_start_timeout"
             base_cmd+=" --disable-tools=$this_disable_tools"
             if [ $numa_node -gt -1 ]; then
                 base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
@@ -397,7 +465,7 @@ function launch_osruntime() {
             # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
             # Same will be true for running podman
             cs_cmd="nohup chroot $container_mount $base_cmd >$remote_logs_dir/$this_cs_log_file &"
-        elif [ "$osruntime" == "podman" ]; then
+        elif [ "${tmp_osruntime}" == "podman" ]; then
             echo "using podman"
 
             env_file="${this_cs_label}_env.txt"
@@ -408,8 +476,10 @@ function launch_osruntime() {
             echo "cs_label=$this_cs_label"                  >> ${endpoint_run_dir}/${env_file}
             echo "base_run_dir=$base_run_dir"               >> ${endpoint_run_dir}/${env_file}
             echo "cpu_partitioning=$cpu_partitioning"       >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partitions=${total_cpu_partitions}"   >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partition_index=${count}"             >> ${endpoint_run_dir}/${env_file}
             echo "endpoint=remotehost"                      >> ${endpoint_run_dir}/${env_file}
-            echo "osruntime=$osruntime"                     >> ${endpoint_run_dir}/${env_file}
+            echo "osruntime=${tmp_osruntime}"               >> ${endpoint_run_dir}/${env_file}
             echo "max_sample_failures=$max_sample_failures" >> ${endpoint_run_dir}/${env_file}
             echo "max_rb_attempts=$max_rb_attempts"         >> ${endpoint_run_dir}/${env_file}
             echo "ssh_id=${ssh_id}"                         >> ${endpoint_run_dir}/${env_file}
@@ -426,7 +496,7 @@ function launch_osruntime() {
 
             if pushd ${endpoint_run_dir} >/dev/null; then
                 echo "Copying ${endpoint_run_dir}/${env_file} to ${user}@${host}:${remote_cfg_dir}"
-                do_scp "${env_file}" "${user}@${host}:${remote_cfg_dir}"
+                do_scp "" "${env_file}" "${user}@${host}" "${remote_cfg_dir}"
 
                 popd >/dev/null
             else
@@ -472,21 +542,32 @@ function launch_osruntime() {
 }
 
 function move_remotehost_logs() {
-    local this_cs_label remote_cs_log_file container_name
-    mkdir -p "$client_server_logs_dir"
-    for this_cs_label in ${clients[@]} ${servers[@]}; do
-        if [ "${osruntime}" == "chroot" ]; then
+    local this_cs_label remote_cs_log_file container_name delete_remote_dir
+    delete_remote_dir=0
+    mkdir -p "$engine_logs_dir"
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        tmp_osruntime=${osruntime[default]}
+        set +u
+        if [ ! -z "${osruntime[$this_cs_label]}" ]; then
+            tmp_osruntime=${osruntime[$this_cs_label]}
+        fi
+        set -u
+
+        if [ "${tmp_osruntime}" == "chroot" ]; then
+            delete_remote_dir=1
             remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
             pushd / >/dev/null
-            do_scp "$user@$host:$remote_cs_log_file" / && \
-                mv $remote_cs_log_file $client_server_logs_dir && \
-                do_ssh $user@$host /bin/rm -r $remote_dir
+            do_scp "$user@$host" "$remote_cs_log_file" "" / && \
+                mv $remote_cs_log_file $engine_logs_dir
             popd >/dev/null
-        elif [ "${osruntime}" == "podman" ]; then
-            container_name="${endpoint_label}_${run_id}"
-            do_ssh $user@$host podman logs ${container_name} > "${client_server_logs_dir}/${this_cs_label}.txt"
+        elif [ "${tmp_osruntime}" == "podman" ]; then
+            container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
+            do_ssh $user@$host podman logs ${container_name} > "${engine_logs_dir}/${this_cs_label}.txt"
         fi
     done
+    if [ "${delete_remote_dir}" == "1" ]; then
+        do_ssh ${user}@${host} /bin/rm -r ${remote_dir}
+    fi
 }
 
 function endpoint_remotehost_cleanup() {

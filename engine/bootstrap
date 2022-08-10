@@ -2,7 +2,8 @@
 # -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
 # vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
 #
-# The following is the minimum amount of code to copy over the client-server-script and no more.
+# The following is the minimum amount of code to start the engine and
+# copy over all remaining files that are needed
 exec 2>&1
 
 echo "BASH_VERSION=${BASH_VERSION}"
@@ -47,7 +48,11 @@ function scp_from_controller() {
     scp_cmd+=" -v"
     scp_cmd+=" -o ConnectionAttempts=10"
     scp_cmd+=" -i $ssh_id_file"
-    scp_cmd+=" -r $rickshaw_host:$src $dest"
+    if echo $rickshaw_host | grep -q ":"; then
+        scp_cmd+=" -r -6 [$rickshaw_host]:$src $dest"
+    else
+        scp_cmd+=" -r $rickshaw_host:$src $dest"
+    fi
     while [ $scp_rc -gt 0 -a $scp_attempts -lt $max_attempts ]; do
         echo "Trying to scp $rickshaw_host:$src $dest"
         scp_output=`$scp_cmd 2>&1`
@@ -75,11 +80,22 @@ echo "$@"
 echo
 longopts="rickshaw-host:,base-run-dir:,endpoint-run-dir:,cs-label:,roadblock-server:"
 longopts+=",roadblock-passwd:,roadblock-id:,disable-tools:,osruntime:,endpoint:,max-sample-failures:"
-longopts+=",cpu-partitioning:,max-rb-attempts:,client-server-script-start-timeout:"
+longopts+=",cpu-partitioning:,max-rb-attempts:,engine-script-start-timeout:"
+longopts+=",cpu-partitions:,cpu-partition-index:"
 opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
 eval set -- "$opts";
 while true; do
     case "$1" in
+        --cpu-partitions)
+            shift;
+            export cpu_partitions="${1}"
+            shift;
+            ;;
+        --cpu-partition-index)
+            shift;
+            export cpu_partition_index="${1}"
+            shift;
+            ;;
         --cpu-partitioning)
             shift;
             export cpu_partitioning="$1"
@@ -145,10 +161,10 @@ while true; do
             export max_rb_attempts="$1"
             shift;
             ;;
-        --client-server-script-start-timeout)
+        --engine-script-start-timeout)
             shift;
-            export client_server_script_start_timeout="$1"
-            echo "setting client_server_script_start_timeout to $client_server_script_start_timeout"
+            export engine_script_start_timeout="$1"
+            echo "setting engine_script_start_timeout to $engine_script_start_timeout"
             shift;
             ;;
         --)
@@ -185,7 +201,7 @@ if [ ! -e $ssh_id_file ]; then
     exit_error "ssh key $ssh_id_file was not found"
 fi
 export config_dir="$base_run_dir/config"
-export client_server_config_dir="$config_dir/client-server"
+export engine_config_dir="$config_dir/engine"
 
 if [ -z "${TOOLBOX_HOME}" ]; then
     export TOOLBOX_HOME="/opt/toolbox"
@@ -199,16 +215,40 @@ if [ "${cpu_partitioning}" == "1" ]; then
     if [ "${endpoint}" == "k8s" ]; then
 	environment="container"
     fi
-    cpu_data=$(/usr/local/bin/discover-cpu-partitioning.py --environment=${environment})
+
+    discover_cmd="/usr/local/bin/discover-cpu-partitioning.py --environment=${environment}"
+    echo "Determining CPU isolation setup by running: ${discover_cmd}"
+    cpu_data=$(${discover_cmd})
 
     # log the data returned
     echo -e "${cpu_data}"
 
+    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
+
+    isolated_cpu_args=""
+    for cpu in $(echo "${isolated_cpus}" | sed -e "s/,/ /g"); do
+        isolated_cpu_args+=" --cpu ${cpu}"
+    done
+    if [ -z "${cpu_partitions}" ]; then
+        cpu_partitions=1
+    fi
+    if [ -z "${cpu_partition_index}" ]; then
+        cpu_partition_index=1
+    fi
+    partition_cmd="/usr/local/bin/partition-cpus.py --partitions ${cpu_partitions} --partition-index ${cpu_partition_index} ${isolated_cpu_args}"
+    echo "Finding the CPU partition by running: ${partition_cmd}"
+    partition_cpu_data=$(${partition_cmd})
+
+    # log the data returned
+    echo -e "${partition_cpu_data}"
+
     housekeeping_cpus=$(echo -e "${cpu_data}" | grep housekeeping | awk '{ print $3 }')
     export HK_CPUS=${housekeeping_cpus}
+    echo "HK_CPUS=${HK_CPUS}"
 
-    isolated_cpus=$(echo -e "${cpu_data}" | grep isolated | awk '{ print $3 }')
-    export WORKLOAD_CPUS=${isolated_cpus}
+    partition_cpus=$(echo -e "${partition_cpu_data}" | grep partition | awk '{ print $3 }')
+    export WORKLOAD_CPUS=${partition_cpus}
+    echo "WORKLOAD_CPUS=${WORKLOAD_CPUS}"
 
     # pin myself to the housekeeping cpus so that I and my children
     # are contained there
@@ -225,11 +265,12 @@ if [ ! -e ${json_settings_file} ]; then
     exit_error "Could not find rickshaw-settings.json.xz"
 fi
 
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script" /usr/local/bin/
-scp_from_controller "$ssh_id_file" "$client_server_config_dir/client-server-script-library" /usr/local/bin/
-if [ -e /usr/local/bin/client-server-script -a -e /usr/local/bin/client-server-script-library ]; then
-    echo "Execing client-server-script:"
-    exec /usr/local/bin/client-server-script
+scp_from_controller "$ssh_id_file" "$engine_config_dir/engine-script" /usr/local/bin/
+scp_from_controller "$ssh_id_file" "$engine_config_dir/engine-script-library" /usr/local/bin/
+scp_from_controller "$ssh_id_file" "$engine_config_dir/roadblock.py" /usr/local/bin
+if [ -e /usr/local/bin/engine-script -a -e /usr/local/bin/engine-script-library ]; then
+    echo "Execing engine-script:"
+    exec /usr/local/bin/engine-script
 else
-    exit_error "Could not find client-server-script or client-server-script-library"
+    exit_error "Could not find engine-script or engine-script-library"
 fi

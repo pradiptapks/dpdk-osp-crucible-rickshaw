@@ -44,7 +44,6 @@ my %defaults = ( "num-samples" => 1, "tool-group" => "default", "test-order" => 
 my @utilities = ( "packrat" );
 
 my $jsonsettings;
-my $use_roadblock = 0;
 my $use_workshop = 0;
 my %bench_config;
 my @endpoints;
@@ -56,7 +55,7 @@ my $rb_bin = "/usr/local/bin/roadblock.py";
 my $messages_ref;
 my $default_rb_timeout;
 my $endpoint_deploy_timeout;
-my $client_server_script_start_timeout;
+my $engine_script_start_timeout;
 my $endpoint_move_data_rb_timeout;
 (my $hostname_cmd, my $hostname, my $hostname_rc) = run_cmd('hostname');
 chomp ($hostname);
@@ -69,16 +68,17 @@ my $base_rb_leader_cmd = $rb_bin . " --role=leader --redis-server=localhost" .
 my $base_rb_follower_cmd = $rb_bin . " --role=follower --redis-server=localhost" .
                            " --redis-password=" . $redis_passwd . "\$abort_opt";
 my $config_dir;
-my $client_server_config_dir;
-my $client_server_bench_cmds_dir;
+my $engine_config_dir;
+my $engine_bench_cmds_dir;
 my $tool_cmds_dir;
 my $run_dir;
 my $base_endpoint_run_dir;
-my $client_server_run_dir;
-my $client_server_logs_dir;
-my $client_server_archives_dir;
-my $client_server_run_script;
-my $client_server_library_script;
+my $engine_run_dir;
+my $engine_logs_dir;
+my $engine_archives_dir;
+my $engine_run_script;
+my $engine_library_script;
+my $engine_roadblock_script;
 my $iterations_dir;
 my $rickshaw_project_dir;
 my $roadblock_msgs_dir;
@@ -165,80 +165,81 @@ sub find_files {
 }
 
 sub do_roadblock {
-    if ($use_roadblock) {
-        my $attempts = 0;
-        my $rc = 99;
-        my $file_rc;
-        my $label = shift;
-        my $timeout = shift;
-        my $output;
-        my $role = "leader";
-        my $uuid = $run{'id'} . ":" . $label;
-        # save $_[0] for by ref later to store json ref
-        my $follower_param = "";
-        for (my $i=1; $i < scalar @_; $i++) {
-            $follower_param .= " --followers=" . $_[$i];
+    my $label = shift;
+    my $timeout = shift;
+    # $_[0] is for a reference to the messages data structure
+
+    my $follower;
+    my $follower_param = "";
+    for (my $i=1; $i<scalar(@_); $i++) {
+        $follower = $_[$i];
+        $follower_param .= " --followers=" . $follower;
+    }
+
+    my $attempts = 0;
+    my $rc = 99;
+    my $file_rc;
+    my $output;
+    my $role = "leader";
+    my $uuid = $run{'id'} . ":" . $label;
+
+    my $msgs_log_file = $roadblock_msgs_dir . "/" . $label . ".json";
+    (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
+    chomp $date;
+    printf "Roadblock: %s ", $date;
+    while ($attempts < $run{'max-rb-attempts'} and $rc != $roadblock_exit_success and $rc != $roadblock_exit_abort) {
+        $attempts++;
+        my $this_uuid = $attempts . ":" . $uuid;
+        printf "role: %s ", $role;
+        printf "attempt number: %d ", $attempts;
+        printf "uuid: %s\n", $this_uuid;
+        my $cmd = $base_rb_leader_cmd .
+            " --leader-id=controller" .
+            " --uuid=" . $this_uuid .
+            " --timeout=" . $timeout .
+            " --message-log=" . $msgs_log_file .
+            $follower_param;
+        debug_log(sprintf "roadblock leader command:%s\n", $cmd);
+        ($cmd, $output, $rc) = run_cmd($cmd);
+        debug_log(sprintf "roadblock leader rc:%s\n", $rc);
+        debug_log(sprintf "roadblock leader output:\n%s\n", $output);
+        ($file_rc, $_[0]) = get_json_file($msgs_log_file);
+        if ($file_rc > 0 or ! defined $_[0]) {
+            print "Could not open the message file\n";
+            exit 1;
         }
-        my $msgs_log_file = $roadblock_msgs_dir . "/" . $label . ".json";
-        (my $date_cmd, my $date, my $date_rc) = run_cmd('date');
-        chomp $date;
-        printf "Roadblock: %s ", $date;
-        while ($attempts < $run{'max-rb-attempts'} and $rc != $roadblock_exit_success and $rc != $roadblock_exit_abort) {
-            $attempts++;
-            my $this_uuid = $attempts . ":" . $uuid;
-            printf "role: %s ", $role;
-            printf "attempt number: %d ", $attempts;
-            printf "uuid: %s\n", $this_uuid;
-            my $cmd = $base_rb_leader_cmd .
-                    " --leader-id=controller" .
-                    " --uuid=" . $this_uuid .
-                    " --timeout=" . $timeout .
-                    " --message-log=" . $msgs_log_file .
-                    $follower_param;
-            debug_log(sprintf "roadblock leader command:%s\n", $cmd);
-            ($cmd, $output, $rc) = run_cmd($cmd);
-            debug_log(sprintf "roadblock leader rc:%s\n", $rc);
-            debug_log(sprintf "roadblock leader output:\n%s\n", $output);
-            ($file_rc, $_[0]) = get_json_file($msgs_log_file);
-            if ($file_rc > 0 or ! defined $_[0]) {
-                print "Could not open the message file\n";
-                exit 1;
-            }
-            if ( $rc != $roadblock_exit_success) {
-                printf "roadblock output BEGIN\n";
-                printf "%s", $output;
-                printf "roadblock rc: %d\n", $rc;
-                printf "roadblock output END\n";
-            }
-            if ( $rc == $roadblock_exit_abort ) {
-                printf "roadblock messages\n";
-                foreach my $msg (@{ $_[0]{'received'} }) {
-                    if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
-                        printf "\nError from %s:\n%s\n\n", $$msg{'payload'}{'sender'}{'id'}, $$msg{'payload'}{'message'}{'user-object'}{'error'};
-                    }
+        if ( $rc != $roadblock_exit_success) {
+            printf "roadblock output BEGIN\n";
+            printf "%s", $output;
+            printf "roadblock rc: %d\n", $rc;
+            printf "roadblock output END\n";
+        }
+        if ( $rc == $roadblock_exit_abort ) {
+            printf "roadblock messages\n";
+            foreach my $msg (@{ $_[0]{'received'} }) {
+                if (exists $$msg{'payload'}{'message'}{'user-object'} and exists $$msg{'payload'}{'message'}{'user-object'}{'error'}) {
+                    printf "\nError from %s:\n%s\n\n", $$msg{'payload'}{'sender'}{'id'}, $$msg{'payload'}{'message'}{'user-object'}{'error'};
                 }
             }
         }
-        if ($rc == $roadblock_exit_abort or $rc == $roadblock_exit_success) {
-            ($file_rc, $_[0]) = get_json_file($msgs_log_file);
-            if ($file_rc > 0 or ! defined $_[0]) {
-                print "Could not open the message file\n";
-                exit 1;
-            }
-            return $rc;
-        } else {
-            my @dropped_followers = ();
-            foreach my $line (split(/\n/, $output)) {
-                if ($line =~ /These followers/) {
-                    my @line_pieces = split(/: /, $line);
-                    push @dropped_followers, split(/\s/, $line_pieces[1]);
-                }
-            }
-            debug_log(sprintf "roadblock dropped followers: %s\n", join(" ", @dropped_followers));
-            return $rc, @dropped_followers;
+    }
+    if ($rc == $roadblock_exit_abort or $rc == $roadblock_exit_success) {
+        ($file_rc, $_[0]) = get_json_file($msgs_log_file);
+        if ($file_rc > 0 or ! defined $_[0]) {
+            print "Could not open the message file\n";
+            exit 1;
         }
+        return $rc;
     } else {
-        return 0;
+        my @dropped_followers = ();
+        foreach my $line (split(/\n/, $output)) {
+            if ($line =~ /These followers/) {
+                my @line_pieces = split(/: /, $line);
+                push @dropped_followers, split(/\s/, $line_pieces[1]);
+            }
+        }
+        debug_log(sprintf "roadblock dropped followers: %s\n", join(" ", @dropped_followers));
+        return $rc, @dropped_followers;
     }
 }
 
@@ -285,7 +286,7 @@ sub file_newer_than {
     {
         (my $cmd, my $file_time, my $cmd_rc) = run_cmd("/bin/ls -l --time-style=+%s $file");
         chomp($file_time);
-        # -rwxrwxr-x. 1 someuser somegroup 4656 1582742663 client-server-script
+        # -rwxrwxr-x. 1 someuser somegroup 4656 1582742663 engine-script
         if ($file_time =~ /\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\d+)\s+.*/) {
             if ($1 > $epoch_sec) {
                 return 1;
@@ -530,7 +531,7 @@ sub workshop_build_image {
                              . " --proj " . $proj
                              . " --label " . $run{'reg-label'}
                              . " --tag " . $image_tag;
-    debug_log(sprintf "Going to generate a new client-server container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
+    debug_log(sprintf "Going to generate a new engine container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
     ($workshop_build_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_build_cmd);
     my @workshop_output = split(/\n/, $workshop_output);
     my $workshop_output_file = $run_dir . "/workshop.stage-" . $stage . "." . $image_tag . ".stdout.txt";
@@ -538,7 +539,9 @@ sub workshop_build_image {
     printf $fh "%s\n", join("\n", @workshop_output);
     close($fh);
     if ($workshop_rc > 0) {
-        printf "Workshop build failed:\n";
+        printf "Workshop build failed: rc=%d\n", $workshop_rc;
+        printf "Workshop build command: %s\n", $workshop_build_cmd;
+        printf "Workshop build output:\n";
         printf "%s\n", join("\n", @workshop_output);
         exit 1;
     }
@@ -636,7 +639,7 @@ sub build_reqs {
     # change frequently, we should consider sourcing this requirement
     # after a container image is provisioned, but that generally only works
     # if the contents of the requirment is of type "files".  An example of
-    # this is the client-server-script from subproject 'engine' and various
+    # this is the engine-script from the engine subdirectory and various
     # scripts from benchmarks and tools..
     #
     # Why is this order important?  We build container images incrementally,
@@ -729,46 +732,9 @@ sub build_reqs {
     # The second toolbox req ensures the proper dependencies are installed
     push (@$req_ref, "--requirement " . $ENV{'TOOLBOX_HOME'} .  "/workshop.json");
 
-    if ($use_roadblock) {
-        my $rb_script_req_file = $config_dir . "/roadblock-script-req.json";
-        # The first rb req ensures the roadblock script is installed in /usr/local/bin
-        my %rb_script_req = (
-                        'workshop' => {
-                            'schema' => {
-                                'version' => '2020.03.02'
-                            }
-                        },
-                        'userenvs' => [
-                            {
-                                'name' => 'default',
-                                    'requirements' => [
-                                        'roadblock'
-                                    ]
-                            }
-                        ],
-                        'requirements' => [
-                            {
-                                'name' => 'roadblock',
-                                'type' => 'files',
-                                'files_info' => {
-                                    'files' => [
-                                        {
-                                            'src' => $run{'roadblock-dir'} . "/roadblock.py",
-                                            'dst' => '/usr/local/bin/'
-                                        }
-                                    ]
-                                }
-                            }
-                        ] 
-                    );
-        if (put_json_file($rb_script_req_file, \%rb_script_req) > 0) {
-            printf "build_container_image(): put_json_file() failed\n";
-            exit 1;
-        }
-        push (@$req_ref, "--requirement " . $rb_script_req_file);
-        # The second rb req ensures the proper python libraies are installed
-        push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
-    }
+    # ensure the proper python libraies are installed that roadblock needs
+    push (@$req_ref, "--requirement " . $run{'roadblock-dir'} .  "/workshop.json");
+
     push (@$req_ref, "--requirement " . $rickshaw_project_dir . "/engine/workshop.json");
     foreach my $utility (@utilities) {
         if (exists $run{$utility . '-dir'}) {
@@ -970,9 +936,17 @@ sub source_container_image {
 }
 
 sub process_bench_roadblocks {
+    my $roadblock_rc;
+
+    $roadblock_rc = do_roadblock("setup-bench-begin", $default_rb_timeout, \$messages_ref, @active_followers);
+    roadblock_exit_on_error($roadblock_rc);
+
     my $quit = 0;
     my $abort;
     my @sample_data;
+
+    $roadblock_rc = do_roadblock("setup-bench-end", $default_rb_timeout, \$messages_ref, @active_followers);
+    roadblock_exit_on_error($roadblock_rc);
 
     for (my $tid = 0; $tid < scalar @tests; $tid++) {
         last if ($quit > 0);
@@ -1230,7 +1204,6 @@ sub validate_controller_env() {
     if (defined $run{'roadblock-dir'} and -e $run{'roadblock-dir'} . "/roadblock.py") {
         copy($run{'roadblock-dir'} . "/roadblock.py", $rb_bin);
         chmod 0755, "$rb_bin";
-        $use_roadblock = 1;
     }
     if (defined $run{'workshop-dir'} and -e $run{'workshop-dir'} . "/workshop.pl") {
         $use_workshop = 1;
@@ -1377,24 +1350,25 @@ sub make_run_dirs() {
     debug_log(sprintf("Bench helper subproject directory: [%s]\n", $run{'bench-dir'}));
     $config_dir = $run{'base-run-dir'} . "/config";
     mkdir($config_dir);
-    $client_server_config_dir = $config_dir . "/client-server";
-    mkdir($client_server_config_dir);
-    $client_server_bench_cmds_dir = $client_server_config_dir . "/bench-cmds";
-    mkdir($client_server_bench_cmds_dir);
+    $engine_config_dir = $config_dir . "/engine";
+    mkdir($engine_config_dir);
+    $engine_bench_cmds_dir = $engine_config_dir . "/bench-cmds";
+    mkdir($engine_bench_cmds_dir);
     $tool_cmds_dir = $config_dir . "/tool-cmds";
     mkdir($tool_cmds_dir);
     $run_dir = $run{'base-run-dir'} . "/run";
     mkdir($run_dir);
     $base_endpoint_run_dir = $run_dir . "/endpoint/";
     mkdir($base_endpoint_run_dir);
-    $client_server_run_dir = $run_dir . "/client-server/";
-    mkdir($client_server_run_dir);
-    $client_server_logs_dir = $client_server_run_dir . "/logs/";
-    mkdir($client_server_logs_dir);
-    $client_server_archives_dir = $client_server_run_dir . "/archives/";
-    mkdir($client_server_archives_dir);
-    $client_server_run_script = $client_server_config_dir . "/client-server-script";
-    $client_server_library_script = $client_server_config_dir . "/client-server-script-library";
+    $engine_run_dir = $run_dir . "/engine/";
+    mkdir($engine_run_dir);
+    $engine_logs_dir = $engine_run_dir . "/logs/";
+    mkdir($engine_logs_dir);
+    $engine_archives_dir = $engine_run_dir . "/archives/";
+    mkdir($engine_archives_dir);
+    $engine_run_script = $engine_config_dir . "/engine-script";
+    $engine_library_script = $engine_config_dir . "/engine-script-library";
+    $engine_roadblock_script = $engine_config_dir . "/roadblock.py";
     $iterations_dir = $run_dir . "/iterations";
     mkdir($iterations_dir);
     $roadblock_msgs_dir = $run_dir . "/roadblock-msgs";
@@ -1428,9 +1402,9 @@ sub load_settings_info() {
         exit 1;
     }
 
-    ($rc, $client_server_script_start_timeout) = get_json_setting("roadblock.timeouts.client-server-start", $jsonsettings);
+    ($rc, $engine_script_start_timeout) = get_json_setting("roadblock.timeouts.engine-start", $jsonsettings);
     if ($rc != 0) {
-        print "load_settings_info(): failed to load client-server-start roadblock timeout\n";
+        print "load_settings_info(): failed to load engine-start roadblock timeout\n";
         exit 1;
     }
 
@@ -1466,6 +1440,7 @@ sub validate_endpoints() {
     # and not rickshaw.
     my $min_id;
     my $max_id;
+    my $collectors_present = 0;
     printf "Confirming the endpoints will satisfy the benchmark-client ";
     printf "and benchmark-server " if exists $bench_config{'server'};
     printf "requirements\n";
@@ -1488,16 +1463,21 @@ sub validate_endpoints() {
         # server <int> [int]
         foreach my $line (@output) {
             chomp $line;
-            if ($line =~ /(client|server)\s+(.+)$/) {
-                my $client_server = $1;
+            if ($line =~ /(client|server|profiler)\s+(.+)$/) {
+                my $engine = $1;
                 my $ids = $2;
                 foreach my $id (split(/\s+/, $ids)) {
                     die "[ERROR]client/server ID cannot be below 1\n" if ($id < 1);
                     my %info = ( 'endpoint-type' => $$endpoint{'type'}, 'id' => $id );
-                    $clients_servers{$client_server}[$id - 1] = \%info;
-                    push(@rb_cs_ids, $client_server . "-" . $id);
-                    $min_id = $id if (! defined $min_id or $id < $min_id);
-                    $max_id = $id if (! defined $max_id or $id > $max_id);
+                    $clients_servers{$engine}[$id - 1] = \%info;
+                    push(@rb_cs_ids, $engine . "-" . $id);
+                    if ($engine =~ /(client|server)/) {
+                        $min_id = $id if (! defined $min_id or $id < $min_id);
+                        $max_id = $id if (! defined $max_id or $id > $max_id);
+                    }
+                    if ($engine =~ /(collector)/) {
+                        $collectors_present++;
+                    }
                 }
             } elsif ($line =~ /(userenv)\s+(.+)$/) {
                 $$endpoint{'userenv'} = $2;
@@ -1534,8 +1514,8 @@ sub validate_endpoints() {
         # 1:N can have as many servers with just 1 client
         if (defined $clients_servers{'client'}[$id - 1]) {
             $clients_present++;
-        } elsif (exists $bench_config{'client'}{'client-server-ratio'} and $bench_config{'client'}{'client-server-ratio'} eq "1:N") {
-            debug_log(sprintf "Did not find same client ID for server ID %d, but client-server-ratio is 1:N\n", $id);
+        } elsif (exists $bench_config{'client'}{'engine-ratio'} and $bench_config{'client'}{'engine-ratio'} eq "1:N") {
+            debug_log(sprintf "Did not find same client ID for server ID %d, but engine-ratio is 1:N\n", $id);
         } else {
             printf "[ERROR]client ID %d is not defined in ID range %d - %d\n", $id, $min_id, $max_id;
             exit 1;
@@ -1564,33 +1544,12 @@ sub validate_endpoints() {
     }
     printf "There will be %d client(s)", $clients_present;
     printf " and %d server(s)", $servers_present if exists $bench_config{'server'} && $servers_present;
+    printf " and %d collector(s)", $collectors_present if $collectors_present;
     printf "\n";
-    if ($use_roadblock) {
-        $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
-                                " --roadblock-passwd=" . $redis_passwd;
-        $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
-                                "/workshop.json ";
-    } else {
-        # If for some reason the user has opted to not use roadblock, then only allow
-        # tests which use only one client and no server, which is the only possible
-        # combination we can support without syncronization
-        my $do_exit = 0;
-        if (scalar @{ $clients_servers{'server'} } > 0) {
-            printf "[ERROR}since --roadblock-dir was not used or the directory does not exist," .
-                "rickshaw cannot run a test with servers because it cannot syncornize the test " .
-                "without roadblock.\n";
-                $do_exit = 1;
-        }
-        if (scalar @{ $clients_servers{'client'} } > 1) {
-            printf "[ERROR}since --roadblock-dir was not used or the directory does not exist," .
-                "rickshaw cannot run a test with multiple clients because it cannot synchronize " .
-                "the test without roadblock.\n";
-                $do_exit = 1;
-        }
-        if ($do_exit) {
-            exit 1;
-        }
-    }
+    $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
+        " --roadblock-passwd=" . $redis_passwd;
+    $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
+        "/workshop.json ";
     $run{'endpoints'} = \@endpoints;
 }
 
@@ -1699,16 +1658,23 @@ sub prepare_bench_tool_engines() {
         }
         debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
-    copy($rickshaw_project_dir . "/engine/client-server-script", $client_server_run_script)
-        || die "Could not copy client-server-script to " . $client_server_run_script;
-    chmod 0755, "$client_server_run_script";
-    copy($rickshaw_project_dir . "/engine/client-server-script-library", $client_server_library_script)
-        || die "Could not copy client-server-script-library to " . $client_server_library_script;
-    chmod 0755, "$client_server_library_script";
+    copy($rickshaw_project_dir . "/engine/engine-script", $engine_run_script)
+        || die "Could not copy engine-script to " . $engine_run_script;
+    chmod 0755, "$engine_run_script";
+    copy($rickshaw_project_dir . "/engine/engine-script-library", $engine_library_script)
+        || die "Could not copy engine-script-library to " . $engine_library_script;
+    chmod 0755, "$engine_library_script";
+    copy($run{'roadblock-dir'} . "/roadblock.py", $engine_roadblock_script)
+        || die "Could not copy roadblock.py to " . $engine_roadblock_script;
+    chmod 0755, "$engine_roadblock_script";
+
+    my @collectors = grep(/[^client|^server]/, keys %clients_servers);
+    my @all_collector_types = qw(client server worker master profiler);
+
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
     # to see if we need to build a command file for any of these collectors.
-    my %collectors;
+    my %collector_tools;
     foreach my $tool_entry (@tools_params) {
         my $tool_name = $$tool_entry{'tool'};
         if (exists $tools_configs{$tool_name}{'collector'}{'whitelist'}) {
@@ -1718,27 +1684,40 @@ sub prepare_bench_tool_engines() {
                 if (grep(/^$endpoint$/, dump_endpoint_types(\@endpoints))) {
                     # Then add this tool to the list of tools for this collector
                     for my $collector (@{ $$i{'collector-types'} }) {
-                        if (! exists($collectors{$collector})) {
-                            $collectors{$collector} = ();
+                        if (! exists($collector_tools{$collector})) {
+                            $collector_tools{$collector} = ();
                         }
-                        push(@{ $collectors{$collector} }, $tool_name);
+                        debug_log("Adding " . $tool_name . " to " . $collector . "\n");
+                        push(@{ $collector_tools{$collector} }, $tool_name);
                     }
                 }
             }
         }
     }
     # Now build all of the tool start and stop cmd files for each collector
-    for my $collector (keys %collectors) {
+    for my $collector (@all_collector_types) {
         for my $start_stop ("start", "stop") {
             my $collector_tool_cmds_dir = $tool_cmds_dir . "/" . $collector;
             -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
                 die "[ERROR]Create collector directory failed: [" . $collector_tool_cmds_dir . "]\n";
             my $tool_cmd_file = $collector_tool_cmds_dir . "/" . $start_stop; 
+            my $tool_count = 0;
             open(my $fh, ">" . $tool_cmd_file) ||
                 die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
             debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
             foreach my $tool_entry (@tools_params) {
-                build_tool_cmd($tool_entry, $start_stop, $fh);
+                my $tool_name = $$tool_entry{'tool'};
+                debug_log(sprintf "tool_name: [%s]\n", $tool_name);
+                for my $i (@{ $tools_configs{$tool_name}{'collector'}{'whitelist'} }) {
+                    debug_log(sprintf "endpoint: [%s]\n", $$i{'endpoint'});
+                    if (grep(/^$collector$/, @{ $$i{'collector-types'} })) {
+                        debug_log(sprintf "building tool cmd for [%s]\n", $tool_name);
+                        build_tool_cmd($tool_entry, $start_stop, $fh);
+                        $tool_count++;
+                    } else {
+                        debug_log(sprintf "collector [%s] was not found in collector-types: [%s]\n", $collector, join(" ", @{ $$i{'collector-types'} }));
+                    }
+                }
             }
             close($fh);
             chmod 0755, $tool_cmd_file;
@@ -1751,6 +1730,7 @@ sub prepare_bench_tool_engines() {
     # and/or server would be collecting duplicate data).  For this reason tool
     # cmd files are built specifically for each client and server.
     foreach my $cs_type (keys %clients_servers) {
+        next if ($cs_type eq "profiler"); # Currently we do not generate specific tools cmds for each profiler
         for my $start_stop ("start", "stop") {
             foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
                 my $cs_tool_cmds_dir = $tool_cmds_dir . "/" . $cs_type . "/" . $$cs_ref{'id'};
@@ -1758,6 +1738,7 @@ sub prepare_bench_tool_engines() {
                 my $tool_cmd_file = $cs_tool_cmds_dir . "/" . $start_stop;
                 open(my $fh, ">" . $tool_cmd_file) ||
                     die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
+                debug_log(sprintf "writing tool-cmds [%s]\n", $tool_cmd_file);
                 foreach my $tool_entry (@tools_params) {
                     build_tool_cmd($tool_entry, $start_stop, $fh, $$cs_ref{'endpoint-type'});
                 }
@@ -1768,7 +1749,9 @@ sub prepare_bench_tool_engines() {
     }
     # Build the client and server bench-cmd files
     # Each benchmark has to define the commands used in their rickshaw.json
+    debug_log(sprintf "clients_servers: [%s]\n", join(" ", keys %clients_servers));
     foreach my $cs_type (keys %clients_servers) {
+        next if ($cs_type eq "profiler"); # This does not use bench-cmds
         foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
             my @cmd_type_files = ("start");
             if ($cs_type eq "server") {
@@ -1781,7 +1764,7 @@ sub prepare_bench_tool_engines() {
                 push(@cmd_type_files, "infra");
             }
             my $cs_id = $$cs_ref{'id'};
-            my $this_cmds_dir = $client_server_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
+            my $this_cmds_dir = $engine_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
             make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
             foreach my $cmd_type (@cmd_type_files) {
                 next if ($cmd_type eq "runtime" and $cs_id > 1); # runtime cmds only for client-1
@@ -1824,12 +1807,10 @@ sub prepare_bench_tool_engines() {
     }
     # Build the client/server "from-controller" files list and put them in the base endpoint run dir.
     # These are files the client/server must copy from the controller before running any tests.
-    # The "client-server-script" will first scp the list (client-files-list or server-files-list).
+    # The "engine-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
-    #
-    # TODO: build these files for other collectors
-    foreach my $cs_type (keys %clients_servers, keys %collectors) {
-        my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
+        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
         open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
         if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
             for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
@@ -1868,8 +1849,8 @@ sub prepare_bench_tool_engines() {
         close FH;
     }
     # Create empty files for any not created above
-    foreach my $cs_type ("client", "server", "worker") {
-        my $cs_file_list = $client_server_config_dir . "/" . $cs_type . "-files-list";
+    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
+        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
         if ( ! -e $cs_file_list) {
             open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
             close FH;
@@ -1890,8 +1871,8 @@ sub deploy_endpoints() {
     print "Deploying endpoints\n";
     $endpoint_deploy_timeout += scalar @endpoints * 120;
     printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
-    $client_server_script_start_timeout += scalar @endpoints * 120;
-    printf "client-server-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
+    $engine_script_start_timeout += scalar @endpoints * 120;
+    printf "engine-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     debug_log(sprintf "\nendpoint output:\n");
     for (my $i = 0; $i < scalar @endpoints; $i++) {
         my $type = $endpoints[$i]{'type'};
@@ -1916,7 +1897,7 @@ sub deploy_endpoints() {
                     " --max-sample-failures=" . $run{'max-sample-failures'} .
                     " --max-rb-attempts=" . $run{'max-rb-attempts'} .
                     " --endpoint-deploy-timeout=" . $endpoint_deploy_timeout .
-                    " --client-server-script-start-timeout=" . $client_server_script_start_timeout .
+                    " --engine-script-start-timeout=" . $engine_script_start_timeout .
                     $endpoint_image_opt .
                     $endpoint_roadblock_opt .
                     " >" . $this_endpoint_run_dir . "/endpoint-stderrout.txt 2>&1";
@@ -1969,10 +1950,10 @@ sub process_roadblocks() {
 
     push @active_followers, @new_followers, @rb_cs_ids;
     ####################################################################
-    $roadblock_rc = do_roadblock("engine-init-begin", $client_server_script_start_timeout, $messages_ref, @active_followers);
+    $roadblock_rc = do_roadblock("engine-init-begin", $engine_script_start_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
 
-    $roadblock_rc = do_roadblock("engine-init-end", $client_server_script_start_timeout, $messages_ref, @active_followers);
+    $roadblock_rc = do_roadblock("engine-init-end", $engine_script_start_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
     ####################################################################
     $roadblock_rc = do_roadblock("get-data-begin", $default_rb_timeout, $messages_ref, @active_followers);
@@ -2034,10 +2015,10 @@ sub organize_run_data() {
     {
         mkdir($tmp_data_dir);
         my $pushd_dir = pushd($tmp_data_dir);
-        foreach my $archive (dir_entries($client_server_archives_dir,
+        foreach my $archive (dir_entries($engine_archives_dir,
                                         qr/^(\w+)-(\d+)-data\.tgz$/)) {
             $archive =~ /^(\w+)-(\d+)-data\.tgz$/ or next;
-            my $archive_full_path = $client_server_archives_dir . "/" . $archive;
+            my $archive_full_path = $engine_archives_dir . "/" . $archive;
             my $cs_type = $1;
             my $cs_id = $2;
             my $tar_cmd = "tar zmxf " . $archive_full_path;
@@ -2104,20 +2085,22 @@ sub evaluate_test_roadblock {
 
             $quit = 1;
         } elsif ($roadblock_rc == $roadblock_exit_abort) {
-            printf "[WARNING] roadblock '%s' received an abort, stopping sample\n", $roadblock_name;
-            $sample_info->{'attempt-fail'} = 1;
+            if ($abort == 0) {
+                printf "[WARNING] roadblock '%s' received an abort, stopping sample\n", $roadblock_name;
+                $$sample_info->{'attempt-fail'} = 1;
 
-            $sample_info->{'failures'}++;
-            printf "sample failures is now: %d\n", $sample_info->{'failures'};
+                $$sample_info->{'failures'}++;
+                printf "sample failures is now: %d\n", $$sample_info->{'failures'};
 
-            if ($sample_info->{'failures'} >= $run{'max-sample-failures'}) {
-                $sample_info->{'complete'} = 1;
-                printf "[ERROR] A maximum of %d failures for iteration %d has been reached\n",
-                    $sample_info->{'failures'},
-                    $sample_info->{'iteration-id'};
+                if ($$sample_info->{'failures'} >= $run{'max-sample-failures'}) {
+                    $$sample_info->{'complete'} = 1;
+                    printf "[ERROR] A maximum of %d failures for iteration %d has been reached\n",
+                        $$sample_info->{'failures'},
+                        $$sample_info->{'iteration-id'};
+                }
+
+                $abort = 1;
             }
-
-            $abort = 1;
         } else {
             printf "[ERROR] roadblock '%s' has reached an unknown state with RC=%d\n", $roadblock_name, $roadblock_rc;
 
