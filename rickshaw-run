@@ -1514,8 +1514,8 @@ sub validate_endpoints() {
         # 1:N can have as many servers with just 1 client
         if (defined $clients_servers{'client'}[$id - 1]) {
             $clients_present++;
-        } elsif (exists $bench_config{'client'}{'engine-ratio'} and $bench_config{'client'}{'engine-ratio'} eq "1:N") {
-            debug_log(sprintf "Did not find same client ID for server ID %d, but engine-ratio is 1:N\n", $id);
+        } elsif (exists $bench_config{'client'}{'client-server-ratio'} and $bench_config{'client'}{'client-server-ratio'} eq "1:N") {
+            debug_log(sprintf "Did not find same client ID for server ID %d, but client-server-ratio is 1:N\n", $id);
         } else {
             printf "[ERROR]client ID %d is not defined in ID range %d - %d\n", $id, $min_id, $max_id;
             exit 1;
