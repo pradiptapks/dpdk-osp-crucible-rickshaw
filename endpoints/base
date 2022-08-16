@@ -636,9 +636,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            echo "about to call endpoint_${endpoint_type}_test_start"
-            endpoint_${endpoint_type}_test_start "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
-            echo "returning from endpoint_${endpoint_type}_test_start"
+            call_endpoint_specific_function "${endpoint_type}" "test_start" "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -707,9 +705,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            echo "about to call endpoint_${endpoint_type}_test_stop"
-            endpoint_${endpoint_type}_test_stop "${roadblock_msgs_dir}" "${test_id}"
-            echo "returning from endpoint_${endpoint_type}_test_stop"
+            call_endpoint_specific_function "${endpoint_type}" "test_stop" "${roadblock_msgs_dir}" "${test_id}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -839,9 +835,9 @@ function process_roadblocks() {
 
 
     do_roadblock "endpoint-cleanup-begin" ${default_timeout}
-    if [ ! -z "$endpoint_type" ]; then
-        endpoint_${endpoint_type}_cleanup
-    fi
+
+    call_endpoint_specific_function "${endpoint_type}" "cleanup"
+
     do_roadblock "endpoint-cleanup-end" ${default_timeout}
 }
 
@@ -936,5 +932,36 @@ function load_settings() {
         load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
         load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
+    fi
+}
+
+function call_endpoint_specific_function() {
+    local endpoint_type function_postfix function_rc my_function_name endpoint_function_name
+
+    my_function_name="call_endpoint_specific_function"
+
+    endpoint_type=${1}; shift
+    function_postfix=${1}; shift
+
+    if [ ! -z "${endpoint_type}" ]; then
+        if [ -z "${function_postfix}" ]; then
+            echo "${my_function_name}: function postfix not defined"
+            return 1
+        fi
+
+        endpoint_function_name="endpoint_${endpoint_type}_${function_postfix}"
+        if [ "$(type -t ${endpoint_function_name})" == "function" ]; then
+            echo "${my_function_name}: about to call '${endpoint_function_name} $@'"
+            ${endpoint_function_name} "$@"
+            function_rc=$?
+            echo "${my_function_name}: returning from ${endpoint_function_name} with rc=${function_rc}"
+            return ${function_rc}
+        else
+            echo "${my_function_name}: there is no defined function ${endpoint_function_name}"
+            return 0
+        fi
+    else
+        echo "${my_function_name}: no endpoint type specified"
+        return 1
     fi
 }
