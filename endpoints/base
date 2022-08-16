@@ -47,6 +47,7 @@ function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
     local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,engine-script-start-timeout:"
+    local longopts+=",packrat-dir:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -54,6 +55,11 @@ function process_opts() {
     eval set -- "$opts";
     while true; do
         case "$1" in
+            --packrat-dir)
+                shift
+                packrat_dir="${1}"
+                shift
+                ;;
             --validate)
                 do_validate="1"
                 shift;

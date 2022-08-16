@@ -1890,6 +1890,7 @@ sub deploy_endpoints() {
         if (-e $endpoint_project_dir) {
             my $pushd_dir = pushd($endpoint_project_dir);
             my $cmd = "./" . $type .
+                    " --packrat-dir=" . $run{'packrat-dir'} .
                     " --endpoint-opts=" . $opts .
                     " --endpoint-label=" . $label .
                     " --run-id=" . $run{'id'} .
