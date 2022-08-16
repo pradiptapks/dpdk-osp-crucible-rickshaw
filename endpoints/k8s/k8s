@@ -985,6 +985,32 @@ function get_k8s_config() {
     echo "$masters" >"$endpoint_run_dir/master-nodes.txt"
 }
 
+function endpoint_k8s_sysinfo() {
+    local remote_base_dir remote_dir local_dir
+    remote_base_dir="/var/lib/crucible"
+    remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
+    local_dir="${endpoint_run_dir}/sysinfo"
+
+    mkdir ${local_dir}
+
+    do_ssh ${user}@${host} kubectl cluster-info > ${local_dir}/cluster-info.txt
+    do_ssh ${user}@${host} kubectl cluster-info dump > ${local_dir}/cluster-info.dump.json
+
+    do_ssh ${user}@${host} oc cluster-info > /dev/null 2>&1
+    if [ $? == 0 ]; then
+        echo "Detected that K8S is OpenShift"
+
+        do_ssh ${user}@${host} mkdir -p ${remote_dir}/must-gather
+
+        do_ssh ${user}@${host} oc adm must-gather --dest-dir=${remote_dir}/must-gather > ${local_dir}/must-gather.txt 2>&1
+        do_scp ${user}@${host} ${remote_dir}/must-gather "" ${local_dir}
+
+        do_ssh ${user}@${host} rm -Rf ${remote_dir}
+    else
+        echo "Detected that K8S is not OpenShift"
+    fi
+}
+
 function create_k8s_project() {
     do_ssh $user@$host kubectl create namespace $project_name
 }
