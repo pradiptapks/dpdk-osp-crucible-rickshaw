@@ -575,6 +575,22 @@ function endpoint_remotehost_cleanup() {
     cleanup_osruntime
 }
 
+function endpoint_remotehost_sysinfo() {
+    local local_dir
+
+    local_dir="${endpoint_run_dir}/sysinfo"
+    mkdir ${local_dir}
+
+    do_scp "" "${packrat_dir}/packrat" "${user}@${host}" "${remote_dir}"
+
+    do_ssh ${user}@${host} mkdir -p ${remote_dir}/sysinfo
+    do_ssh ${user}@${host} ${remote_dir}/packrat ${remote_dir}/sysinfo
+
+    do_scp "${user}@${host}" "${remote_dir}/sysinfo/packrat-archive" "" "${local_dir}"
+
+    do_ssh ${user}@${host} rm -Rf ${remote_dir}/packrat ${remote_dir}/sysinfo
+}
+
 process_opts $@
 process_remotehost_opts $endpoint_opts
 init_common_dirs

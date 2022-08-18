@@ -47,6 +47,7 @@ function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
     local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,engine-script-start-timeout:"
+    local longopts+=",packrat-dir:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -54,6 +55,11 @@ function process_opts() {
     eval set -- "$opts";
     while true; do
         case "$1" in
+            --packrat-dir)
+                shift
+                packrat_dir="${1}"
+                shift
+                ;;
             --validate)
                 do_validate="1"
                 shift;
@@ -277,7 +283,7 @@ function do_scp() {
     # The following allows for using a non-root user>
     # If a non-root user is used, that user must have root-priv
     # no password prompt required.
-    local src dst dst_sudo_cmd dst_path dst_user_host dst_user dst_cmd
+    local src dst dst_sudo_cmd dst_path dst_user_host dst_user dst_cmd src_base
     local src_sudo_cmd src_path src_user_host src_user src_sudo_cmd src_cmd
     src_userhost=$1; shift # [<user>@<host>]
     src_path=$1; shift # <path> path can be a dir or file
@@ -298,6 +304,8 @@ function do_scp() {
         dst_cmd="tar -C $dst_path -xf -"
     fi
 
+    src_base=$(dirname ${src_path})
+    src_path=$(basename ${src_path})
     if echo $src_userhost | grep -q -- "@"; then
         src_sudo_cmd=""
         src_user=`echo $src_userhost | awk -F@ '{print $1}'`
@@ -305,9 +313,9 @@ function do_scp() {
             src_sudo_cmd="sudo"
         fi
         src_host=`echo $src_userhost | awk -F@ '{print $2}'`
-        src_cmd="ssh $ssh_opts ${src_user}@$src_host $src_sudo_cmd tar -cf - $src_path"
+        src_cmd="ssh ${ssh_opts} ${src_user}@${src_host} ${src_sudo_cmd} tar -C ${src_base} -cf - ${src_path}"
     else
-        src_cmd="tar -cf - $src_path"
+        src_cmd="tar -C ${src_base} -cf - ${src_path}"
     fi
 
     echo "Going to run:"
@@ -634,9 +642,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            echo "about to call endpoint_${endpoint_type}_test_start"
-            endpoint_${endpoint_type}_test_start "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
-            echo "returning from endpoint_${endpoint_type}_test_start"
+            call_endpoint_specific_function "${endpoint_type}" "test_start" "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -705,9 +711,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            echo "about to call endpoint_${endpoint_type}_test_stop"
-            endpoint_${endpoint_type}_test_stop "${roadblock_msgs_dir}" "${test_id}"
-            echo "returning from endpoint_${endpoint_type}_test_stop"
+            call_endpoint_specific_function "${endpoint_type}" "test_stop" "${roadblock_msgs_dir}" "${test_id}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -809,7 +813,10 @@ function process_roadblocks() {
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    # run packrat here somehow eventually
+    call_endpoint_specific_function "${endpoint_type}" "sysinfo"
+    if [ -d "${endpoint_run_dir}/sysinfo" ]; then
+        mv ${endpoint_run_dir}/sysinfo ${run_dir}/sysinfo/endpoint/${endpoint_label}
+    fi
 
     do_roadblock "collect-sysinfo-end" ${default_timeout}
     roadblock_rc=$?
@@ -837,9 +844,9 @@ function process_roadblocks() {
 
 
     do_roadblock "endpoint-cleanup-begin" ${default_timeout}
-    if [ ! -z "$endpoint_type" ]; then
-        endpoint_${endpoint_type}_cleanup
-    fi
+
+    call_endpoint_specific_function "${endpoint_type}" "cleanup"
+
     do_roadblock "endpoint-cleanup-end" ${default_timeout}
 }
 
@@ -934,5 +941,36 @@ function load_settings() {
         load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
         load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
+    fi
+}
+
+function call_endpoint_specific_function() {
+    local endpoint_type function_postfix function_rc my_function_name endpoint_function_name
+
+    my_function_name="call_endpoint_specific_function"
+
+    endpoint_type=${1}; shift
+    function_postfix=${1}; shift
+
+    if [ ! -z "${endpoint_type}" ]; then
+        if [ -z "${function_postfix}" ]; then
+            echo "${my_function_name}: function postfix not defined"
+            return 1
+        fi
+
+        endpoint_function_name="endpoint_${endpoint_type}_${function_postfix}"
+        if [ "$(type -t ${endpoint_function_name})" == "function" ]; then
+            echo "${my_function_name}: about to call '${endpoint_function_name} $@'"
+            ${endpoint_function_name} "$@"
+            function_rc=$?
+            echo "${my_function_name}: returning from ${endpoint_function_name} with rc=${function_rc}"
+            return ${function_rc}
+        else
+            echo "${my_function_name}: there is no defined function ${endpoint_function_name}"
+            return 0
+        fi
+    else
+        echo "${my_function_name}: no endpoint type specified"
+        return 1
     fi
 }

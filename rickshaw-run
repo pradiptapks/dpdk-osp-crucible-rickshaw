@@ -1890,6 +1890,7 @@ sub deploy_endpoints() {
         if (-e $endpoint_project_dir) {
             my $pushd_dir = pushd($endpoint_project_dir);
             my $cmd = "./" . $type .
+                    " --packrat-dir=" . $run{'packrat-dir'} .
                     " --endpoint-opts=" . $opts .
                     " --endpoint-label=" . $label .
                     " --run-id=" . $run{'id'} .
@@ -1962,6 +1963,8 @@ sub process_roadblocks() {
     $roadblock_rc = do_roadblock("get-data-end", $default_rb_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
     ####################################################################
+    make_path($run_dir . "/sysinfo/endpoint");
+
     $roadblock_rc = do_roadblock("collect-sysinfo-begin", $default_rb_timeout, $messages_ref, @active_followers);
     roadblock_exit_on_error($roadblock_rc);
 
