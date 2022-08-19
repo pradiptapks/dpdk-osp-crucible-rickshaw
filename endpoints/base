@@ -21,6 +21,7 @@ num_collectors=0
 disable_tools=0
 abort=0
 userenv="<unset>"
+user="<unset>"
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
@@ -944,6 +945,8 @@ function load_settings() {
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
 
         load_json_setting "userenvs.default" userenv
+
+        load_json_setting "endpoints.default.user" user
     fi
 }
 

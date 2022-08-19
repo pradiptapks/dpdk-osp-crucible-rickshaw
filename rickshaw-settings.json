@@ -9,5 +9,10 @@
     },
     "userenvs": {
 	"default": "rhubi8"
+    },
+    "endpoints": {
+	"default": {
+	    "user": "root"
+	}
     }
 }
