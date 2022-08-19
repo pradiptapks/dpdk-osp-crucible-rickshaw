@@ -6,5 +6,8 @@
 	    "engine-start": 720,
 	    "move-data": 300
 	}
+    },
+    "userenvs": {
+	"default": "rhubi8"
     }
 }

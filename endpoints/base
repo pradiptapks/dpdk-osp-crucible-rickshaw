@@ -20,6 +20,7 @@ num_servers=0
 num_collectors=0
 disable_tools=0
 abort=0
+userenv="<unset>"
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
@@ -941,6 +942,8 @@ function load_settings() {
         load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
         load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
         load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
+
+        load_json_setting "userenvs.default" userenv
     fi
 }
 
