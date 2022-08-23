@@ -1027,6 +1027,8 @@ function process_bench_roadblocks() {
                 if [ $quit != 0 ]; then
                     printf "[ERROR] A quit signal has been encountered!\n";
                 fi
+
+                mv "${iter_samp_dir}" "${iter_samp_dir}-fail-${sample_data_attempt_fail[${iter_array_idx}]}"
             fi
 
             printf "Completed iteration %d sample %d (test %d of %d) attempt number %d of %d %s\n" \
