@@ -927,7 +927,7 @@ function load_json_setting() {
     value=$(${TOOLBOX_HOME}/bin/get-json-settings.pl --settings "${config_dir}/rickshaw-settings.json.xz" --query ${query})
     if [ $? != 0 ]; then
         echo "available json settings:"
-        xzcat ${json_settings_file}
+        xzcat "${config_dir}/rickshaw-settings.json.xz"
         exit_error "query '${query}' failed to load a json setting"
     else
         var=${value}
