@@ -1447,6 +1447,8 @@ sub validate_endpoints() {
     foreach my $endpoint (@endpoints) {
         my $pushd_dir = pushd($rickshaw_project_dir . "/endpoints/" . $$endpoint{'type'});
         my $cmd = "./" . $$endpoint{'type'} .
+                " --endpoint-label=" . $$endpoint{'label'} .
+                " --base-run-dir=" . $run{'base-run-dir'} .
                 " --endpoint-opts=" . $$endpoint{'opts'} .
                 " --validate";
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);

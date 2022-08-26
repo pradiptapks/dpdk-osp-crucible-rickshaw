@@ -20,6 +20,8 @@ num_servers=0
 num_collectors=0
 disable_tools=0
 abort=0
+userenv=""
+user=""
 max_sample_failures=""
 export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
@@ -194,19 +196,20 @@ function echo_clients_servers() {
 }
 
 function init_common_dirs() {
+    config_dir="${base_run_dir}/config"
+    engine_config_dir="${config_dir}/engine"
+    engine_bench_cmds_dir="${engine_config_dir}/bench-cmds"
+    run_dir="${base_run_dir}/run"
+    engine_logs_dir="${run_dir}/engine/logs"
+    endpoint_run_dir="${run_dir}/endpoint/${endpoint_label}"
+    bootstrap_script="/usr/local/bin/bootstrap"
+    engine_run_script="/usr/local/bin/engine-script"
+    roadblock_msgs_dir="${endpoint_run_dir}/roadblock-msgs"
+
     if [ "$do_validate" != 1 ]; then
-        config_dir="$base_run_dir/config"
-        engine_config_dir="$config_dir/engine"
-        engine_bench_cmds_dir="$engine_config_dir/bench-cmds"
-        run_dir="$base_run_dir/run"
-        engine_logs_dir="$run_dir/engine/logs"
-        endpoint_run_dir="$run_dir/endpoint/$endpoint_label"
-        bootstrap_script="/usr/local/bin/bootstrap"
-        engine_run_script="/usr/local/bin/engine-script"
-        roadblock_msgs_dir="$endpoint_run_dir/roadblock-msgs"
-        mkdir -p "$endpoint_run_dir"
-        mkdir -p "$engine_logs_dir"
-        mkdir -p "$roadblock_msgs_dir"
+        mkdir -p "${endpoint_run_dir}"
+        mkdir -p "${engine_logs_dir}"
+        mkdir -p "${roadblock_msgs_dir}"
     fi
 }
 
@@ -920,27 +923,37 @@ function load_json_setting() {
     query="$1"
     typeset -n var=$2
 
-    echo "load_json_setting():"
+    if [ ${do_validate} != 1 ]; then
+        echo "load_json_setting():"
+    fi
 
     value=$(${TOOLBOX_HOME}/bin/get-json-settings.pl --settings "${config_dir}/rickshaw-settings.json.xz" --query ${query})
     if [ $? != 0 ]; then
         echo "available json settings:"
-        xzcat ${json_settings_file}
+        xzcat "${config_dir}/rickshaw-settings.json.xz"
         exit_error "query '${query}' failed to load a json setting"
     else
         var=${value}
-        echo "json setting query '${query}' returned '${var}'"
+        if [ ${do_validate} != 1 ]; then
+            echo "json setting query '${query}' returned '${var}'"
+        fi
     fi
 
     return 0
 }
 
 function load_settings() {
-    if [ "$do_validate" != 1 ]; then
-        load_json_setting "roadblock.timeouts.default" default_timeout
-        load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
-        load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
-        load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
+    load_json_setting "roadblock.timeouts.default" default_timeout
+    load_json_setting "roadblock.timeouts.endpoint-deploy" endpoint_deploy_timeout
+    load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
+    load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
+
+    if [ -z "${userenv}" ]; then
+        load_json_setting "userenvs.default" userenv
+    fi
+
+    if [ -z "${user}" ]; then
+        load_json_setting "endpoints.default.user" user
     fi
 }
 
