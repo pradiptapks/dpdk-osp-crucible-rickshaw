@@ -103,6 +103,7 @@ my $roadblock_exit_timeout = 3;
 my $roadblock_exit_abort = 4;
 my $roadblock_exit_input = 2;
 my $workshop_base_cmd;
+my $workshop_force_builds;
 my $cs_conf_file;
 my %cs_conf;
 
@@ -868,34 +869,40 @@ sub source_container_image {
         }
     }
 
-    # Now that we have all the info to build any stage of the container image we could need,
-    # search for existing container images, starting with the most complete image first.
     my $num_images = scalar @workshop_args;
-    printf "Searching for existing stages (1 to %d, %d being most complete)\n", $num_images, $num_images; 
-    my $i = $num_images - 1;
-    while ($i >= 0) {
-        debug_log(sprintf "Checking for stage number %d (of %d)\n", $i + 1, $num_images);
-        if (!remote_image_found($workshop_args[$i]{'tag'})) {
-            if (!local_image_found($workshop_args[$i]{'tag'})) {
-                $i--;
-                next;
+    my $i;
+    if ($workshop_force_builds eq "false") {
+        # Now that we have all the info to build any stage of the container image we could need,
+        # search for existing container images, starting with the most complete image first.
+        printf "Searching for existing stages (1 to %d, %d being most complete)\n", $num_images, $num_images;
+        $i = $num_images - 1;
+        while ($i >= 0) {
+            debug_log(sprintf "Checking for stage number %d (of %d)\n", $i + 1, $num_images);
+            if (!remote_image_found($workshop_args[$i]{'tag'})) {
+                if (!local_image_found($workshop_args[$i]{'tag'})) {
+                    $i--;
+                    next;
+                } else {
+                    push_local_image($workshop_args[$i]{'tag'});
+                    last;
+                }
             } else {
-                push_local_image($workshop_args[$i]{'tag'});
                 last;
             }
-        } else {
-            last;
         }
-    }
-    if ($i == -1) {
-        printf "Did not find any existing stages\n";
-    } elsif ($i < $num_images - 1) {
-        printf "Found stage number %d (of %d), need to build %d stage(s)\n", $i + 1, $num_images, $num_images - 1 - $i;
-    } elsif ($i == $num_images - 1) {
-        printf "Found most complete stage (number %d)\n", $i + 1;
-    } else {
-        printf "Something went wrong, stage number: %d, num_images: %d\n", $i + 1, $num_images;
-        exit 1;
+        if ($i == -1) {
+            printf "Did not find any existing stages\n";
+        } elsif ($i < $num_images - 1) {
+            printf "Found stage number %d (of %d), need to build %d stage(s)\n", $i + 1, $num_images, $num_images - 1 - $i;
+        } elsif ($i == $num_images - 1) {
+            printf "Found most complete stage (number %d)\n", $i + 1;
+        } else {
+            printf "Something went wrong, stage number: %d, num_images: %d\n", $i + 1, $num_images;
+            exit 1;
+        }
+    } elsif ($workshop_force_builds eq "true") {
+        $i = -1;
+        printf "Image building is forced, need to build %d stage(s)\n", $num_images;
     }
     $image = $run{'dest-image-url'} . ":" . $workshop_args[$i]{'tag'};
     # After finding the most complete image, build any "more" complete images until "most"
@@ -1411,6 +1418,12 @@ sub load_settings_info() {
     ($rc, $endpoint_move_data_rb_timeout) = get_json_setting("roadblock.timeouts.move-data", $jsonsettings);
     if ($rc != 0 ) {
         print "load_settings_info(): failed to load move-data roadblock timeout\n";
+        exit 1;
+    }
+
+    ($rc, $workshop_force_builds) = get_json_setting("workshop.force-builds", $jsonsettings);
+    if ($rc != 0) {
+        print "load_settings_info(): failed to load workshop force\n";
         exit 1;
     }
 }
