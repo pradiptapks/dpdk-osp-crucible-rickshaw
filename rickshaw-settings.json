@@ -14,5 +14,8 @@
 	"default": {
 	    "user": "root"
 	}
+    },
+    "workshop": {
+      "force-builds": "false"
     }
 }
