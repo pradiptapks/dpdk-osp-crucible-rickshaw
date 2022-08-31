@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "fedora35",
+    "label": "Fedora 35",
+    "origin": {
+      "image": "registry.fedoraproject.org/fedora",
+      "tag": "35"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },

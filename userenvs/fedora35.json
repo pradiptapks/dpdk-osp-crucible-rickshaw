@@ -1,15 +1,15 @@
 {
   "workshop": {
     "schema": {
-      "version": "2020.03.02"
+      "version": "2022.07.25"
     }
   },
   "userenv": {
-    "name": "fedora32",
-    "label": "Fedora 32",
+    "name": "fedora35",
+    "label": "Fedora 35",
     "origin": {
       "image": "registry.fedoraproject.org/fedora",
-      "tag": "32"
+      "tag": "35"
     },
     "properties": {
       "packages": {
@@ -20,12 +20,13 @@
   },
   "requirements": [
     {
-      "name": "python39",
+      "name": "python310",
       "type": "distro",
       "distro_info": {
         "packages": [
-          "python39",
-          "python3-pip"
+          "python310",
+          "python3-pip",
+          "python3-devel"
         ]
       }
     },
