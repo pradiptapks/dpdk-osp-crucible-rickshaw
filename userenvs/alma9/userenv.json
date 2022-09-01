@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "alma9",
+    "label": "AlmaLinux 9",
+    "origin": {
+      "image": "quay.io/almalinux/almalinux",
+      "tag": "9"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },

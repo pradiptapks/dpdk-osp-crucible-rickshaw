@@ -1,0 +1,14 @@
+  "userenv": {
+    "name": "rhubi9",
+    "label": "Red Hat UBI 9",
+    "origin": {
+      "image": "registry.access.redhat.com/ubi9/ubi",
+      "tag": "latest"
+    },
+    "properties": {
+      "packages": {
+        "type": "rpm",
+        "manager": "dnf"
+      }
+    }
+  },
