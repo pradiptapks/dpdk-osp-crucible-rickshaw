@@ -54,6 +54,7 @@ endpoint_name="k8s"
 # TODO: instead of using a prefix in the pods' names, use a unique k8s project
 pod_prefix="rickshaw"
 project_name="crucible-rickshaw"
+unique_project="0"
 hostNetwork="0"
 hugepage="0"
 osruntime="pod"
@@ -389,6 +390,9 @@ function process_k8s_opts() {
         # The $val may have : in it, so don't use awk to get only the second field
         val=`echo $opt | sed -e s/^$arg://`
         case "$arg" in
+            unique-project)
+                unique_project=${val}
+                ;;
             kubeconfig)
                 kubeconfig=$val
                 ;;
@@ -568,6 +572,10 @@ function process_k8s_opts() {
                 ;;
         esac
     done
+
+    if [ "${unique_project}" == "1" ]; then
+        project_name+="--${run_id}-${endpoint_label}"
+    fi
 }
 
 function build_pod_spec() {
