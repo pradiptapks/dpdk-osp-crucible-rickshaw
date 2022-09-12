@@ -1863,14 +1863,6 @@ sub prepare_bench_tool_engines() {
         }
         close FH;
     }
-    # Create empty files for any not created above
-    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
-        if ( ! -e $cs_file_list) {
-            open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
-            close FH;
-        }
-    }
 }
 
 sub add_ssh_keys() {
