@@ -38,7 +38,21 @@
       "type": "object",
       "properties": {
         "files-from-controller": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string",
+                "pattern": "^.+$"
+              },
+              "dest": {
+                "type": "string",
+                "pattern": "^.+$"
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "blacklist": {
           "type": "array",
