@@ -25,11 +25,10 @@ function exit_error() {
 function abort_error() {
     local msg=$1; shift
     local sync=$1; shift
-    local leader=$1; shift
     echo -e "[ERROR]engine-script-library: $msg\n"
     local msg_file=$(mktemp)
     echo '[{"recipient":{"type":"all","id":"all"},"user-object":{"error":"'$msg'"}}]' >$msg_file
-    do_roadblock ${sync} ${leader} 90 abort messages "${msg_file}"
+    do_roadblock ${sync} 90 abort messages "${msg_file}"
     abort=1
 }
 
@@ -354,10 +353,7 @@ function get_data() {
     # Get files required to run benchmark and tools
     cs_files_list="$cs_type-files-list"
     # First get the file that tells us what other files to get
-    scp_from_controller "$ssh_id_file" "$engine_config_dir/$cs_files_list" "$cs_files_list"
-    if [ ! -e "$cs_files_list" ]; then
-        abort_error "Could not find $cs_files_list" get-data-end $leader
-    fi
+    scp_from_controller "$ssh_id_file" "$engine_config_dir/$cs_files_list" "$cs_files_list" abort get-data-end
     dest_file=""
     src_file=""
     # Now we know what files to get
@@ -369,14 +365,14 @@ function get_data() {
         if [ -z "$src_file" ]; then
             src_file=`echo $line | grep "^src=" | awk -F= '{print $2}'`
             if [ -z "$src_file" ]; then
-                abort_error "source file not found in $cs_type-file-list" get-data-end $leader
+                abort_error "source file not found in $cs_type-file-list" get-data-end
             fi
         else
             dest_file=`echo $line | grep "^dest=" | awk -F= '{print $2}'`
             if [ -z "$dest_file" ]; then
-                abort_error "dest file not found in $cs_type-file-list" get-data-end $leader
+                abort_error "dest file not found in $cs_type-file-list" get-data-end
             fi
-            scp_from_controller "$ssh_id_file" "$src_file" "$dest_file"
+            scp_from_controller "$ssh_id_file" "$src_file" "$dest_file" abort get-data-end
             dest_file=""
             src_file=""
         fi
@@ -386,33 +382,27 @@ function get_data() {
     cs_start_bench_cmds="$cs_label-start-bench.cmds"
     # Everyone gets the bench-start-cmds (the client's start cmds) because that tells everyone how many tests there are
     if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
-        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/start" "bench-start-cmds"
+        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/start" "bench-start-cmds" abort get-data-end
     else
         # All tool-only osruntimes just copy from client-1
-        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/client/1/start" "bench-start-cmds"
-    fi
-    if [ ! -e "bench-start-cmds" ]; then
-        abort_error "bench cmds file bench-start-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`" get-data-end $leader
+        scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/client/1/start" "bench-start-cmds" abort get-data-end
     fi
     if [ "$cs_type" == "client" -o "$cs_type" == "server" ]; then
         if [ "$cs_type" == "client" ]; then
-            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/infra" "bench-infra-cmds"
+            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/infra" "bench-infra-cmds" abort get-data-end
             if [ "$cs_id" == "1" ]; then
-                scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/runtime" "bench-runtime-cmds"
+                scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/runtime" "bench-runtime-cmds" abort get-data-end
             fi
         fi
         if [ "$cs_type" == "server" ]; then
-            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds"
-            if [ ! -e "bench-stop-cmds" ]; then
-                abort_error "bench cmds file bench-stop-cmds not found. PWD: `/bin/pwd`  LS: `/bin/ls`" get-data-end $leader
-            fi
+            scp_from_controller "$ssh_id_file" "$engine_config_dir/bench-cmds/$cs_type/$cs_id/stop" "bench-stop-cmds" abort get-data-end
         fi
-        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/start" "$tool_start_cmds"
-        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/stop" "$tool_stop_cmds"
+        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/start" "$tool_start_cmds" abort get-data-end
+        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/$cs_id/stop" "$tool_stop_cmds" abort get-data-end
     else
         # non-client/server get tool cmds based on endpoint-specific collector = $cs_label like "worker"
-        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/start" "$tool_start_cmds"
-        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/stop" "$tool_stop_cmds"
+        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/start" "$tool_start_cmds" abort get-data-end
+        scp_from_controller "$ssh_id_file" "$tool_cmds_dir/stop" "$tool_stop_cmds" abort get-data-end
     fi
 }
 
@@ -444,7 +434,7 @@ function start_tools() {
     else
         for this_tool_cmds in "$tool_start_cmds" "$tool_stop_cmds"; do
             if [ ! -e $this_tool_cmds ]; then
-                abort_error "Tool cmd file $this_tool_cmd was not found" start-tools-end $leader
+                abort_error "Tool cmd file $this_tool_cmd was not found" start-tools-end
             fi
         done
 
@@ -459,13 +449,13 @@ function start_tools() {
 
                     popd >/dev/null
                 else
-                    abort_error "start_tools: Failed to pushd to ${tool_name}" start-tools-end $leader
+                    abort_error "start_tools: Failed to pushd to ${tool_name}" start-tools-end
                 fi
             done 9<"$tool_start_cmds"
 
             popd >/dev/null
         else
-            abort_error "start_tools: Failed to pushd to tool-data" start-tools-end $leader
+            abort_error "start_tools: Failed to pushd to tool-data" start-tools-end
         fi
     fi
 }
@@ -669,7 +659,7 @@ function process_bench_roadblocks() {
             let count=$count+1
         done 9< bench-start-cmds
     else
-        abort_error "bench-start-cmds not found" setup-bench-end $leader
+        abort_error "bench-start-cmds not found" setup-bench-end
     fi
 
     if [ "$cs_type" == "client" ]; then
@@ -714,7 +704,7 @@ function process_bench_roadblocks() {
                 let count=$count+1
             done 9< bench-stop-cmds
         else
-            abort_error "bench-stop-cmds not found" setup-bench-end $leader
+            abort_error "bench-stop-cmds not found" setup-bench-end
         fi
     fi
 
@@ -1059,13 +1049,13 @@ function stop_tools() {
 
                     popd >/dev/null
                 else
-                    abort_error "stop_tools: Failed to pushd to ${tool_name}" stop-tools-end $leader
+                    abort_error "stop_tools: Failed to pushd to ${tool_name}" stop-tools-end
                 fi
             done 9<"$tool_stop_cmds"
 
             popd >/dev/null
         else
-            abort_error "stop_tools: Failed to pushd to tool-data" stop-tools-end $leader
+            abort_error "stop_tools: Failed to pushd to tool-data" stop-tools-end
         fi
     fi
 }
