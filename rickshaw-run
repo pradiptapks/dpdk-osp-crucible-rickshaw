@@ -1829,24 +1829,44 @@ sub prepare_bench_tool_engines() {
         open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
         if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
             for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
+                if (! exists $$file_spec{'required'}) {
+                    $$file_spec{'required'} = 1;
+                }
                 my $src_file = $$file_spec{'src'};
                 $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
                 $src_file =~ s/\%run-dir\%/$run_dir\//g;
                 $src_file =~ s/\%config-dir\%/$config_dir\//g;
                 my $dest_file = $$file_spec{'dest'};
-                printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                if (-e $src_file) {
+                    debug_log(sprintf("adding  %s for engine type '%s'", $src_file, $cs_type));
+                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                } elsif (! $$file_spec{'required'}) {
+                    debug_log(sprintf("skipping %s because it does not exist and is not required for engine type '%s'", $src_file, $cs_type));
+                } else {
+                    die "[ERROR]Could not find required file " . $src_file . " for engine type '" . $cs_type. "'\n";
+                }
             }
         }
         foreach my $tool_entry (@tools_params) {
             my $tool_name = $$tool_entry{'tool'};
             if (exists $tools_configs{$tool_name}{'collector'}{'files-from-controller'}) {
                 for my $file_spec (@{ $tools_configs{$tool_name}{'collector'}{"files-from-controller"} } ) {
+                    if (! exists $$file_spec{'required'}) {
+                        $$file_spec{'required'} = 1;
+                    }
                     my $src_file = $$file_spec{'src'};
                     $src_file =~ s/\%tool-dir\%/$run{'tools-dir'}\/$$tool_entry{'tool'}\//g;
                     $src_file =~ s/\%run-dir\%/$run_dir\//g;
                     $src_file =~ s/\%config-dir\%/$config_dir\//g;
                     my $dest_file = $$file_spec{'dest'};
-                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                    if (-e $src_file) {
+                        debug_log(sprintf("adding %s for tool '%s'", $src_file, $tool_name));
+                        printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                    } elsif (! $$file_spec{'required'}) {
+                        debug_log(sprintf("skipping %s because it does not exist and is not required for tool '%s'", $src_file, $tool_name));
+                    } else {
+                        die "[ERROR]Could not find required file " . $src_file . " for tool '" . $tool_name . "'\n";
+                    }
                 }
             }
         }
@@ -1854,22 +1874,24 @@ sub prepare_bench_tool_engines() {
             my $utility_dir = $run{$utility . '-dir'};
             if (exists $utility_configs{$utility}{'engine'}{'files-from-controller'}) {
                 for my $file_spec (@{ $utility_configs{$utility}{'engine'}{'files-from-controller'} }) {
+                    if (! $$file_spec{'required'}) {
+                        $$file_spec{'required'} = 1;
+                    }
                     my $src_file = $$file_spec{'src'};
                     $src_file =~ s/\%utility-dir\%/$utility_dir/g;
                     my $dest_file = $$file_spec{'dest'};
-                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                    if (-e $src_file) {
+                        debug_log(sprintf("adding %s for utility '%s'", $src_file, $utility));
+                        printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                    } elsif (! $$file_spec{'required'}) {
+                        debug_log(sprintf("skipping %s because it does not exist and is not required for utility '%s'", $src_file, $utility));
+                    } else {
+                        die "[ERROR]Could not find required file " . $src_file . " for utility '" . $utility . "'\n";
+                    }
                 }
             }
         }
         close FH;
-    }
-    # Create empty files for any not created above
-    foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
-        if ( ! -e $cs_file_list) {
-            open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
-            close FH;
-        }
     }
 }
 

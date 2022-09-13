@@ -59,6 +59,9 @@
               "dest": {
                 "type": "string",
                 "pattern": "^.+$"
+              },
+              "required": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false
@@ -107,6 +110,9 @@
               "dest": {
                 "type": "string",
                 "pattern": "^.+$"
+              },
+              "required": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false

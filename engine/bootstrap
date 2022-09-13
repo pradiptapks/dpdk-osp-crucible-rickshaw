@@ -31,6 +31,8 @@ function scp_from_controller() {
     local ssh_id_file=$1; shift
     local src=$1; shift
     local dest=$1; shift
+    local error_handler=$1; shift
+    local rb_name=$1; shift
     if [ -z "$ssh_id_file" ]; then
         exit_error "scp_from_controller(): ssh_id_file not defined"
     fi
@@ -68,7 +70,18 @@ function scp_from_controller() {
         let scp_attempts=$scp_attempts+1
     done
     if [ $scp_attempts -ge $max_attempts ]; then
-        exit_error "Could not copy $src from $rickshaw_host"
+        case "${error_handler}" in
+            "abort")
+                if [ -z "{rb_name}" ]; then
+                    exit_error "Could not copy ${src} from ${rickshaw_host} with empty roadblock name"
+                else
+                    abort_error "Could not copy ${src} from ${rickshaw_host}" ${rb_name}
+                fi
+                ;;
+            "exit"|*)
+                exit_error "Could not copy ${src} from ${rickshaw_host}"
+                ;;
+        esac
     fi
 }
 export -f scp_from_controller
