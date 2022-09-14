@@ -842,11 +842,11 @@ if (exists $result{'iterations'}) {
                                                     # period.
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'begin'} or $$this_sample{'periods'}[$period_idx]{'begin'} < $earliest_begin) {
                                                         $$this_sample{'periods'}[$period_idx]{'begin'} = $earliest_begin;
-                                                        printf "client/server's ID %d begin is after current sample begin, so assigning sample begin to %d\n", $cs_id, $earliest_begin;
+                                                        debug_log(sprintf "client/server's ID %d begin is after current sample begin, so assigning sample begin to %d\n", $cs_id, $earliest_begin);
                                                     }
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'end'} or $$this_sample{'periods'}[$period_idx]{'end'} > $latest_end) {
                                                         $$this_sample{'periods'}[$period_idx]{'end'} = $latest_end;
-                                                        printf "client/server's ID %d end is before current sample end, so assigning sample begin to %d\n", $cs_id, $latest_end;
+                                                        debug_log(sprintf "client/server's ID %d end is before current sample end, so assigning sample begin to %d\n", $cs_id, $latest_end);
                                                     }
                                                     if (! defined $result{'run.begin'} or $result{'begin'} > $$this_sample{'periods'}[$period_idx]{'begin'}) {
                                                         $result{'begin'} = $$this_sample{'periods'}[$period_idx]{'begin'};
