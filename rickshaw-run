@@ -256,8 +256,6 @@ sub dump_params {
     my $params_str = "";
     my $benchmark = $ids_to_benchmark{$cs_id};
 
-    print Dumper $params_ref;
-
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'};
         my $val = $$param{'val'};
@@ -1210,6 +1208,7 @@ sub process_cmdline() {
             exit 1;
         }
     }
+    ###foreach my $this_bench_dir ( split(/,/, $run{'bench-dir'}) ) {
     # Apply defaults
     foreach my $p (keys %defaults) {
         if (! exists $run{$p}) {
@@ -1247,13 +1246,7 @@ sub validate_controller_env() {
                                     "(\$CRUCIBLE_HOME/subprojects/tools)\n";
 }
 
-sub load_bench_params() {
-    $run{'iterations'} = ();
-    # Load the bench config and user params
-    exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to-first/benchmark-subproject[,/path/to-second/benchmark-subproject]\n";
-    exists $run{'bench-params'} || die "[ERROR}You must use --bench-params=/path/to-first/benchmark-params.json[,/path/to-second/benchmark-params.json]\n";
-    # --benchmark-ids = "uperf:1-2,iperf:3-4"
-    my $rc;
+sub assign_bench_ids() {
     foreach my $benchmark_and_id ( split(/,/, $run{'bench-ids'}) ) {
         printf "benchmark_and_id: %s\n", $benchmark_and_id;
         (my $bench, my $ids) = split(/:/, $benchmark_and_id);
@@ -1273,8 +1266,16 @@ sub load_bench_params() {
             }
         }
     }
-    print Dumper \%benchmark_to_ids;
-    print Dumper \%ids_to_benchmark;
+}
+
+sub load_bench_params() {
+    $run{'iterations'} = ();
+    # Load the bench config and user params
+    exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to-first/benchmark-subproject[,/path/to-second/benchmark-subproject]\n";
+    exists $run{'bench-params'} || die "[ERROR}You must use --bench-params=/path/to-first/benchmark-params.json[,/path/to-second/benchmark-params.json]\n";
+    # --benchmark-ids = "uperf:1-2,iperf:3-4"
+    my $rc;
+
     my @params_files = split(/,/, $run{'bench-params'});
     my $count = 0;
     $run{'benchmark'} = "";
@@ -1314,7 +1315,6 @@ sub load_bench_params() {
             if (! exists $run{'iterations'}[$iter_id]{'params'}) {
                 $run{'iterations'}[$iter_id]{'params'} = [];
             }
-            print "params:\n" . Dumper $params;
             foreach my $param (@$params) {
                 $$param{'benchmark'} = $benchmark_name;
                 push(@{ $run{'iterations'}[$iter_id]{'params'} }, $param);
@@ -1326,8 +1326,6 @@ sub load_bench_params() {
     $run{'benchmark'} =~ s/^,//;
 
     printf "There are %d benchmark types to run\n", scalar keys %bench_configs;
-    print "bench_configs:\n" . Dumper \%bench_configs;
-    print "iterations:\n" . Dumper $run{'iterations'};
 }
 
 sub load_tool_params() {
@@ -1479,6 +1477,7 @@ sub load_settings_info() {
         print "load_settings_info(): failed to load workshop force\n";
         exit 1;
     }
+    printf "Finished loading json settings\n";
 }
 
 sub save_config_info() {
@@ -1491,6 +1490,7 @@ sub save_config_info() {
         printf "save_config_info(): put_json_file() failed for %s\n", $config_dir . "/rickshaw-settings.json";
         exit 1;
     }
+    printf "Finished saving json settings to %s\n", $config_dir . "/rickshaw-run.json";
 }
 
 sub validate_endpoints() {
@@ -1518,6 +1518,7 @@ sub validate_endpoints() {
                 " --endpoint-opts=" . $$endpoint{'opts'} .
                 " --validate";
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
+        printf "endopoint validation command: [%s]\n", $cmd;
         ($cmd, my $output, my $cmd_rc) = run_cmd($cmd);
         my @output = grep(!/^#/, split(/\n/, $output));
         if ($cmd_rc > 0) {
@@ -1565,10 +1566,12 @@ sub validate_endpoints() {
     }
 
 
+    print "number of benchmarks: " . scalar(keys(%bench_configs)) . "\n";
     if (scalar keys %bench_configs == 1) {
         # There us only one benchmark type used, and there may not be a --benchmark-ids provided,
         # so we need to match clients to servers here.
-        my $this_benchmark = keys %bench_configs;
+        my @benchmarks = keys %bench_configs;
+        my $this_benchmark = $benchmarks[0];
 
         my $server_required = 0;
         if (exists $bench_configs{$this_benchmark}{'server'}) {
@@ -1584,7 +1587,6 @@ sub validate_endpoints() {
         my $servers_present = 0;
         my $clients_present = 0;
         for (my $id = $min_id; $id <= $max_id; $id++) {
-            #my $this_benchmark = $ids_to_benchmark{$id};
             debug_log(sprintf "checking for client ID %d\n", $id);
             # Only check for matching clients if we have 1:1 assignment.
             # 1:N can have as many servers with just 1 client
@@ -1622,20 +1624,23 @@ sub validate_endpoints() {
         printf " and %d server(s)", $servers_present if exists $bench_configs{$this_benchmark}{'server'} && $servers_present;
         printf " and %d collector(s)", $collectors_present if $collectors_present;
         printf "\n";
+        # --bench-ids is not used/needed when only 1 benchmark is used, so we need to populate it now
+        # with what was discovered with endpoint validation
+        $run{'bench-ids'} = $this_benchmark . ":" . $min_id . "-" . $max_id;
+        assign_bench_ids();
     } else { # >1 benchmark types
-        # When more than one benchmark type is specified, the user must include --benchmark-ids,
-        # so that we know what range ids belongs to benchmark X, Y[, and Z...]
+        # Assumes --bench-ids is already defined by user, which is required
+        # when multi-benchmarks are used.
+        assign_bench_ids();
         printf "Check for multi-benchmark IDs here\n";
     }
-
-
-
 
     $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
         " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
         "/workshop.json ";
     $run{'endpoints'} = \@endpoints;
+    print "Endpoints validated\n";
 }
 
 sub build_test_order() {
@@ -1941,12 +1946,7 @@ sub prepare_bench_tool_engines() {
                     my $test_iter = $$test_ref{'iteration-id'};
                     my $test_samp = $$test_ref{'sample-id'};
                     my $iter_array_idx = $test_iter - 1;
-                    print "ids_to_benchmark:\n" . Dumper \%ids_to_benchmark;
-                    printf "cs_id: %s\n", $cs_id;
                     my $benchmark = $ids_to_benchmark{$cs_id};
-                    printf "benchmark: %s\n", $benchmark;
-                    printf "cs_type: %s\n", $cs_type;
-                    print "bench_configs:\n" . Dumper \%bench_configs;
                     if (exists $bench_configs{$benchmark}{$cs_type}{$cmd_type} and
                         $bench_configs{$benchmark}{$cs_type}{$cmd_type} ne "") {
                         my $cmd = $bench_configs{$benchmark}{$cs_type}{$cmd_type} . " " .
@@ -1981,8 +1981,7 @@ sub prepare_bench_tool_engines() {
     # The "engine-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
     foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
-        open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
+        print "cs_type: " . $cs_type . "\n";
         if ($cs_type =~ /^client|server|profiler?/) {
             foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
                 my $cs_id = $$cs_ref{'id'};
@@ -2314,11 +2313,14 @@ sub remove_followers {
 }
 
 process_cmdline();
-validate_controller_env();
 load_bench_params();
+validate_controller_env();
+make_run_dirs();
+load_settings_info();
+save_config_info();
+validate_endpoints();
 load_tool_params();
 load_utility_params();
-make_run_dirs();
 if ($run{'reg-auth'} eq "") {
     printf "Disabling registry authorization due to empty 'reg-auth' variable\n";
     $skip_registry_auth = 1;
@@ -2349,9 +2351,6 @@ $workshop_base_cmd =
     " --param %rickshaw-dir%=" . $rickshaw_project_dir .
     " --reg-tls-verify=" . $run{'reg-tls-verify'} .
     " 2>&1";
-load_settings_info();
-save_config_info();
-validate_endpoints();
 build_test_order();
 prepare_bench_tool_engines();
 print "Preparing userenvs:\n";
