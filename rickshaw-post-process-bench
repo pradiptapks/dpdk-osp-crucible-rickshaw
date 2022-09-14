@@ -58,13 +58,29 @@ sub dump_params {
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'};
         my $val = $$param{'val'};
+        my $id = $$param{'id'};
         if (defined $val && length $val) {
             if (defined $cs_id) {
-                $val =~ s/\%client-id\%/$cs_id/;
+                if (defined $id) {
+                    # If %client-id% is embedded in a pertion of thr value, substitute it for the
+                    # actual client ID.  For example:
+                    # in params.json: "val": file%client-id%
+                    # in this function called with $cs_id = 3;
+                    # $val becomes "file3";
+                    $val =~ s/\%client-id\%/$cs_id/;
+                    if ($cs_id eq $id) {
+                        # In the params.json, there are many entries iof same arg, but with different vals and ids:
+                        # "arg": protocol, "val": udp, "id": "1",
+                        # "arg": protocol, "val": tcp, "id": "2",
+                        # In this case assign $val obnly when the matching "id" is found
+                        $params_str .= " --" . $arg . "=" . $val;
+                    }
+                } else { # $id not defined
+                    $params_str .= " --" . $arg . "=" . $val;
+                }
+            } else { # $cs_id not defined
+                $params_str .= " --" . $arg . "=" . $val;
             }
-            $params_str .= " --" . $arg . "=" . $val;
-        } else {
-            $params_str .= " --" . $arg;
         }
     }
     $params_str =~ s/^\s//;
@@ -180,7 +196,6 @@ $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
 $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
 $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
 for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
-    my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'});
     my $iter_dh;
     my $this_iter_dir = $iter_subdir . "/iteration-" . $i;
     if (! -d $run_dir . "/" . $this_iter_dir) {
@@ -211,6 +226,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                     if (opendir(my $cs_name_dh, $run_dir . "/" . $cs_name_dir)) {
                         my @cs_ids = grep(/^(\d+)$/, readdir($cs_name_dh));
                         for my $cs_id (@cs_ids) {
+                            my $iter_params = dump_params($run{'iterations'}[$i - 1]{'params'}, $cs_id);
                             my $cs_id_dir = $cs_name_dir . "/" . $cs_id;
                             if (-d $run_dir . "/" . $cs_id_dir) {
                                 if (my $pid = fork) {
