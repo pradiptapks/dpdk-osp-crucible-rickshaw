@@ -1391,9 +1391,8 @@ sub load_utility_params() {
 }
 
 sub make_run_dirs() {
-    # Ensure the bench-dir, base-run-dir, and tools-dir have absolute paths
+    # Ensure the base-run-dir, and tools-dir have absolute paths
     # because they may be referenced by clients and servers later
-    #for my $dirtype (qw(base-run-dir bench-dir tools-dir)) {
     for my $dirtype (qw(base-run-dir tools-dir)) {
         {
             my $pushd_dir = pushd($run{$dirtype});
@@ -2011,7 +2010,7 @@ sub add_ssh_keys() {
 sub deploy_endpoints() {
     # Deploy ths endpoints so they are ready to run benchmark and tools.
     # Each endpoint is responible for launching a osruntime for each client and server.
-    print "\n\nDeploying endpoints\n";
+    print "\nDeploying endpoints\n";
     $endpoint_deploy_timeout += scalar @endpoints * 120;
     printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     $engine_script_start_timeout += scalar @endpoints * 120;
