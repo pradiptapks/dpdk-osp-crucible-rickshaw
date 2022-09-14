@@ -179,8 +179,6 @@ foreach my $this_bench_dir ( split(/,/, $run{'bench-dir'}) ) {
         if (exists $$bench_config_ref{'benchmark'}) {
             $benchmark_name = $$bench_config_ref{'benchmark'};
             $bench_dirs{$benchmark_name} = $this_bench_dir;
-            printf "Preparing to run %s\n", $benchmark_name;
-            #push(@{ $run{'benchmarks'} }, $benchmark_name);
             $bench_configs{$benchmark_name} = $bench_config_ref;
         } else {
             print "[ERROR]benchmark was not defined in %s\n", $bench_config_file;
@@ -194,13 +192,11 @@ foreach my $this_bench_dir ( split(/,/, $run{'bench-dir'}) ) {
 
 # Build tables to map benchmark to IDs and ID to benchmark
 foreach my $benchmark_and_id ( split(/,/, $run{'bench-ids'}) ) {
-    printf "benchmark_and_id: %s\n", $benchmark_and_id;
     (my $bench, my $ids) = split(/:/, $benchmark_and_id);
     my @id_ranges = split(/,/, $ids);
     foreach my $id_range (@id_ranges) {
         if ($id_range =~ /^(\d+)\-(\d+)$/) {
             for (my $id = $1; $id <= $2; $id++) {
-                printf "id: [%d]\n", $id;
                 $ids_to_benchmark{$id} = $bench;
                 push(@{ $benchmark_to_ids{$bench} }, $id);
             }
@@ -261,7 +257,7 @@ for (my $i = 1; $i <= scalar @{ $run{'iterations'} }; $i++) {
                                 } else {
                                     my $pushd_dir = pushd($run_dir . "/" . $cs_id_dir);
                                     my $full_cmd = "RS_CS_LABEL=" . $cs_name . "-" . $cs_id . " " . $pp_cmd . " " . $iter_params . " >post-process-output.txt 2>&1";
-                                    printf "About to run: [%s]\n", $full_cmd;
+                                    debug_log(sprintf "About to run: [%s]\n", $full_cmd);
                                     my $rc = system($full_cmd);
                                     if ($rc == -1) {
                                         printf "Failed to execute '%s%s'!\n", $pp_cmd, $iter_params;
