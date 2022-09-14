@@ -360,7 +360,6 @@ sub calc_image_md5 {
         $workshop_sub_cmd = $workshop_base_cmd . " " . $userenv_arg;
     }
     my $workshop_config_cmd = $workshop_sub_cmd . " --label config-analysis --dump-config true";
-    printf "workshop_config_cmd:\n%s\n", $workshop_config_cmd;
     my $workshop_files_cmd = $workshop_sub_cmd . " --label files-listing --dump-files true";
     (my $cmd, my $cmd_output, my $cmd_rc) = run_cmd($workshop_config_cmd);
     my @config_analysis_output = split(/\n/, $cmd_output);
@@ -1248,13 +1247,11 @@ sub validate_controller_env() {
 
 sub assign_bench_ids() {
     foreach my $benchmark_and_id ( split(/,/, $run{'bench-ids'}) ) {
-        printf "benchmark_and_id: %s\n", $benchmark_and_id;
         (my $bench, my $ids) = split(/:/, $benchmark_and_id);
         my @id_ranges = split(/,/, $ids);
         foreach my $id_range (@id_ranges) {
             if ($id_range =~ /^(\d+)\-(\d+)$/) {
                 for (my $id = $1; $id <= $2; $id++) {
-                    printf "id: [%d]\n", $id;
                     $ids_to_benchmark{$id} = $bench;
                     push(@{ $benchmark_to_ids{$bench} }, $id);
                 }
@@ -1869,7 +1866,6 @@ sub prepare_bench_tool_engines() {
             -e $collector_tool_cmds_dir || make_path($collector_tool_cmds_dir) ||
                 die "[ERROR]Create collector directory failed: [" . $collector_tool_cmds_dir . "]\n";
             my $tool_cmd_file = $collector_tool_cmds_dir . "/" . $start_stop; 
-            printf "tool_cmd_file: [%s]\n", $tool_cmd_file;
             my $tool_count = 0;
             open(my $fh, ">" . $tool_cmd_file) ||
                 die "[ERROR]could not open cmd file for writing: [" . $tool_cmd_file . "]\n";
@@ -1981,16 +1977,13 @@ sub prepare_bench_tool_engines() {
     # The "engine-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
     foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        print "cs_type: " . $cs_type . "\n";
         if ($cs_type =~ /^client|server|profiler?/) {
             foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
                 my $cs_id = $$cs_ref{'id'};
                 my $benchmark = $ids_to_benchmark{$cs_id};
-                printf "build_files_list(%s, %s, %s)\n", $cs_type, $cs_id, $benchmark;
                 build_files_list($cs_type, $cs_id, $benchmark);
             }
         } else {
-            printf "build_files_list(%s)\n", $cs_type;
             build_files_list($cs_type);
         }
     }
@@ -2010,10 +2003,8 @@ sub prepare_bench_tool_engines() {
 
 sub add_ssh_keys() {
     # Create temporary ssh keys so endpoint clients/servers can pull/push data
-    print "before keygen cmd\n";
     my $keygen_cmd = 'ssh-keygen -f ' . $config_dir . '/rickshaw_id.rsa -P "" 2>&1';
     ($keygen_cmd, my $keygen_output, my $keygen_cmd_rc) = run_cmd($keygen_cmd);
-    print "after keygen cmd\n";
     system('cat ' . $config_dir . '/rickshaw_id.rsa.pub >>/root/.ssh/authorized_keys');
 }
 
@@ -2360,9 +2351,7 @@ foreach my $userenv (keys %userenvs) {
         die "Could not get valid image [" . $userenvs{$userenv}{'image'} . "] for container image build for userenv [" . $userenv . "]\n";
     }
 }
-print "HELLO 1\n\n\n";
 add_ssh_keys();
-print "HELLO 2\n\n\n";
 deploy_endpoints();
 process_roadblocks();
 organize_run_data();
