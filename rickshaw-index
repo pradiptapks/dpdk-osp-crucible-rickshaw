@@ -449,9 +449,11 @@ sub index_metrics {
                 if ($type{$idx} eq $primary_metric) {
                     if (not defined $earliest_begin or $earliest_begin > $metr_data_doc{'metric_data'}{'begin'}) {
                         $earliest_begin = $metr_data_doc{'metric_data'}{'begin'};
+                        printf "index_metrics() assigning earliest_begin to %d\n", $earliest_begin;
                     }
                     if (not defined $latest_end or $latest_end < $metr_data_doc{'metric_data'}{'end'}) {
                         $latest_end = $metr_data_doc{'metric_data'}{'end'};
+                        printf "index_metrics() assigning latest_end to %d\n", $latest_end;
                     }
                 }
             }
@@ -822,14 +824,24 @@ if (exists $result{'iterations'}) {
                                                         my $this_begin;
                                                         my $this_end;
                                                         # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
+                                                        printf "index_metrics('queue', $metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric\n";
+                                                        print Dumper $base_metric_doc_ref;
                                                         (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics('queue', $metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
-                                                        #$num_docs_submitted{'metric_desc'} += $num_metric_docs_submitted;
                                                         # From processing all metric files, get the very-earliest-begin and very-latest-end
-                                                        if (not defined $earliest_begin or $earliest_begin > $this_begin) {
-                                                            $earliest_begin = $this_begin;
-                                                        }
-                                                        if (not defined $latest_end or $latest_end < $this_end) {
-                                                            $latest_end = $this_end;
+                                                        printf "num_metric_docs_submitted: %d\n", $num_metric_docs_submitted;
+                                                        if (defined $this_begin and defined $this_end) {
+                                                            printf "this_begin: %d  this_end: %d\n", $this_begin, $this_end;
+                                                            if (not defined $earliest_begin or $earliest_begin > $this_begin) {
+                                                                $earliest_begin = $this_begin;
+                                                                printf "earliest_begin updated to %d\n", $earliest_begin;
+                                                            }
+                                                            if (not defined $latest_end or $latest_end < $this_end) {
+                                                                $latest_end = $this_end;
+                                                                printf "latest_end updated to %d\n", $latest_end;
+                                                            }
+                                                        } else {
+                                                            printf "ERROR: index_metrics() returned undefined this_begin and/or undefined this_end, exiting\n";
+                                                            exit 1;
                                                         }
                                                     }
                                                     # Now if this client/server's earliest_begin is *later* than a defined begin for the consolidated period, 
@@ -838,9 +850,11 @@ if (exists $result{'iterations'}) {
                                                     # period.
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'begin'} or $$this_sample{'periods'}[$period_idx]{'begin'} < $earliest_begin) {
                                                         $$this_sample{'periods'}[$period_idx]{'begin'} = $earliest_begin;
+                                                        printf "client/server's ID %d begin is after current sample begin, so assigning sample begin to %d\n", $cs_id, $earliest_begin;
                                                     }
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'end'} or $$this_sample{'periods'}[$period_idx]{'end'} > $latest_end) {
                                                         $$this_sample{'periods'}[$period_idx]{'end'} = $latest_end;
+                                                        printf "client/server's ID %d end is before current sample end, so assigning sample begin to %d\n", $cs_id, $latest_end;
                                                     }
                                                     if (! defined $result{'run.begin'} or $result{'begin'} > $$this_sample{'periods'}[$period_idx]{'begin'}) {
                                                         $result{'begin'} = $$this_sample{'periods'}[$period_idx]{'begin'};

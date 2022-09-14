@@ -124,8 +124,8 @@
     "name",
     "test-order",
     "endpoints",
-    "iterations",
     "benchmark",
+    "iterations",
     "rickshaw-run"
   ],
   "addtionalProperties": false
