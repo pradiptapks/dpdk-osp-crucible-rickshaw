@@ -383,6 +383,22 @@ function k8s_req_check() {
     fi
 }
 
+function get_opt_field() {
+    local input=${1}
+    local field=${2}
+
+    case "${field}" in
+        "key")
+            field="1"
+            ;;
+        "value")
+            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
+            ;;
+    esac
+
+    echo "${input}" | cut -d ':' -f ${field}
+}
+
 function process_k8s_opts() {
     local endpoint_opts="$1"
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
@@ -428,8 +444,8 @@ function process_k8s_opts() {
                 # option format::  cpu-partitioning:<engine-label>:<value>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
                 #TODO: validate correct format of <engine-label>
-                name=`echo $val | awk -F: '{print $1}'`
-                value=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                value=$(get_opt_field "${val}" "value")
                 if [ ! -z "$name" -a ! -z "$value" ]; then
                     cpuPartitioning[$name]=$value
                 else
@@ -454,8 +470,8 @@ function process_k8s_opts() {
                 #    "kubernetes.io/hostname": "worker000"
                 # }
                 #TODO: validate correct format of <engine-label>:<path-to-file>
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     nodeSelector[$name]=`cat $file`
                 else
@@ -474,8 +490,8 @@ function process_k8s_opts() {
                 #   }
                 # }
                 #TODO: validate correct format of <engine-label>:<path-to-file>
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     securityContext[$name]=`cat $file`
                 else
@@ -496,8 +512,8 @@ function process_k8s_opts() {
                 #       ]
                 # }
                 #TODO: validate correct format of <engine-label>:<path-to-file>
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     PsecurityContext[$name]=`cat $file`
                 else
@@ -520,8 +536,8 @@ function process_k8s_opts() {
                 #   }
                 # }
                 #TODO: validate correct format of <engine-label>:<path-to-file>
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     resources[$name]=`cat $file`
                 else
@@ -537,8 +553,8 @@ function process_k8s_opts() {
                 #   "k8s.v1.cni.cncf.io/networks": "sriov-mellanox-b-pod, sriov-mellanox-a-pod"
                 # }
                 #TODO: validate correct format of <engine-label>:<path-to-file>
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     annotations[$name]=`cat $file`
                 else
@@ -546,8 +562,8 @@ function process_k8s_opts() {
                 fi
                 ;;
             volumeMounts)
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     volumeMounts[$name]=`cat $file`
                 else
@@ -555,8 +571,8 @@ function process_k8s_opts() {
                 fi
                 ;;
             volumes)
-                name=`echo $val | awk -F: '{print $1}'`
-                file=`echo $val | awk -F: '{print $2}'`
+                name=$(get_opt_field "${val}" "key")
+                file=$(get_opt_field "${val}" "value")
                 if [ ! -z "$file" -o -e $file ]; then
                     volumes[$name]=`cat $file`
                 else
