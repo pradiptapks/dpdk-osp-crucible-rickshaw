@@ -23,6 +23,9 @@
       ],
       "additionalProperties": false
     },
+    "benchmark": {
+      "type": "string"
+    },
     "primary-metric": {
       "type": "string"
     },
