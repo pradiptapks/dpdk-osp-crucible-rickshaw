@@ -50,7 +50,8 @@ my %bench_dirs;
 my %benchmark_to_ids;
 my %ids_to_benchmark;
 my @endpoints;
-my %userenvs;
+#my %userenvs;
+my %image_ids; # {$benchmark-type}{$userenv}
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
@@ -350,6 +351,7 @@ sub dir_entries {
 }
 
 sub calc_image_md5 {
+    my $workshop_base_cmd = shift;
     my $userenv_arg = shift;
     die "calc_image_md5(): \$userenv_arg must be defined" if (!defined $userenv_arg);
     my $req_args = shift;
@@ -492,6 +494,7 @@ sub local_image_found {
 }
 
 sub workshop_build_image {
+    my $workshop_base_cmd = shift;
     my $stage = shift;
     my $userenv_arg = shift;
     die "workshop_build_image(): userenv_arg must be defined\n" if !defined $userenv_arg;
@@ -512,7 +515,7 @@ sub workshop_build_image {
             last;
         }
     }
-    my $image_tag = calc_image_md5($userenv_arg, $req_args);
+    my $image_tag = calc_image_md5($workshop_base_cmd, $userenv_arg, $req_args);
     if ($tag ne $image_tag) {
         printf "ERROR: workshop_build_image(): provided tag [%s] and calculated tag [%s] do not match\n",
                $tag, $image_tag;
@@ -634,6 +637,7 @@ sub push_local_image {
 sub build_reqs {
     my $req_ref = shift;
     my $userenv = shift;
+    my $benchmark = shift;
     return if (!$use_workshop);
 
     # Build an ordered list of requirements.  What order?  That depends.
@@ -751,12 +755,10 @@ sub build_reqs {
             }
         }
     }
-    foreach my $bench (keys %bench_dirs) {
-        push (@$req_ref, "--requirement " . $bench_dirs{$bench} . "/workshop.json");
-    }
     foreach my $tool_entry (@tools_params) {
         push(@$req_ref, "--requirement " . $run{'tools-dir'} . "/" .  $$tool_entry{'tool'} . "/workshop.json ");
     }
+    push (@$req_ref, "--requirement " . $bench_dirs{$benchmark} . "/workshop.json");
 }
 
 sub get_image_urls {
@@ -822,14 +824,25 @@ sub source_container_image {
     # Ensure that the container image we need is either already in the container registry,
     # or build and push the image to the registry
     my $userenv = shift;
+    my $benchmark = shift;
     my $image; # What gets returned
     my @local_images;
 
+    $workshop_base_cmd =
+    $run{'workshop-dir'} . "/workshop.pl" .
+    " --log-level verbose " .
+    " --config " . $cs_conf_file .
+    " --param %bench-dir%=" . $run{'bench-dir'} .
+    " --param %engine-dir%=" . $rickshaw_project_dir . "/engine/" .
+    " --param %rickshaw-dir%=" . $rickshaw_project_dir .
+    " --reg-tls-verify=" . $run{'reg-tls-verify'} .
+    " 2>&1";
+
     get_image_urls;
-    printf "Sourcing container image for userenv '%s'; this may take a few minutes\n", $userenv;
+    printf "Sourcing container image for userenv '%s' and benchmark '%s'; this may take a few minutes\n", $userenv, $benchmark;
 
     my @requirements;
-    build_reqs(\@requirements, $userenv);
+    build_reqs(\@requirements, $userenv, $benchmark);
 
     # First build a workshop-cmd args containing: (userenv_arg, req_args, tag), starting with the base userenv only (has no req_args),
     # then each additional item in the list is a userenv arg mathcing the md5sum of the previous image, plus one more requirement.
@@ -853,7 +866,7 @@ sub source_container_image {
             $req_arg = shift(@requirements);
             $skip_update = "true";
         }
-        my $tag = calc_image_md5($userenv_arg . " " . $req_arg);
+        my $tag = calc_image_md5($workshop_base_cmd, $userenv_arg . " " . $req_arg);
         my %args = ( 'userenv' => $userenv_arg, 'reqs' => $req_arg, 'tag' => $tag, 'skip-update' => $skip_update );
         push (@workshop_args, \%args);
 
@@ -876,6 +889,8 @@ sub source_container_image {
             $userenv_arg = " --userenv " . $userenv_file;
         }
     }
+
+    print "workshop_args:\n" . Dumper \@workshop_args;
 
     my $num_images = scalar @workshop_args;
     my $i;
@@ -929,7 +944,7 @@ sub source_container_image {
     while ($i <= $num_images - 1) {
         printf "Processing stage %d (%s)...\n", $i + 1, $workshop_args[$i]{'tag'};
         my $begin = time();
-        workshop_build_image($i + 1, $workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
+        workshop_build_image($workshop_base_cmd, $i + 1, $workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
         my $end = time();
         printf "\tBuilding took %d seconds\n", $end - $begin;
         $begin = time();
@@ -1548,8 +1563,10 @@ sub validate_endpoints() {
                 $$endpoint{'userenv'} = $2;
                 debug_log(sprintf("Clients/servers for endpoint %s will have userenv %s\n",
                     $$endpoint{'label'}, $$endpoint{'userenv'}));
-                my %userenv_info = ( 'image' => '' );
-                $userenvs{$$endpoint{'userenv'}} = \%userenv_info;
+                foreach my $bench (keys %bench_configs) {
+                    my %userenv_info = ( 'image' => '' );
+                    $image_ids{$bench}{$$endpoint{'userenv'}} = \%userenv_info;
+                }
             } else {
                 printf "[ERROR]output from endpoint validation incorrect:\n%s\n", $line;
                 exit 1;
@@ -2022,8 +2039,15 @@ sub deploy_endpoints() {
         my $label = $endpoints[$i]{'label'};
         my $userenv = $endpoints[$i]{'userenv'};
         my $endpoint_image_opt = "";
+        my $bench_ids_opt = "";
         if (defined $endpoints[$i]{'userenv'}) {
-            $endpoint_image_opt = " --image=$userenvs{$endpoints[$i]{'userenv'}}{'image'}";
+            foreach my $bench (keys %bench_configs) {
+                $endpoint_image_opt .= "," . $bench . "::" . $image_ids{$bench}{$endpoints[$i]{'userenv'}}{'image'};
+            }
+            $endpoint_image_opt =~ s/^,/ --image=/;
+        }
+        if (defined $run{'bench-ids'}) {
+            $bench_ids_opt = " --bench-ids=$run{'bench-ids'}";
         }
         my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $label;
         mkdir($this_endpoint_run_dir);
@@ -2042,6 +2066,7 @@ sub deploy_endpoints() {
                     " --endpoint-deploy-timeout=" . $endpoint_deploy_timeout .
                     " --engine-script-start-timeout=" . $engine_script_start_timeout .
                     $endpoint_image_opt .
+                    $bench_ids_opt .
                     $endpoint_roadblock_opt .
                     " >" . $this_endpoint_run_dir . "/endpoint-stderrout.txt 2>&1";
             # The below 'system' needs to be forked, then wait for all to finish.
@@ -2332,24 +2357,24 @@ if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
     printf "put_json_file(): %s: failed\n", $cs_conf_file;
     exit 1;
 }
-$workshop_base_cmd =
-    $run{'workshop-dir'} . "/workshop.pl" .
-    " --log-level verbose " .
-    " --config " . $cs_conf_file .
-    #" --param %bench-dir%=" . $run{'bench-dir'} .
-    " --param %engine-dir%=" . $rickshaw_project_dir . "/engine/" .
-    " --param %rickshaw-dir%=" . $rickshaw_project_dir .
-    " --reg-tls-verify=" . $run{'reg-tls-verify'} .
-    " 2>&1";
 build_test_order();
 prepare_bench_tool_engines();
 print "Preparing userenvs:\n";
-foreach my $userenv (keys %userenvs) {
-    $userenvs{$userenv}{'image'} = source_container_image($userenv);
-    if (!defined $userenvs{$userenv}{'image'}) {
-        die "Could not get valid image [" . $userenvs{$userenv}{'image'} . "] for container image build for userenv [" . $userenv . "]\n";
+print "image_ids (before):\n" . Dumper \%image_ids;
+foreach my $bench (keys %bench_configs) {
+    printf "Working on %s benchmark\n", $bench;
+    foreach my $userenv (keys %{ $image_ids{$bench} }) {
+        printf "Working on %s userenv\n", $userenv;
+        my $image = source_container_image($userenv, $bench);
+        if (!defined $image) {
+            die "Could not get valid image [" . $image_ids{$bench}{$userenv}{'image'} . "] for container image build for userenv [" . $userenv . "] and benchmark [" . $bench . "]\n";
+        }
+        printf "Image is: %s\n", $image;
+        $image_ids{$bench}{$userenv}{'image'} = $image;
     }
 }
+print "image_ids(after):\n" . Dumper \%image_ids;
+
 add_ssh_keys();
 deploy_endpoints();
 process_roadblocks();

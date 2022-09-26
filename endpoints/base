@@ -27,6 +27,8 @@ export ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
 declare -A clients
 declare -A servers
 declare -A collectors # For a remotehost that has no client or server, but runs tools
+declare -A id_to_bench
+declare -A bench_to_image
 
 function abort_error() {
     local msg="$1"; shift
@@ -49,7 +51,7 @@ function process_opts() {
     local longopts="validate,endpoint-opts:,endpoint-label:,run-id:,base-run-dir:,image:"
     local longopts+=",roadblock-server:,roadblock-passwd:,roadblock-id:,osruntime:,max-sample-failures:"
     local longopts+=",max-rb-attempts:,endpoint-deploy-timeout:,engine-script-start-timeout:"
-    local longopts+=",packrat-dir:"
+    local longopts+=",packrat-dir:,bench-ids:"
     local opts=$(getopt -q -o "" --longoptions "$longopts" -n "getopt.sh" -- "$@");
     if [ $? -ne 0 ]; then
         exit_error "Unrecognized option specified" endpoint-deploy  
@@ -90,6 +92,11 @@ function process_opts() {
                 shift;
                 image="$1"
                 shift;
+                for bench_and_image in `echo $image | sed -e 's/,/ /g'`; do
+                    bench=`echo $bench_and_image | awk -F:: '{print $1}'`
+                    image=`echo $bench_and_image | awk -F:: '{print $2}'`
+                    bench_to_image[$bench]=$image
+                done
                 ;;
             --roadblock-passwd)
                 shift;
@@ -124,6 +131,27 @@ function process_opts() {
                 engine_script_start_timeout="$1"
                 echo "setting engine_script_start_timeout to $engine_script_start_timeout"
                 shift;
+                ;;
+            --bench-ids)
+                shift;
+                bench_ids="$1"
+                echo "setting bench_ids to $bench_ids"
+                shift;
+                for bench_and_range in `echo $bench_ids | sed -e 's/,/ /g'`; do
+                    bench=`echo $bench_and_range | awk -F: '{print $1}'`
+                    range=`echo $bench_and_range | awk -F: '{print $2}'`
+                    echo "bench: [$bench]"
+                    echo "range: [$range]"
+                    if echo $range | grep -q "-"; then
+                        range_start=`echo $range | awk -F- '{print $1}'`
+                        range_end=`echo $range | awk -F- '{print $2}'`
+                        for id in `seq $range_start $range_end`; do
+                            id_to_bench[$id]=$bench
+                        done
+                    else
+                        id_to_bench[$range]=$bench
+                    fi
+                done
                 ;;
             --)
                 shift;
@@ -986,4 +1014,9 @@ function call_endpoint_specific_function() {
         echo "${my_function_name}: no endpoint type specified"
         return 1
     fi
+}
+
+get_benchmark_from_id() {
+    local this_id = $1; shift
+    echo ${ids_to_bench[$this_id]}
 }
