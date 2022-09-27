@@ -1222,7 +1222,6 @@ sub process_cmdline() {
             exit 1;
         }
     }
-    ###foreach my $this_bench_dir ( split(/,/, $run{'bench-dir'}) ) {
     # Apply defaults
     foreach my $p (keys %defaults) {
         if (! exists $run{$p}) {
