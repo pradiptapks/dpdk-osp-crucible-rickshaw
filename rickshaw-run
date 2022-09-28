@@ -255,7 +255,10 @@ sub dump_params {
     my $cs_id = shift;
     my $engine = shift // $default_role;
     my $params_str = "";
-    my $benchmark = $ids_to_benchmark{$cs_id};
+    my $benchmark;
+    if (defined $cs_id) {
+        $benchmark = $ids_to_benchmark{$cs_id};
+    }
 
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'};
@@ -269,7 +272,7 @@ sub dump_params {
         my $role = $$param{'role'} // $default_role;
 
         if (! defined $id or (defined $cs_id and $id eq $cs_id)) {
-            if ($bench eq $benchmark) {
+            if (defined $benchmark and $bench eq $benchmark) {
                 # only dump when role=engine or role=all
                 if ( $role eq $engine || $role eq 'all') {
                     if (defined $val && length $val) {
@@ -1823,6 +1826,7 @@ sub prepare_bench_tool_engines() {
             # The file should work for all perams sets (all benchmark iterations).  If you need
             # different job files per iteration, then use the client or server-side "pre-script"
             # to either augment a file generated here or create a completely new file.
+            printf "generating pre-script cmd\n";
             my $cmd = $bench_configs{$this_benchmark}{"controller"}{"pre-script"} . " " . dump_params($run{'iterations'}[0]{'params'});
             #$cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
             $cmd =~ s/\%bench-dir\%/$bench_dirs{$this_benchmark}/g;
