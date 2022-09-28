@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+
+# This script implements the 'osp' endpoint for rickshaw.  It runs 1 or more
+# clients and servers as instances/VMs in an Openstack cluster.
+#
+# Usage:
+# osp [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,o-p,server:n-m,o-p 
+#                    --run-id <id> --base-run-dir --image <location>
+#                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
+#
+# If --validate is used all options after client/server will be ignored
+#
+
+# Source the base file for common functions and config
+this_endpoint_dir=$(dirname `readlink -e $0` | sed -e 'sX/binXX')
+endpoint_base_dir=$(cd $this_endpoint_dir >/dev/null && cd .. && /bin/pwd)
+if [ -e "$endpoint_base_dir/base" ]; then
+    . "$endpoint_base_dir/base"
+else
+    echo "Could not find endpoint source file "$endpoint_base_dir/base", exiting"
+    exit 1
+    exit
+fi
+endpoint_name="osp"
+instance_prefix="rickshaw"
+project_name="crucible-rickshaw"
+osruntime="podman"
+controller_tool_collect="1"
+compute_tool_collect="1"
+declare -A cpuPartitioning
+declare -A flavor
+declare -A node
+
+function cleanup_json() {
+    local json="$1"; shift
+
+    echo "cleanup_json: processing ${json}"
+    mv ${json} ${json}.tmp
+    if jq . ${json}.tmp > ${json}; then
+        rm ${json}.tmp
+    else
+        abort_error "cleanup_json failed to process ${json}" endpoint-deploy-begin
+    fi
+}
+
+function endpoint_osp_test_stop() {
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    echo "Running endpoint_osp_test_stop"
+
+    # Delete network related openstack items here (router, floating ip, firewall?)
+}
+
+function endpoint_osp_test_start() {
+    # This function runs right after a server starts any service and right before a client starts
+    # and tries to contect the server's service.  The purpose of this function is to do any
+    # work which ensures the client can contact the server.  In some cases there may be nothing
+    # to do.  Regardless of the work, the endpoint needs to relay what IP & ports the client
+    # needs to use in order to reach the server.  In some cases that may be the information the
+    # server has provided to the endpoint, or this information has changed because the endpoint
+    # created some sort of proxy to reach the server.
+
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    local tx_msgs_dir="$1"; shift
+    echo "Running endpoint_osp_test_start"
+    # Creating any service or ingress only works if any servers provided information about its
+    # IP and ports.
+    local this_msg_file="${msgs_dir}/${test_id}:server-start-end.json"
+    if [ -e $this_msg_file ]; then
+        echo "Found $this_msg_file"
+        # Extract the cs-label (server-n, client-y) the IP, and the ports this benchmark is using:
+        # server-1 1.2.3.4 30002 30003
+        cat $this_msg_file | jq -r '.received[] | if .payload.message.command == "user-object" and .payload.message."user-object".svc.ports then [ .payload.sender.id, .payload.message."user-object".svc.ip, .payload.message."user-object".svc.ports ] | flatten | tostring   else null end' | grep -v null | sed -e 's/"//g' -e 's/\[//' -e 's/\]//' -e 's/,/ /g' >"$endpoint_run_dir/ports.txt"
+
+        while read -u 9 line; do
+            echo "line: $line"
+            # TODO: set up OSP network services here, like firewall, router, etc
+        done 9< "$endpoint_run_dir/ports.txt"
+    else
+        echo "Did not find $this_msg_file"
+    fi
+}
+
+function osp_req_check() {
+    if [ -z "$host" ]; then
+        exit_error "osp host is not defined"
+    fi
+    verify_ssh_login $user $host
+    # TODO: source overcloudrc or equivalent init file to do osp stuff.  Error out if not found
+    if [ $? -gt 0 ]; then
+        exit_error "Could not run 'openstack' on overcloud host: $osp_cmd"
+    fi
+    # Validation returns what clients and servers would be used and the userenv
+    if [ "$do_validate" == 1 ]; then
+        echo_clients_servers
+        echo "userenv $userenv"
+        exit
+    fi
+}
+
+function get_opt_field() {
+    local input=${1}
+    local field=${2}
+
+    case "${field}" in
+        "key")
+            field="1"
+            ;;
+        "value")
+            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
+            ;;
+    esac
+
+    echo "${input}" | cut -d ':' -f ${field}
+}
+
+function process_osp_opts() {
+    local endpoint_opts="$1"
+    for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+        arg=`echo $opt| awk -F: '{print $1}'`
+        # The $val may have : in it, so don't use awk to get only the second field
+        val=`echo $opt | sed -e s/^$arg://`
+        case "$arg" in
+            ospconfig)
+                ospconfig=$val
+                ;;
+            client|server|clients|servers)
+                addto_clients_servers "$arg" "$val"
+                ;;
+            host)
+                host=$val
+                if [ -z "$controller_ipaddr" ]; then
+                    controller_ipaddr=`get_controller_ip $host`
+                fi
+                ;;
+            controller-ip)
+                controller_ipaddr=$val
+                ;;
+            user)
+                user=$val
+                ;;
+            userenv)
+                userenv=$val
+                ;;
+            controllers-tool-collect)
+                controllers_tool_collect=$val
+                ;;
+            computes-tool-collect)
+                computes_tool_collect=$val
+                ;;
+            cpu-partitioning)
+                # cpu-partitioning is per engine:
+                # option format::  cpu-partitioning:<engine-label>:<value>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                #TODO: validate correct format of <engine-label>
+                name=$(get_opt_field "${val}" "key")
+                value=$(get_opt_field "${val}" "value")
+                if [ ! -z "$name" -a ! -z "$value" ]; then
+                    cpuPartitioning[$name]=$value
+                else
+                    exit_error "Could not properly decode cpu-partitioning for '$val'"
+                fi
+                ;;
+            osruntime)
+                osruntime=$val
+                ;;
+            flavor)
+                flavor="$val"
+                # flavor is per engine:
+                # option format::  flavor:<engine-label>:<flavor>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                label=$(get_opt_field "${val}" "key")
+                flavor=$(get_opt_field "${val}" "value")
+                nodeSelector[$label]=$flavor
+                ;;
+            node)
+                # node (compute node hostname) is per engine:
+                # option format::  node:<engine-label>:<node>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                label=$(get_opt_field "${val}" "key")
+                node=$(get_opt_field "${val}" "value")
+                node[$label]=$node
+                ;;
+            *)
+                if echo $arg | grep -q -- "="; then
+                    echo "You can't use a \"=\" for assignment in endpoint options"
+                    echo "You must use \":\", like `echo $arg | sed -e 's/=/:/'`"
+                fi
+                exit_error "osp endpoint option [$arg] not supported"
+                ;;
+        esac
+    done
+
+    if [ "${unique_project}" == "1" ]; then
+        project_name+="--${run_id}-${endpoint_label}"
+    fi
+}
+
+function create_remotehost_engines() {
+    echo "create_remotehost_engines()"
+}
+
+function create_instances() {
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    ref1=""
+    local type="$1"; shift
+    local instances=""
+    ref1="$instances"
+}
+
+function move_remotehost_logs() {
+    local this_cs_label remote_cs_log_file container_name delete_remote_dir
+    delete_remote_dir=0
+    mkdir -p "$engine_logs_dir"
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        tmp_osruntime=${osruntime[default]}
+        set +u
+        if [ ! -z "${osruntime[$this_cs_label]}" ]; then
+            tmp_osruntime=${osruntime[$this_cs_label]}
+        fi
+        set -u
+
+        #TODO: need to assign $host to proper instance name
+        if [ "${tmp_osruntime}" == "chroot" ]; then
+            delete_remote_dir=1
+            remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
+            pushd / >/dev/null
+            do_scp "$user@$host" "$remote_cs_log_file" "" / && \
+                mv $remote_cs_log_file $engine_logs_dir
+            popd >/dev/null
+        elif [ "${tmp_osruntime}" == "podman" ]; then
+            container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
+            do_ssh $user@$host podman logs ${container_name} > "${engine_logs_dir}/${this_cs_label}.txt"
+        fi
+    done
+    if [ "${delete_remote_dir}" == "1" ]; then
+        do_ssh ${user}@${host} /bin/rm -r ${remote_dir}
+    fi
+}
+
+function delete_instances() {
+    if [ -z "$1" ]; then
+        abort_error "delete_instances(): at least 1 instance must be provided" endpoint-deploy-begin
+    fi
+    local instances_to_delete=""
+    while [ $# -gt 0 ]; do
+        local name="$1"; shift
+        echo "checking for existing instance $name with prefix $instance_prefix-"
+        #TODO use openstack cmd to check for existance of instance: local existing_instace="`do_ssh $user@$host 
+        if [ ! -z "$existing_instance" ]; then
+            echo "delete_instances(): found $name"
+            instances_to_delete+=" $instance_prefix-$name"
+        fi
+    done
+    if [ ! -z "$instances_to_delete" ]; then
+        echo "going to bulk-delete these instancess: $instances_to_delete"
+        #TODO: use openstack cmd to delete instances: local delete_output=`do_ssh $user@$host "kubectl -n $project_name delete pod $pods_to_delete 2>&1"`
+        if [ $? -gt 0 ]; then
+            abort_error "Error deleting instances $existing_instances: $delete_output" endpoint-deploy-begin
+        fi
+    fi
+}
+
+function get_osp_config() {
+    echo "getting OSP config"
+    #TODO: get instances, networks, etc.
+}
+
+function endpoint_osp_sysinfo() {
+    local remote_base_dir remote_dir local_dir
+    remote_base_dir="/var/lib/crucible"
+    remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
+    local_dir="${endpoint_run_dir}/sysinfo"
+
+    mkdir ${local_dir}
+
+    #TODO: get cluster version info, sosreport, etc
+}
+
+process_opts "$@"
+process_osp_opts "$endpoint_opts"
+init_common_dirs
+load_settings
+osp_req_check
+base_req_check
+get_osp_config
+delete_instances
+
+echo "This endpoint to run these clients: ${clients[@]}"
+echo "This endpoint to run these servers: ${servers[@]}"
+
+# All roadblock particpants are not determined until it is known
+# where tools are run.  Once this is known, this information needs
+# to be sent back to the controller.
+new_osp_followers=""
+cs_instances=""
+create_instances cs_instances cs ${clients[@]} ${servers[@]}
+echo "These client/server instances were created: $cs_instancess"
+all_engines="$cs_instances"
+# TODO: get active compute nodes
+active_comput_nodes=""
+
+if [ "${computes_tool_collect}" == "1" ]; then
+    echo "Working on creating compute-tool engines"
+    create_remotehost_engines compute_tool_engines compute $active_compute_nodes
+    new_osp_followers+=" ${compute_tool_engines}"
+    all_engines+=" $compute_tool_engines"
+fi
+
+controller_nodes=`cat "$endpoint_run_dir/controller-nodes.txt"`
+echo "These nodes are controller: $controller_nodes"
+if [ -z "${controller_nodes}" ]; then
+    controllers_tool_collect="0"
+fi
+if [ "${controllers_tool_collect}" == "1" ]; then
+    echo "Working on creating these controller-tool engines"
+    create_remotehost_engines controller_tool_engines controller $controller_nodes
+    new_osp_followers+=" ${controller_tool_engines}"
+    all_engines+=" $controller_tool_engines"
+fi
+
+process_roadblocks osp ${new_osp_followers}
