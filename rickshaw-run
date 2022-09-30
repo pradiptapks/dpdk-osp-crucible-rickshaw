@@ -45,9 +45,13 @@ my @utilities = ( "packrat" );
 
 my $jsonsettings;
 my $use_workshop = 0;
-my %bench_config;
+my %bench_configs;
+my %bench_dirs;
+my %benchmark_to_ids;
+my %ids_to_benchmark;
 my @endpoints;
-my %userenvs;
+#my %userenvs;
+my %image_ids; # {$benchmark-type}{$userenv}
 my %run; # A multi-dimensional, nested hash, schema TBD
          # This hash documents what was run.
 my $redis_passwd = "flubber"; # TODO: make this cmdline setting
@@ -246,16 +250,20 @@ sub do_roadblock {
 
 sub dump_params {
     my $default_role = 'client';
+
     my $params_ref = shift;
     my $cs_id = shift;
-    # fallback to client engine by default when engine arg is undefined
-    # (dump_params might be called without engine arg)
     my $engine = shift // $default_role;
     my $params_str = "";
+    my $benchmark;
+    if (defined $cs_id) {
+        $benchmark = $ids_to_benchmark{$cs_id};
+    }
 
     foreach my $param (@{ $params_ref }) {
         my $arg = $$param{'arg'};
         my $val = $$param{'val'};
+        my $bench = $$param{'benchmark'};
         my $id;
         if (exists $$param{'id'}) {
             $id = $$param{'id'};
@@ -264,15 +272,17 @@ sub dump_params {
         my $role = $$param{'role'} // $default_role;
 
         if (! defined $id or (defined $cs_id and $id eq $cs_id)) {
-            # only dump when role=engine or role=all
-            if ( $role eq $engine || $role eq 'all') {
-                if (defined $val && length $val) {
-                    if (defined $cs_id) {
-                        $val =~ s/\%client-id\%/$cs_id/;
+            if (defined $benchmark and $bench eq $benchmark) {
+                # only dump when role=engine or role=all
+                if ( $role eq $engine || $role eq 'all') {
+                    if (defined $val && length $val) {
+                        if (defined $cs_id) {
+                            $val =~ s/\%client-id\%/$cs_id/;
+                        }
+                        $params_str .= " --" . $arg . "=" . $val;
+                    } else {
+                        $params_str .= " --" . $arg;
                     }
-                    $params_str .= " --" . $arg . "=" . $val;
-                } else {
-                    $params_str .= " --" . $arg;
                 }
             }
         }
@@ -344,6 +354,7 @@ sub dir_entries {
 }
 
 sub calc_image_md5 {
+    my $workshop_base_cmd = shift;
     my $userenv_arg = shift;
     die "calc_image_md5(): \$userenv_arg must be defined" if (!defined $userenv_arg);
     my $req_args = shift;
@@ -486,6 +497,7 @@ sub local_image_found {
 }
 
 sub workshop_build_image {
+    my $workshop_base_cmd = shift;
     my $stage = shift;
     my $userenv_arg = shift;
     die "workshop_build_image(): userenv_arg must be defined\n" if !defined $userenv_arg;
@@ -506,7 +518,7 @@ sub workshop_build_image {
             last;
         }
     }
-    my $image_tag = calc_image_md5($userenv_arg, $req_args);
+    my $image_tag = calc_image_md5($workshop_base_cmd, $userenv_arg, $req_args);
     if ($tag ne $image_tag) {
         printf "ERROR: workshop_build_image(): provided tag [%s] and calculated tag [%s] do not match\n",
                $tag, $image_tag;
@@ -628,6 +640,7 @@ sub push_local_image {
 sub build_reqs {
     my $req_ref = shift;
     my $userenv = shift;
+    my $benchmark = shift;
     return if (!$use_workshop);
 
     # Build an ordered list of requirements.  What order?  That depends.
@@ -745,10 +758,10 @@ sub build_reqs {
             }
         }
     }
-    push (@$req_ref, "--requirement " . $run{'bench-dir'} . "/workshop.json");
     foreach my $tool_entry (@tools_params) {
         push(@$req_ref, "--requirement " . $run{'tools-dir'} . "/" .  $$tool_entry{'tool'} . "/workshop.json ");
     }
+    push (@$req_ref, "--requirement " . $bench_dirs{$benchmark} . "/workshop.json");
 }
 
 sub get_image_urls {
@@ -814,14 +827,25 @@ sub source_container_image {
     # Ensure that the container image we need is either already in the container registry,
     # or build and push the image to the registry
     my $userenv = shift;
+    my $benchmark = shift;
     my $image; # What gets returned
     my @local_images;
 
+    $workshop_base_cmd =
+    $run{'workshop-dir'} . "/workshop.pl" .
+    " --log-level verbose " .
+    " --config " . $cs_conf_file .
+    " --param %bench-dir%=" . $run{'bench-dir'} .
+    " --param %engine-dir%=" . $rickshaw_project_dir . "/engine/" .
+    " --param %rickshaw-dir%=" . $rickshaw_project_dir .
+    " --reg-tls-verify=" . $run{'reg-tls-verify'} .
+    " 2>&1";
+
     get_image_urls;
-    printf "Sourcing container image for userenv '%s'; this may take a few minutes\n", $userenv;
+    printf "Sourcing container image for userenv '%s' and benchmark '%s'; this may take a few minutes\n", $userenv, $benchmark;
 
     my @requirements;
-    build_reqs(\@requirements, $userenv);
+    build_reqs(\@requirements, $userenv, $benchmark);
 
     # First build a workshop-cmd args containing: (userenv_arg, req_args, tag), starting with the base userenv only (has no req_args),
     # then each additional item in the list is a userenv arg mathcing the md5sum of the previous image, plus one more requirement.
@@ -845,7 +869,7 @@ sub source_container_image {
             $req_arg = shift(@requirements);
             $skip_update = "true";
         }
-        my $tag = calc_image_md5($userenv_arg . " " . $req_arg);
+        my $tag = calc_image_md5($workshop_base_cmd, $userenv_arg . " " . $req_arg);
         my %args = ( 'userenv' => $userenv_arg, 'reqs' => $req_arg, 'tag' => $tag, 'skip-update' => $skip_update );
         push (@workshop_args, \%args);
 
@@ -868,6 +892,8 @@ sub source_container_image {
             $userenv_arg = " --userenv " . $userenv_file;
         }
     }
+
+    print "workshop_args:\n" . Dumper \@workshop_args;
 
     my $num_images = scalar @workshop_args;
     my $i;
@@ -921,7 +947,7 @@ sub source_container_image {
     while ($i <= $num_images - 1) {
         printf "Processing stage %d (%s)...\n", $i + 1, $workshop_args[$i]{'tag'};
         my $begin = time();
-        workshop_build_image($i + 1, $workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
+        workshop_build_image($workshop_base_cmd, $i + 1, $workshop_args[$i]{'userenv'}, $workshop_args[$i]{'reqs'}, $workshop_args[$i]{'tag'}, $workshop_args[$i]{'skip-update'});
         my $end = time();
         printf "\tBuilding took %d seconds\n", $end - $begin;
         $begin = time();
@@ -939,6 +965,7 @@ sub source_container_image {
             delete_local_image(pop(@local_images));
         }
     }
+    printf "Finished sourcing container image for userenv '%s'\n", $userenv;
     return $image;
 }
 
@@ -1172,10 +1199,10 @@ sub process_cmdline() {
             usage;
             exit 0;
         } elsif ($arg =~ /^base-run-dir$|^workshop-dir$|^packrat-dir$|^bench-dir$|^roadblock-dir$|^tools-dir$|^engine-dir$/ or
-                $arg =~ /^run-id$|^id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
-                $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$/ or
-                $arg =~ /^reg-(auth|repo)$/ or
-                $arg =~ /^email$|^desc$/) {
+                 $arg =~ /^run-id$|^id$|^bench-params$|^tool-params$|^bench-params$|^max-rb-attempts$/ or
+                 $arg =~ /^test-order$|^tool-group$|^num-samples$|^max-sample-failures$|^name$|^bench-ids$/ or
+                 $arg =~ /^reg-(auth|repo)$/ or
+                 $arg =~ /^email$|^desc$/) {
             debug_log(sprintf "argument: [%s]\n", $arg);
             $run{$arg} = $val;
         } elsif ($arg =~ /^tags$/) {
@@ -1235,44 +1262,84 @@ sub validate_controller_env() {
                                     "(\$CRUCIBLE_HOME/subprojects/tools)\n";
 }
 
+sub assign_bench_ids() {
+    foreach my $benchmark_and_id ( split(/,/, $run{'bench-ids'}) ) {
+        (my $bench, my $ids) = split(/:/, $benchmark_and_id);
+        my @id_ranges = split(/,/, $ids);
+        foreach my $id_range (@id_ranges) {
+            if ($id_range =~ /^(\d+)\-(\d+)$/) {
+                for (my $id = $1; $id <= $2; $id++) {
+                    $ids_to_benchmark{$id} = $bench;
+                    push(@{ $benchmark_to_ids{$bench} }, $id);
+                }
+            } elsif ($id_range =~ /^(\d+)$/) {
+                push(@{ $benchmark_to_ids{$bench} }, $id_range);
+                $ids_to_benchmark{$id_range} = $bench;
+            } else {
+                printf "ID range or number not recognized: %s\n", $id_range;
+            }
+        }
+    }
+}
+
 sub load_bench_params() {
-    # Load the bench config and user params
-    exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to/benchmark-subproject\n";
-    my $bench_config_file = $run{'bench-dir'} . "/rickshaw.json";
-    my $rc;
-    if (-e $bench_config_file) {
-        ($rc, my $bench_config_ref) = get_json_file($bench_config_file, $bench_schema_file);
-        if ($rc > 0 or ! defined $bench_config_ref) {
-            print "Could not open the bench config file\n";
-            exit 1;
-        }
-        %bench_config = %$bench_config_ref;
-        if (exists $bench_config{'benchmark'}) {
-            printf "Preparing to run %s\n", $bench_config{'benchmark'};
-            $run{'benchmark'} = $bench_config{'benchmark'};
-        } else {
-            print "[ERROR]benchmark was not defined in %s\n", $bench_config_file;
-            exit 1;
-        }
-    } else {
-        printf "[ERROR]benchmark subproject config file %s was not found\n", $bench_config_file;
-        exit 1;
-    }
-    exists $run{'bench-params'} || die "[ERROR}You must use " .
-                                    "--bench-params=/path/to/benchmark-params.json\n";
-    ($rc, my $param_sets_ref) = get_json_file($run{'bench-params'}, $bench_params_schema_file);
-    if ($rc > 0 or ! defined $param_sets_ref) {
-        print "Could not open the bench params file\n";
-        exit 1;
-    }
-    my @param_sets = @{ $param_sets_ref };
-    # TODO: verify user params schema
     $run{'iterations'} = ();
-    my $iter_id = 0;
-    for my $params (@param_sets) {
-        $run{'iterations'}[$iter_id]{'params'} = $params;
-        $iter_id++;
+    # Load the bench config and user params
+    exists $run{'bench-dir'} || die "[ERROR]You must use --bench-dir=/path/to-first/benchmark-subproject[,/path/to-second/benchmark-subproject]\n";
+    exists $run{'bench-params'} || die "[ERROR}You must use --bench-params=/path/to-first/benchmark-params.json[,/path/to-second/benchmark-params.json]\n";
+    # --benchmark-ids = "uperf:1-2,iperf:3-4"
+    my $rc;
+
+    my @params_files = split(/,/, $run{'bench-params'});
+    my $count = 0;
+    $run{'benchmark'} = "";
+    foreach my $this_bench_dir ( split(/,/, $run{'bench-dir'}) ) {
+        my $benchmark_name;
+        my $bench_config_file = $this_bench_dir . "/rickshaw.json";
+        if (-e $bench_config_file) {
+            ($rc, my $bench_config_ref) = get_json_file($bench_config_file, $bench_schema_file);
+            if ($rc > 0 or ! defined $bench_config_ref) {
+                print "Could not open the bench config file\n";
+                exit 1;
+            }
+            if (exists $$bench_config_ref{'benchmark'}) {
+                $benchmark_name = $$bench_config_ref{'benchmark'};
+                $bench_dirs{$benchmark_name} = $this_bench_dir;
+                printf "Preparing to run %s\n", $benchmark_name;
+                $run{'benchmark'} .= "," . $benchmark_name;
+                $bench_configs{$benchmark_name} = $bench_config_ref;
+            } else {
+                print "[ERROR]benchmark was not defined in %s\n", $bench_config_file;
+                exit 1;
+            }
+        } else {
+            printf "[ERROR]benchmark subproject config file %s was not found\n", $bench_config_file;
+            exit 1;
+        }
+
+        ($rc, my $param_sets_ref) = get_json_file($params_files[$count], $bench_params_schema_file);
+        if ($rc > 0 or ! defined $param_sets_ref) {
+            printf "Could not open the bench params file: %s\n", $params_files[$count];
+            exit 1;
+        }
+        my @param_sets = @{ $param_sets_ref };
+        # TODO: verify user params schema
+        my $iter_id = 0;
+        for my $params (@param_sets) {
+            if (! exists $run{'iterations'}[$iter_id]{'params'}) {
+                $run{'iterations'}[$iter_id]{'params'} = [];
+            }
+            foreach my $param (@$params) {
+                $$param{'benchmark'} = $benchmark_name;
+                push(@{ $run{'iterations'}[$iter_id]{'params'} }, $param);
+            }
+            $iter_id++;
+        }
+        $count++;
     }
+    $run{'benchmark'} =~ s/^,//;
+
+    printf "There are %d benchmark types to run\n", scalar keys %bench_configs;
 }
 
 sub load_tool_params() {
@@ -1341,9 +1408,9 @@ sub load_utility_params() {
 }
 
 sub make_run_dirs() {
-    # Ensure the bench-dir, base-run-dir, and tools-dir have absolute paths
+    # Ensure the base-run-dir, and tools-dir have absolute paths
     # because they may be referenced by clients and servers later
-    for my $dirtype (qw(base-run-dir bench-dir tools-dir)) {
+    for my $dirtype (qw(base-run-dir tools-dir)) {
         {
             my $pushd_dir = pushd($run{$dirtype});
             debug_log(sprintf "pushd to [%s]\n", $run{$dirtype});
@@ -1382,11 +1449,8 @@ sub make_run_dirs() {
     mkdir($roadblock_msgs_dir);
     # If there are no endpoints, assume 1 endpoint using the 'local' extension
     if (scalar @endpoints == 0) {
-        if (exists $bench_config{'client'} and exists $bench_config{'server'}) {
-            add_endpoint(\@endpoints, "localhost", "client:1,server:1");
-        } else {
-            add_endpoint(\@endpoints, "localhost", "client:1");
-        }
+        printf "ERROR: you must declare endpoints\n";
+        exit 1;
     }
 }
 
@@ -1426,6 +1490,7 @@ sub load_settings_info() {
         print "load_settings_info(): failed to load workshop force\n";
         exit 1;
     }
+    printf "Finished loading json settings\n";
 }
 
 sub save_config_info() {
@@ -1438,6 +1503,7 @@ sub save_config_info() {
         printf "save_config_info(): put_json_file() failed for %s\n", $config_dir . "/rickshaw-settings.json";
         exit 1;
     }
+    printf "Finished saving json settings to %s\n", $config_dir . "/rickshaw-run.json";
 }
 
 sub validate_endpoints() {
@@ -1454,9 +1520,9 @@ sub validate_endpoints() {
     my $min_id;
     my $max_id;
     my $collectors_present = 0;
-    printf "Confirming the endpoints will satisfy the benchmark-client ";
-    printf "and benchmark-server " if exists $bench_config{'server'};
-    printf "requirements\n";
+    printf "Confirming the endpoints will satisfy the benchmark requirements";
+
+    # Process all endpoint --validate outputs to get ID range for client and server
     foreach my $endpoint (@endpoints) {
         my $pushd_dir = pushd($rickshaw_project_dir . "/endpoints/" . $$endpoint{'type'});
         my $cmd = "./" . $$endpoint{'type'} .
@@ -1465,6 +1531,7 @@ sub validate_endpoints() {
                 " --endpoint-opts=" . $$endpoint{'opts'} .
                 " --validate";
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
+        printf "endopoint validation command: [%s]\n", $cmd;
         ($cmd, my $output, my $cmd_rc) = run_cmd($cmd);
         my @output = grep(!/^#/, split(/\n/, $output));
         if ($cmd_rc > 0) {
@@ -1498,8 +1565,10 @@ sub validate_endpoints() {
                 $$endpoint{'userenv'} = $2;
                 debug_log(sprintf("Clients/servers for endpoint %s will have userenv %s\n",
                     $$endpoint{'label'}, $$endpoint{'userenv'}));
-                my %userenv_info = ( 'image' => '' );
-                $userenvs{$$endpoint{'userenv'}} = \%userenv_info;
+                foreach my $bench (keys %bench_configs) {
+                    my %userenv_info = ( 'image' => '' );
+                    $image_ids{$bench}{$$endpoint{'userenv'}} = \%userenv_info;
+                }
             } else {
                 printf "[ERROR]output from endpoint validation incorrect:\n%s\n", $line;
                 exit 1;
@@ -1510,62 +1579,83 @@ sub validate_endpoints() {
         printf "[ERROR]lowest ID found in clients and servers is %d, must be 1\n", $min_id;
         exit 1;
     }
-    my $server_required = 0;
-    if (exists $bench_config{'server'}) {
-        debug_log("server is present\n");
-        $server_required = 1;
-        if (exists $bench_config{'server'}{'required'} && ! $bench_config{'server'}{'required'}) {
-            debug_log("server is present but not required\n");
-            $server_required = 0;
-        } elsif (! exists $bench_config{'server'}{'required'}) {
-            $bench_config{'server'}{'required'} = 1;
-        }
-    }
-    my $servers_present = 0;
-    my $clients_present = 0;
-    for (my $id = $min_id; $id <= $max_id; $id++) {
-        debug_log(sprintf "checking for client ID %d\n", $id);
-        # Only check for matching clients if we have 1:1 assignment.
-        # 1:N can have as many servers with just 1 client
-        if (defined $clients_servers{'client'}[$id - 1]) {
-            $clients_present++;
-        } elsif (exists $bench_config{'client'}{'client-server-ratio'} and $bench_config{'client'}{'client-server-ratio'} eq "1:N") {
-            debug_log(sprintf "Did not find same client ID for server ID %d, but client-server-ratio is 1:N\n", $id);
-        } else {
-            printf "[ERROR]client ID %d is not defined in ID range %d - %d\n", $id, $min_id, $max_id;
-            exit 1;
-        }
-        if (exists $bench_config{'server'}) {
-            debug_log(sprintf "checking for server ID %d\n", $id);
-            if (! defined $clients_servers{'server'}[$id - 1]) {
-                if ($server_required) {
-                    printf "[ERROR]server ID %d is not defined in ID range %d - %d\n",
-                        $id, $min_id, $max_id;
-                    exit 1;
-                } else {
-                    debug_log(sprintf "server ID %d missing but not required\n", $id);
-                }
-            } else {
-                $servers_present++;
+
+
+    print "number of benchmarks: " . scalar(keys(%bench_configs)) . "\n";
+    if (scalar keys %bench_configs == 1) {
+        # There us only one benchmark type used, and there may not be a --benchmark-ids provided,
+        # so we need to match clients to servers here.
+        my @benchmarks = keys %bench_configs;
+        my $this_benchmark = $benchmarks[0];
+
+        my $server_required = 0;
+        if (exists $bench_configs{$this_benchmark}{'server'}) {
+            debug_log("server is present\n");
+            $server_required = 1;
+            if (exists $bench_configs{$this_benchmark}{'server'}{'required'} && ! $bench_configs{$this_benchmark}{'server'}{'required'}) {
+                debug_log("server is present but not required\n");
+                $server_required = 0;
+            } elsif (! exists $bench_configs{$this_benchmark}{'server'}{'required'}) {
+                $bench_configs{$this_benchmark}{'server'}{'required'} = 1;
             }
-        } else {
-            debug_log(sprintf "checking for no server IDs\n");
-            if (defined $clients_servers{'server'}[$id - 1]) {
-                printf "[ERROR]server ID %d is defined in ID range %d - %d, but this benchmark " .
-                    "does not use servers\n", $id, $min_id, $max_id;
+        }
+        my $servers_present = 0;
+        my $clients_present = 0;
+        for (my $id = $min_id; $id <= $max_id; $id++) {
+            debug_log(sprintf "checking for client ID %d\n", $id);
+            # Only check for matching clients if we have 1:1 assignment.
+            # 1:N can have as many servers with just 1 client
+            if (defined $clients_servers{'client'}[$id - 1]) {
+                $clients_present++;
+            } elsif (exists $bench_configs{$this_benchmark}{'client'}{'client-server-ratio'} and $bench_configs{$this_benchmark}{'client'}{'client-server-ratio'} eq "1:N") {
+                debug_log(sprintf "Did not find same client ID for server ID %d, but client-server-ratio is 1:N\n", $id);
+            } else {
+                printf "[ERROR]client ID %d is not defined in ID range %d - %d\n", $id, $min_id, $max_id;
                 exit 1;
             }
+            if (exists $bench_configs{$this_benchmark}{'server'}) {
+                debug_log(sprintf "checking for server ID %d\n", $id);
+                if (! defined $clients_servers{'server'}[$id - 1]) {
+                    if ($server_required) {
+                        printf "[ERROR]server ID %d is not defined in ID range %d - %d\n",
+                            $id, $min_id, $max_id;
+                        exit 1;
+                    } else {
+                        debug_log(sprintf "server ID %d missing but not required\n", $id);
+                    }
+                } else {
+                    $servers_present++;
+                }
+            } else {
+                debug_log(sprintf "checking for no server IDs\n");
+                if (defined $clients_servers{'server'}[$id - 1]) {
+                    printf "[ERROR]server ID %d is defined in ID range %d - %d, but this benchmark " .
+                        "does not use servers\n", $id, $min_id, $max_id;
+                    exit 1;
+                }
+            }
         }
+        printf "There will be %d client(s)", $clients_present;
+        printf " and %d server(s)", $servers_present if exists $bench_configs{$this_benchmark}{'server'} && $servers_present;
+        printf " and %d collector(s)", $collectors_present if $collectors_present;
+        printf "\n";
+        # --bench-ids is not used/needed when only 1 benchmark is used, so we need to populate it now
+        # with what was discovered with endpoint validation
+        $run{'bench-ids'} = $this_benchmark . ":" . $min_id . "-" . $max_id;
+        assign_bench_ids();
+    } else { # >1 benchmark types
+        # Assumes --bench-ids is already defined by user, which is required
+        # when multi-benchmarks are used.
+        assign_bench_ids();
+        printf "Check for multi-benchmark IDs here\n";
     }
-    printf "There will be %d client(s)", $clients_present;
-    printf " and %d server(s)", $servers_present if exists $bench_config{'server'} && $servers_present;
-    printf " and %d collector(s)", $collectors_present if $collectors_present;
-    printf "\n";
+
     $endpoint_roadblock_opt = " --roadblock-id=" . $run{'id'} .
         " --roadblock-passwd=" . $redis_passwd;
     $workshop_roadblock_opt = " --requirements " . $run{'roadblock-dir'} .
         "/workshop.json ";
     $run{'endpoints'} = \@endpoints;
+    print "Endpoints validated\n";
 }
 
 sub build_test_order() {
@@ -1650,28 +1740,107 @@ sub build_tool_cmd {
     }
 }
 
+sub build_files_list {
+    my $cs_type = shift;
+    my $cs_id = shift;
+    my $benchmark = shift;
+    my $cs_file_list;
+
+    if (defined $cs_id) {
+        $cs_file_list = $engine_config_dir . "/" . $cs_type . "-" . $cs_id . "-files-list";
+    } else {
+        $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
+    }
+
+    open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
+    if ($cs_type =~ /(client|server)/ and defined $benchmark and exists $bench_configs{$benchmark}{$cs_type}{"files-from-controller"}) {
+        my $bench_dir = $bench_dirs{$benchmark};
+        for my $file_spec (@{ $bench_configs{$benchmark}{$cs_type}{"files-from-controller"} } ) {
+            if (! exists $$file_spec{'required'}) {
+                $$file_spec{'required'} = 1;
+            }
+            my $src_file = $$file_spec{'src'};
+            $src_file =~ s/\%bench-dir\%/$bench_dir\//g;
+            $src_file =~ s/\%run-dir\%/$run_dir\//g;
+            $src_file =~ s/\%config-dir\%/$config_dir\//g;
+            my $dest_file = $$file_spec{'dest'};
+            if (-e $src_file) {
+                debug_log(sprintf("adding  %s for engine type '%s'", $src_file, $cs_type));
+                printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+            } elsif (! $$file_spec{'required'}) {
+                debug_log(sprintf("skipping %s because it does not exist and is not required for engine type '%s'", $src_file, $cs_type));
+            } else {
+                die "[ERROR]Could not find required file " . $src_file . " for engine type '" . $cs_type. "'\n";
+            }
+        }
+    }
+    foreach my $tool_entry (@tools_params) {
+        my $tool_name = $$tool_entry{'tool'};
+        if (exists $tools_configs{$tool_name}{'collector'}{'files-from-controller'}) {
+            for my $file_spec (@{ $tools_configs{$tool_name}{'collector'}{"files-from-controller"} } ) {
+                my $src_file = $$file_spec{'src'};
+                $src_file =~ s/\%tool-dir\%/$run{'tools-dir'}\/$$tool_entry{'tool'}\//g;
+                $src_file =~ s/\%run-dir\%/$run_dir\//g;
+                $src_file =~ s/\%config-dir\%/$config_dir\//g;
+                my $dest_file = $$file_spec{'dest'};
+                if (-e $src_file) {
+                    debug_log(sprintf("adding %s for tool '%s'", $src_file, $tool_name));
+                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                } elsif (! $$file_spec{'required'}) {
+                    debug_log(sprintf("skipping %s because it does not exist and is not required for tool '%s'", $src_file, $tool_name));
+                } else {
+                    die "[ERROR]Could not find required file " . $src_file . " for tool '" . $tool_name . "'\n";
+                }
+            }
+        }
+    }
+    foreach my $utility (@utilities) {
+        my $utility_dir = $run{$utility . '-dir'};
+        if (exists $utility_configs{$utility}{'engine'}{'files-from-controller'}) {
+            for my $file_spec (@{ $utility_configs{$utility}{'engine'}{'files-from-controller'} }) {
+                my $src_file = $$file_spec{'src'};
+                $src_file =~ s/\%utility-dir\%/$utility_dir/g;
+                my $dest_file = $$file_spec{'dest'};
+                if (-e $src_file) {
+                    debug_log(sprintf("adding %s for utility '%s'", $src_file, $utility));
+                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
+                } elsif (! $$file_spec{'required'}) {
+                    debug_log(sprintf("skipping %s because it does not exist and is not required for utility '%s'", $src_file, $utility));
+                } else {
+                    die "[ERROR]Could not find required file " . $src_file . " for utility '" . $utility . "'\n";
+                }
+            }
+        }
+    }
+    close FH;
+}
+
 sub prepare_bench_tool_engines() {
     # Run on the controller (the host running this script) the benchmark-specific "pre-script"
-    if (exists $bench_config{"controller"}{"pre-script"} and $bench_config{"controller"}{"pre-script"} ne "") {
-        my $pushd_dir = pushd($run_dir);
-        # Note that the user params for the benchmark are from the first set only
-        # This pre-script is run only once before all of the tests are started.
-        # If this script generates a file to aid in benchmark execution (such as a job file),
-        # The file should work for all perams sets (all benchmark iterations).  If you need
-        # different job files per iteration, then use the client or server-side "pre-script"
-        # to either augment a file generated here or create a completely new file.
-        my $cmd = $bench_config{"controller"}{"pre-script"} . " " . dump_params($run{'iterations'}[0]{'params'});
-        $cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
-        $cmd =~ s/\%run-dir\%/$run_dir/g;
-        debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
-        ($cmd, my $pre_cmd_output, my $cmd_rc) = run_cmd($cmd);
-        if ($cmd_rc != 0) {
-            printf "controller pre-script failed with return code = %d\n", $cmd_rc;
-            printf "controller pre-script command: %s\n", $cmd;
-            printf "controller pre-script output:\n%s", join("\n", $pre_cmd_output);
-            exit $cmd_rc;
+    foreach my $this_benchmark (keys %bench_configs) {
+        if (exists $bench_configs{$this_benchmark}{"controller"}{"pre-script"} and $bench_configs{$this_benchmark}{"controller"}{"pre-script"} ne "") {
+            my $pushd_dir = pushd($run_dir);
+            # Note that the user params for the benchmark are from the first set only
+            # This pre-script is run only once before all of the tests are started.
+            # If this script generates a file to aid in benchmark execution (such as a job file),
+            # The file should work for all perams sets (all benchmark iterations).  If you need
+            # different job files per iteration, then use the client or server-side "pre-script"
+            # to either augment a file generated here or create a completely new file.
+            printf "generating pre-script cmd\n";
+            my $cmd = $bench_configs{$this_benchmark}{"controller"}{"pre-script"} . " " . dump_params($run{'iterations'}[0]{'params'});
+            #$cmd =~ s/\%bench-dir\%/$run{'bench-dir'}/g;
+            $cmd =~ s/\%bench-dir\%/$bench_dirs{$this_benchmark}/g;
+            $cmd =~ s/\%run-dir\%/$run_dir/g;
+            debug_log(sprintf "controller pre-script command: [%s]\n", $cmd);
+            ($cmd, my $pre_cmd_output, my $cmd_rc) = run_cmd($cmd);
+            if ($cmd_rc != 0) {
+                printf "controller pre-script failed with return code = %d\n", $cmd_rc;
+                printf "controller pre-script command: %s\n", $cmd;
+                printf "controller pre-script output:\n%s", join("\n", $pre_cmd_output);
+                exit $cmd_rc;
+            }
+            debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
         }
-        debug_log(sprintf "controller pre-script output:\n%s", join("\n", $pre_cmd_output));
     }
     copy($rickshaw_project_dir . "/engine/engine-script", $engine_run_script)
         || die "Could not copy engine-script to " . $engine_run_script;
@@ -1780,7 +1949,8 @@ sub prepare_bench_tool_engines() {
             }
             my $cs_id = $$cs_ref{'id'};
             my $this_cmds_dir = $engine_bench_cmds_dir . "/" . $cs_type . "/" . $cs_id;
-            make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
+            #make_path($this_cmds_dir) || die "Could not mkdir " . $this_cmds_dir;
+            make_path($this_cmds_dir);
             foreach my $cmd_type (@cmd_type_files) {
                 next if ($cmd_type eq "runtime" and $cs_id > 1); # runtime cmds only for client-1
                 my $this_cmd_file = $this_cmds_dir . "/" . $cmd_type;
@@ -1791,16 +1961,17 @@ sub prepare_bench_tool_engines() {
                     my $test_iter = $$test_ref{'iteration-id'};
                     my $test_samp = $$test_ref{'sample-id'};
                     my $iter_array_idx = $test_iter - 1;
-                    if (exists $bench_config{$cs_type}{$cmd_type} and
-                        $bench_config{$cs_type}{$cmd_type} ne "") {
-                        my $cmd = $bench_config{$cs_type}{$cmd_type} . " " .
+                    my $benchmark = $ids_to_benchmark{$cs_id};
+                    if (exists $bench_configs{$benchmark}{$cs_type}{$cmd_type} and
+                        $bench_configs{$benchmark}{$cs_type}{$cmd_type} ne "") {
+                        my $cmd = $bench_configs{$benchmark}{$cs_type}{$cmd_type} . " " .
                                 dump_params($run{'iterations'}[$iter_array_idx]{'params'}, $cs_id, $cs_type);
                         debug_log(sprintf "cmd: [%s]\n", $cmd);
                         # Apply a regex from the benchmark config file to the command
                         # This is used to remove things like "--clients=" because the
                         # native benchmark does not understand this parameter
-                        if ($bench_config{$cs_type} and $bench_config{$cs_type}{"param_regex"}) {
-                            for my $r (@{ $bench_config{$cs_type}{"param_regex"} }) {
+                        if ($bench_configs{$benchmark}{$cs_type} and $bench_configs{$benchmark}{$cs_type}{"param_regex"}) {
+                            for my $r (@{ $bench_configs{$benchmark}{$cs_type}{"param_regex"} }) {
                                 # to apply the 's/x/y/' regex from the file, some eval trickery is necessary
                                 # todo: first test the $r regex separately for [perl syntax] errors with eval
                                 # before doing below
@@ -1825,73 +1996,15 @@ sub prepare_bench_tool_engines() {
     # The "engine-script" will first scp the list (client-files-list or server-files-list).
     # then it will read this list to know what other files to copy over)
     foreach my $cs_type (keys %clients_servers, @all_collector_types) {
-        my $cs_file_list = $engine_config_dir . "/" . $cs_type . "-files-list";
-        open(FH, ">" . $cs_file_list) || die "[ERROR]could not open " . $cs_file_list . " for writing";
-        if ($cs_type =~ /(client|server)/ and exists $bench_config{$cs_type}{"files-from-controller"}) {
-            for my $file_spec (@{ $bench_config{$cs_type}{"files-from-controller"} } ) {
-                if (! exists $$file_spec{'required'}) {
-                    $$file_spec{'required'} = 1;
-                }
-                my $src_file = $$file_spec{'src'};
-                $src_file =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
-                $src_file =~ s/\%run-dir\%/$run_dir\//g;
-                $src_file =~ s/\%config-dir\%/$config_dir\//g;
-                my $dest_file = $$file_spec{'dest'};
-                if (-e $src_file) {
-                    debug_log(sprintf("adding  %s for engine type '%s'", $src_file, $cs_type));
-                    printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
-                } elsif (! $$file_spec{'required'}) {
-                    debug_log(sprintf("skipping %s because it does not exist and is not required for engine type '%s'", $src_file, $cs_type));
-                } else {
-                    die "[ERROR]Could not find required file " . $src_file . " for engine type '" . $cs_type. "'\n";
-                }
+        if ($cs_type =~ /^client|server|profiler?/) {
+            foreach my $cs_ref (@{ $clients_servers{$cs_type} }) {
+                my $cs_id = $$cs_ref{'id'};
+                my $benchmark = $ids_to_benchmark{$cs_id};
+                build_files_list($cs_type, $cs_id, $benchmark);
             }
+        } else {
+            build_files_list($cs_type);
         }
-        foreach my $tool_entry (@tools_params) {
-            my $tool_name = $$tool_entry{'tool'};
-            if (exists $tools_configs{$tool_name}{'collector'}{'files-from-controller'}) {
-                for my $file_spec (@{ $tools_configs{$tool_name}{'collector'}{"files-from-controller"} } ) {
-                    if (! exists $$file_spec{'required'}) {
-                        $$file_spec{'required'} = 1;
-                    }
-                    my $src_file = $$file_spec{'src'};
-                    $src_file =~ s/\%tool-dir\%/$run{'tools-dir'}\/$$tool_entry{'tool'}\//g;
-                    $src_file =~ s/\%run-dir\%/$run_dir\//g;
-                    $src_file =~ s/\%config-dir\%/$config_dir\//g;
-                    my $dest_file = $$file_spec{'dest'};
-                    if (-e $src_file) {
-                        debug_log(sprintf("adding %s for tool '%s'", $src_file, $tool_name));
-                        printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
-                    } elsif (! $$file_spec{'required'}) {
-                        debug_log(sprintf("skipping %s because it does not exist and is not required for tool '%s'", $src_file, $tool_name));
-                    } else {
-                        die "[ERROR]Could not find required file " . $src_file . " for tool '" . $tool_name . "'\n";
-                    }
-                }
-            }
-        }
-        foreach my $utility (@utilities) {
-            my $utility_dir = $run{$utility . '-dir'};
-            if (exists $utility_configs{$utility}{'engine'}{'files-from-controller'}) {
-                for my $file_spec (@{ $utility_configs{$utility}{'engine'}{'files-from-controller'} }) {
-                    if (! $$file_spec{'required'}) {
-                        $$file_spec{'required'} = 1;
-                    }
-                    my $src_file = $$file_spec{'src'};
-                    $src_file =~ s/\%utility-dir\%/$utility_dir/g;
-                    my $dest_file = $$file_spec{'dest'};
-                    if (-e $src_file) {
-                        debug_log(sprintf("adding %s for utility '%s'", $src_file, $utility));
-                        printf FH "src=%s\ndest=%s\n", $src_file, $dest_file;
-                    } elsif (! $$file_spec{'required'}) {
-                        debug_log(sprintf("skipping %s because it does not exist and is not required for utility '%s'", $src_file, $utility));
-                    } else {
-                        die "[ERROR]Could not find required file " . $src_file . " for utility '" . $utility . "'\n";
-                    }
-                }
-            }
-        }
-        close FH;
     }
 }
 
@@ -1905,7 +2018,7 @@ sub add_ssh_keys() {
 sub deploy_endpoints() {
     # Deploy ths endpoints so they are ready to run benchmark and tools.
     # Each endpoint is responible for launching a osruntime for each client and server.
-    print "Deploying endpoints\n";
+    print "\nDeploying endpoints\n";
     $endpoint_deploy_timeout += scalar @endpoints * 120;
     printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     $engine_script_start_timeout += scalar @endpoints * 120;
@@ -1917,8 +2030,15 @@ sub deploy_endpoints() {
         my $label = $endpoints[$i]{'label'};
         my $userenv = $endpoints[$i]{'userenv'};
         my $endpoint_image_opt = "";
+        my $bench_ids_opt = "";
         if (defined $endpoints[$i]{'userenv'}) {
-            $endpoint_image_opt = " --image=$userenvs{$endpoints[$i]{'userenv'}}{'image'}";
+            foreach my $bench (keys %bench_configs) {
+                $endpoint_image_opt .= "," . $bench . "::" . $image_ids{$bench}{$endpoints[$i]{'userenv'}}{'image'};
+            }
+            $endpoint_image_opt =~ s/^,/ --image=/;
+        }
+        if (defined $run{'bench-ids'}) {
+            $bench_ids_opt = " --bench-ids=$run{'bench-ids'}";
         }
         my $this_endpoint_run_dir = $base_endpoint_run_dir . "/" . $label;
         mkdir($this_endpoint_run_dir);
@@ -1937,6 +2057,7 @@ sub deploy_endpoints() {
                     " --endpoint-deploy-timeout=" . $endpoint_deploy_timeout .
                     " --engine-script-start-timeout=" . $engine_script_start_timeout .
                     $endpoint_image_opt .
+                    $bench_ids_opt .
                     $endpoint_roadblock_opt .
                     " >" . $this_endpoint_run_dir . "/endpoint-stderrout.txt 2>&1";
             # The below 'system' needs to be forked, then wait for all to finish.
@@ -2047,10 +2168,6 @@ sub organize_run_data() {
     # the benchmark's postprocessing script work.
     #
     # Tool data is not organized by iteration/sample because it is collected continuously.
-    my $pp_cmd = $bench_config{'controller'}{'post-script'};
-    $pp_cmd =~ s/\%bench-dir\%/$run{'bench-dir'}\//g;
-    $pp_cmd =~ s/\%run-dir\%/$run_dir\//g;
-    $pp_cmd =~ s/\%config-dir\%/$config_dir\//g;
     my $tmp_data_dir = $run_dir . "/tmp-data-dir";
     {
         mkdir($tmp_data_dir);
@@ -2202,11 +2319,14 @@ sub remove_followers {
 }
 
 process_cmdline();
-validate_controller_env();
 load_bench_params();
+validate_controller_env();
+make_run_dirs();
+load_settings_info();
+save_config_info();
+validate_endpoints();
 load_tool_params();
 load_utility_params();
-make_run_dirs();
 if ($run{'reg-auth'} eq "") {
     printf "Disabling registry authorization due to empty 'reg-auth' variable\n";
     $skip_registry_auth = 1;
@@ -2228,27 +2348,24 @@ if (put_json_file($cs_conf_file, \%cs_conf) > 0) {
     printf "put_json_file(): %s: failed\n", $cs_conf_file;
     exit 1;
 }
-$workshop_base_cmd =
-    $run{'workshop-dir'} . "/workshop.pl" .
-    " --log-level verbose " .
-    " --config " . $cs_conf_file .
-    " --param %bench-dir%=" . $run{'bench-dir'} .
-    " --param %engine-dir%=" . $rickshaw_project_dir . "/engine/" .
-    " --param %rickshaw-dir%=" . $rickshaw_project_dir .
-    " --reg-tls-verify=" . $run{'reg-tls-verify'} .
-    " 2>&1";
-load_settings_info();
-save_config_info();
-validate_endpoints();
 build_test_order();
 prepare_bench_tool_engines();
 print "Preparing userenvs:\n";
-foreach my $userenv (keys %userenvs) {
-    $userenvs{$userenv}{'image'} = source_container_image($userenv);
-    if (!defined $userenvs{$userenv}{'image'}) {
-        die "Could not get valid image [" . $userenvs{$userenv}{'image'} . "] for container image build for userenv [" . $userenv . "]\n";
+print "image_ids (before):\n" . Dumper \%image_ids;
+foreach my $bench (keys %bench_configs) {
+    printf "Working on %s benchmark\n", $bench;
+    foreach my $userenv (keys %{ $image_ids{$bench} }) {
+        printf "Working on %s userenv\n", $userenv;
+        my $image = source_container_image($userenv, $bench);
+        if (!defined $image) {
+            die "Could not get valid image [" . $image_ids{$bench}{$userenv}{'image'} . "] for container image build for userenv [" . $userenv . "] and benchmark [" . $bench . "]\n";
+        }
+        printf "Image is: %s\n", $image;
+        $image_ids{$bench}{$userenv}{'image'} = $image;
     }
 }
+print "image_ids(after):\n" . Dumper \%image_ids;
+
 add_ssh_keys();
 deploy_endpoints();
 process_roadblocks();

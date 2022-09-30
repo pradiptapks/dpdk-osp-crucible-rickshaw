@@ -355,6 +355,7 @@ sub index_metrics {
     my $cstype = shift;
     my $csid = shift;
     my $base_doc_ref = shift; # metric_desc doc gets populated with this, usually a run doc or period doc
+    my $benchmark = shift; # optional, for reporting earliest-begin and latest-end from all
     my $primary_metric = shift; # optional, for reporting earliest-begin and latest-end from all
                                 # metrics processed with type matching $primary_metric
     my $num_metric_docs_submitted = 0;
@@ -386,6 +387,7 @@ sub index_metrics {
     }
     my %uuid;
     my %type;
+    my %source;
     for my $this_metr ( @$metr_ref ) {
         my $idx = $$this_metr{'idx'};
         $uuid{$idx} = Data::UUID->new->create_str();
@@ -398,6 +400,7 @@ sub index_metrics {
             exit 1;
         }
         $type{$idx} = $$this_metr{'desc'}{'type'};
+        $source{$idx} = $$this_metr{'desc'}{'source'};
         $metr_desc_doc{'metric_desc'}{'id'} = $uuid{$idx};
         if ( exists $$this_metr{'names'} ) {
             $metr_desc_doc{'metric_desc'}{'names'} = $$this_metr{'names'};
@@ -446,7 +449,7 @@ sub index_metrics {
                 $count = 0;
             }
             if (defined $primary_metric) {
-                if ($type{$idx} eq $primary_metric) {
+                if ($type{$idx} eq $primary_metric and $source{$idx} eq $benchmark) {
                     if (not defined $earliest_begin or $earliest_begin > $metr_data_doc{'metric_data'}{'begin'}) {
                         $earliest_begin = $metr_data_doc{'metric_data'}{'begin'};
                     }
@@ -727,6 +730,7 @@ if (exists $result{'iterations'}) {
             $$iter{'path'} = $this_iter_dir;
         }
         if ($iter_status eq "pass") {
+            my @primary_metrics = ();
             if (opendir(my $iter_dh, $run_dir . "/" . $this_iter_dir)) {
                 my @samp_dirs = grep(/^sample-\d+$/, readdir($iter_dh));
                 my @samples;
@@ -774,10 +778,23 @@ if (exists $result{'iterations'}) {
                                             }
                                         } else {
                                             my %data = %$data_ref;
-                                            if (! defined $primary_metric and exists $data{'primary-metric'}) {
-                                                $primary_metric = $data{'primary-metric'};
-                                                $$iter{'primary-metric'} = $primary_metric;
+                                            if (! exists $data{'primary-metric'}) {
+                                                printf "ERROR: primary-metric not found in %s\n", $data_file;
+                                                exit 1;
                                             }
+                                            if (! exists $data{'benchmark'}) {
+                                                printf "ERROR: benchmark not found in %s\n", $data_file;
+                                                exit 1;
+                                            }
+                                            # The primary metric previously only included the "type" portion, but
+                                            # for better clarity, now includes the "source" (the benchmark)
+                                            my $this_csid_primary_metric = $data{'benchmark'} . '::' . $data{'primary-metric'};
+                                            if (! grep(/^$this_csid_primary_metric$/, @primary_metrics)) {
+                                                push(@primary_metrics, $this_csid_primary_metric);
+                                            }
+
+                                            # TODO: instead of just checking first doc, validate all docs
+                                            # have the same primary-period.
                                             if (! defined $primary_period and exists $data{'primary-period'}) {
                                                 $primary_period = $data{'primary-period'};
                                                 $$iter{'primary-period'} = $primary_period;
@@ -822,14 +839,18 @@ if (exists $result{'iterations'}) {
                                                         my $this_begin;
                                                         my $this_end;
                                                         # index_metric() to return the easliest-begin and latest-end for metric types matching the primary-metric
-                                                        (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics('queue', $metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $primary_metric);
-                                                        #$num_docs_submitted{'metric_desc'} += $num_metric_docs_submitted;
+                                                        (my $num_metric_docs_submitted, $this_begin, $this_end) = index_metrics('queue', $metric_file_prefix, $cs_name, $cs_id, $base_metric_doc_ref, $data{'benchmark'}, $data{'primary-metric'});
                                                         # From processing all metric files, get the very-earliest-begin and very-latest-end
-                                                        if (not defined $earliest_begin or $earliest_begin > $this_begin) {
-                                                            $earliest_begin = $this_begin;
-                                                        }
-                                                        if (not defined $latest_end or $latest_end < $this_end) {
-                                                            $latest_end = $this_end;
+                                                        if (defined $this_begin and defined $this_end) {
+                                                            if (not defined $earliest_begin or $earliest_begin > $this_begin) {
+                                                                $earliest_begin = $this_begin;
+                                                            }
+                                                            if (not defined $latest_end or $latest_end < $this_end) {
+                                                                $latest_end = $this_end;
+                                                            }
+                                                        } else {
+                                                            printf "ERROR: index_metrics() returned undefined this_begin and/or undefined this_end, exiting\n";
+                                                            exit 1;
                                                         }
                                                     }
                                                     # Now if this client/server's earliest_begin is *later* than a defined begin for the consolidated period, 
@@ -838,9 +859,11 @@ if (exists $result{'iterations'}) {
                                                     # period.
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'begin'} or $$this_sample{'periods'}[$period_idx]{'begin'} < $earliest_begin) {
                                                         $$this_sample{'periods'}[$period_idx]{'begin'} = $earliest_begin;
+                                                        debug_log(sprintf "client/server's ID %d begin is after current sample begin, so assigning sample begin to %d\n", $cs_id, $earliest_begin);
                                                     }
                                                     if (not defined $$this_sample{'periods'}[$period_idx]{'end'} or $$this_sample{'periods'}[$period_idx]{'end'} > $latest_end) {
                                                         $$this_sample{'periods'}[$period_idx]{'end'} = $latest_end;
+                                                        debug_log(sprintf "client/server's ID %d end is before current sample end, so assigning sample begin to %d\n", $cs_id, $latest_end);
                                                     }
                                                     if (! defined $result{'run.begin'} or $result{'begin'} > $$this_sample{'periods'}[$period_idx]{'begin'}) {
                                                         $result{'begin'} = $$this_sample{'periods'}[$period_idx]{'begin'};
@@ -859,16 +882,18 @@ if (exists $result{'iterations'}) {
                         } #opendir samp
                     } #samp pass
                 } #samp_dirs
-                if (not defined $$iter{'primary-metric'}) {
-                    printf "Warning: no primary-metric was found for %s\n", $this_iter_dir;
+                if (scalar @primary_metrics == 0) {
+                    printf "ERROR: No primary-metrics were found, exiting.\n";
+                    exit 1;
                 }
+                $$iter{'primary-metric'} = join(",", @primary_metrics);
+
                 if (defined $primary_period) {
                     $$iter{'primary-period'} = $primary_period;
                 } else {
-                    printf "Warning: no primary-period was found for %s\n", $this_iter_dir;
+                    printf "ERROR: no primary-period was found for %s\n", $this_iter_dir;
+                    exit 1;
                 }
-                $$iter{'primary-metric'} = $primary_metric;
-                $$iter{'primary-period'} = $primary_period;
                 queue_es_doc("iteration", $run_dir . "/" . $this_iter_dir, $iter_idx);
             } else {
                 printf "Skipping iteration %d\n", $iter_num;

@@ -328,12 +328,15 @@ function launch_osruntime() {
     do_ssh $user@$host /bin/mkdir -p $remote_data_dir
 
     echo "ensuring container image is pulled to $host"
-    do_ssh $user@$host podman pull $image
+    for image in ${bench_to_image[@]}; do
+        do_ssh $user@$host podman pull $image
+    done
 
     echo "Recording container image usage"
-    do_ssh $user@$host "echo '$image $(date -u +%s)' >> ${remote_base_dir}/remotehost-container-image-census"
-
-    echo "$image" >$endpoint_run_dir/chroot-container-image.txt
+    for image in ${bench_to_image[@]}; do
+        do_ssh $user@$host "echo '$image $(date -u +%s)' >> ${remote_base_dir}/remotehost-container-image-census"
+        echo "$image" >>$endpoint_run_dir/chroot-container-image.txt
+    done
 
     total_cpu_partitions=0
     for this_cs_label in ${clients[@]} ${servers[@]}; do
@@ -354,6 +357,9 @@ function launch_osruntime() {
     # For each client and server launch the actual script which will run it.
     count=1
     for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        this_cs_id=`echo $this_cs_label | awk -F- '{print $2}'`
+        this_bench=`echo ${id_to_bench[$this_cs_id]}`
+        this_image=`echo ${bench_to_image[$this_bench]}`
         tmp_osruntime=${osruntime[default]}
         set +u
         if [ ! -z "${osruntime[$this_cs_label]}" ]; then
@@ -399,7 +405,7 @@ function launch_osruntime() {
             echo "using chroot"
 
             echo "Adding mount for chroot osruntime"
-            container_id=$(do_ssh ${user}@${host} podman create --name ${container_name} ${image})
+            container_id=$(do_ssh ${user}@${host} podman create --name ${container_name} ${this_image})
             echo "container_id: ${container_id}"
             echo "${this_cs_label} ${container_id}" >>${endpoint_run_dir}/chroot-container-id.txt
             container_mount=$(do_ssh ${user}@${host} podman mount "${container_id}")
@@ -522,7 +528,7 @@ function launch_osruntime() {
                 done
                 IFS=$oldIFS
             fi
-            cs_cmd+=" ${image}"
+            cs_cmd+=" ${this_image}"
         fi
 
         echo -e "About to run:\n${cs_cmd}\n"
