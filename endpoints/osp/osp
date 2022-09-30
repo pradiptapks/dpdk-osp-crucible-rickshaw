@@ -23,15 +23,21 @@ else
     exit 1
     exit
 fi
+chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
+image_cache_size=3
+default_flavor="nfv-large"
+default_availability_zone="nova"
+osruntime="chroot"
+host_mounts=""
 endpoint_name="osp"
 instance_prefix="rickshaw"
 project_name="crucible-rickshaw"
-osruntime="podman"
-controller_tool_collect="1"
-compute_tool_collect="1"
+controllers_tool_collect="0"
+computes_tool_collect="0"
 declare -A cpuPartitioning
 declare -A flavor
-declare -A node
+declare -A availability_zone
+declare -A ips
 
 function cleanup_json() {
     local json="$1"; shift
@@ -90,7 +96,10 @@ function osp_req_check() {
     fi
     verify_ssh_login $user $host
     # TODO: source overcloudrc or equivalent init file to do osp stuff.  Error out if not found
-    if [ $? -gt 0 ]; then
+    osp_cmd=". ./overcloudrc && openstack server list"
+    do_ssh ${user}@${host} "$osp_cmd 2>&1" 2>&1 >msg
+    rc=$?
+    if [ $rc -gt 0 ]; then
         exit_error "Could not run 'openstack' on overcloud host: $osp_cmd"
     fi
     # Validation returns what clients and servers would be used and the userenv
@@ -172,17 +181,17 @@ function process_osp_opts() {
                 # flavor is per engine:
                 # option format::  flavor:<engine-label>:<flavor>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
-                label=$(get_opt_field "${val}" "key")
-                flavor=$(get_opt_field "${val}" "value")
-                nodeSelector[$label]=$flavor
+                this_key=$(get_opt_field "${val}" "key")
+                this_val=$(get_opt_field "${val}" "value")
+                flavor[$this_key]=$this_val
                 ;;
-            node)
+            availability-zone)
                 # node (compute node hostname) is per engine:
                 # option format::  node:<engine-label>:<node>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
-                label=$(get_opt_field "${val}" "key")
-                node=$(get_opt_field "${val}" "value")
-                node[$label]=$node
+                this_key=$(get_opt_field "${val}" "key")
+                this_value=$(get_opt_field "${val}" "value")
+                availability_zone[$this_key]=$this_value
                 ;;
             *)
                 if echo $arg | grep -q -- "="; then
@@ -203,13 +212,313 @@ function create_remotehost_engines() {
     echo "create_remotehost_engines()"
 }
 
-function create_instances() {
+function create_servers() {
     typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
     ref1=""
     local type="$1"; shift
     local instances=""
-    ref1="$instances"
+    osp_pre_cmd=". ./overcloudrc && "
+    echo "making .rickshaw directory"
+    do_ssh ${user}@${host} "$osp_pre_cmd mkdir -p .rickshaw" 
+    echo "checking for existence of ssh key"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair list --quote minimal -f csv" >${endpoint_run_dir}/openstack-keys.txt
+    existing_key=`cat ${endpoint_run_dir}/openstack-keys.txt | awk -F, '{print $1}' | grep -v \"Name\" | grep rickshaw` 
+    if [ ! -z "$existing_key" -a $existing_key == "rickshaw" ]; then
+        echo "deleting existing ssh key [$existing_key]"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair delete rickshaw" 
+        echo "remaining keypairs"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair list --quote minimal -f csv"
+    fi
+    echo "creating new ssh key"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair create rickshaw >.rickshaw/ssh-key.pem && chmod 600 .rickshaw/ssh-key.pem"
+    local osp_servers=""
+
+    while [ $# -gt 0 ]; do
+        cs_label=$1; shift
+
+        this_flavor=$default_flavor
+        if [ ! -z "${flavor[$cs_label]}" ]; then
+            this_flavor=${flavor[$cs_label]}
+        elif [ ! -z "${flavor[default]}" ]; then
+            this_flavor=${flavor[default]}
+        fi
+
+        this_availability_zone=$default_availability_zone
+        if [ ! -z "${availability_zone[$cs_label]}" ]; then
+            this_availability_zone=${availability_zone[$cs_label]}
+        elif [ ! -z "${availability_zone[default]}" ]; then
+            this_availability_zone=${availability_zone[default]}
+        fi
+
+        echo "checking for existing server"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack server list --quote minimal -f csv" >${endpoint_run_dir}/openstack-existing-servers.txt
+        echo "existing servers:"
+        cat ${endpoint_run_dir}/openstack-existing-servers.txt
+        existing_server=`cat ${endpoint_run_dir}/openstack-existing-servers.txt | grep -v ID,Name,Status,Networks,Image,Flavor | grep rickshaw-$cs_label | awk -F, '{print $2}'`
+        echo "existing_server: [$existing_server]"
+        if [ "$existing_server" == "rickshaw-$cs_label" ]; then
+            echo "deleting existing server [$existing_server]"
+            do_ssh ${user}@${host} "$osp_pre_cmd openstack server delete rickshaw-$cs_label --wait" 
+        fi
+
+        echo "checking for existing port"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port list -f csv --quote minimal | grep -v ID,Name,MAC" >${endpoint_run_dir}/openstack-existing-ports.txt
+        echo "existing ports:"
+        cat ${endpoint_run_dir}/openstack-existing-ports.txt
+        echo "existing_port: [$existing_port]"
+        existing_port=`cat ${endpoint_run_dir}/openstack-existing-ports.txt | grep -v ID,Name,Mac | grep management-rickshaw-$cs_label | awk -F, '{print $2}'`
+        if [ "$existing_port" == "management-rickshaw-$cs_label" ]; then
+            echo "deleting existing port [$existing_port]"
+            do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $existing_port" 
+        fi
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network management --no-security-group --disable-port-security  management-rickshaw-$cs_label"
+
+        echo "creating openstack server rickshaw-$cs_label"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack server create --flavor nfv-large --nic port-id=management-rickshaw-$cs_label --key-name rickshaw --image stream9 --availability-zone nova  rickshaw-$cs_label --wait" >${endpoint_run_dir}/openstack-create-rickshaw-$cs_label.txt
+        echo "getting openstack port information for management-rickshaw-$cs_label"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port show management-rickshaw-$cs_label -f json" >${endpoint_run_dir}/openstack-port-management-rickshaw-$cs_label.json
+        echo "finding server IP"
+        this_server_ip=`jq -r .fixed_ips[0].ip_address ${endpoint_run_dir}/openstack-port-management-rickshaw-$cs_label.json`
+        echo "this_server_ip: [$this_server_ip]"
+        do_ssh ${user}@${host} "$osp_pre_cmd ssh-keygen -R $this_server_ip"
+        osp_servers+=" $cs_label"
+        ips[$cs_label]=$this_server_ip
+    done
+    ref1=$osp_servers
+    sleep 60
 }
+
+function launch_osruntime() {
+    local this_cs_label this_cs_log_file base_cmd cs_cmd cs_rb_env env_file
+    local env_opts existing_container container_id container_mount container_name fs
+    local total_cpu_partitions tmp_osruntime
+
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        echo "working on osruntime for $this_cs_label"
+
+        # TODO: consider ssh port forwarding
+        this_cs_ssh_centos="ssh $ssh_opts -i .rickshaw/ssh-key.pem centos@${ips[$this_cs_label]} sudo"
+        this_cs_ssh="ssh $ssh_opts -i .rickshaw/ssh-key.pem root@${ips[$this_cs_label]} "
+
+        # enable ssh for root on VM
+        do_ssh $user@$host "$this_cs_ssh_centos sudo echo \"PermitRootLogin yes\" >/etc/ssh/sshd_config"
+        do_ssh $user@$host "$this_cs_ssh_centos sudo cp /home/centos/.ssh/authorized_keys /root/.ssh/"
+        do_ssh $user@$host "$this_cs_ssh_centos sudo systemctl restart sshd"
+
+        # create working directories
+        do_ssh $user@$host "$this_cs_ssh /bin/mkdir -p $remote_cfg_dir"
+        do_ssh $user@$host "$this_cs_ssh /bin/mkdir -p $remote_logs_dir"
+        do_ssh $user@$host "$this_cs_ssh /bin/mkdir -p $remote_data_dir"
+        echo "ensuring container image is pulled to $this_cs_label"
+        do_ssh $user@$host "$this_cs_ssh podman pull $image"
+        echo "Recording container image usage"
+        do_ssh $user@$host "$this_cs_ssh echo $image $(date -u +%s) >>${remote_base_dir}/remotehost-container-image-census"
+    done
+
+    echo "$image" >$endpoint_run_dir/chroot-container-image.txt
+
+    total_cpu_partitions=0
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        set +u
+        cpu_partitioning=0
+        if [ ! -z "${cpuPartitioning[$this_cs_label]}" ]; then
+            cpu_partitioning=${cpuPartitioning[$this_cs_label]}
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            cpu_partitioning=${cpuPartitioning[default]}
+        fi
+        set -u
+
+        if [ "${cpu_partitioning}" == "1" ]; then
+            (( total_cpu_partitions++ ))
+        fi
+    done
+
+
+    # make tempdir on controller/undercloud
+    do_ssh ${user}@${host} mkdir -p /var/lib/crucible/tmp
+
+    # copy ssh key to controller/undercloud
+    pushd "${config_dir}" >/dev/null
+    do_scp "" rickshaw_id.rsa "${user}@${host}" /var/lib/crucible/tmp/
+    popd >/dev/null
+
+
+    # For each client and server launch the actual script which will run it.
+    count=1
+    for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        this_cs_ssh="ssh $ssh_opts -i .rickshaw/ssh-key.pem ${ips[$this_cs_label]} sudo"
+        this_cs_scp="scp $ssh_opts -i .rickshaw/ssh-key.pem"
+        tmp_osruntime=$osruntime
+
+        container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
+        existing_container=`do_ssh $user@$host "$this_cs_ssh podman ps --all --format \"{{.Names}}\" | grep ^$container_name$"`
+        if [ ! -z "$existing_container" ]; then
+            echo "WARNING: found existing container '$existing_container', deleting"
+            do_ssh $user@$host "$this_cs_ssh podman rm $container_name"
+        fi
+        this_cs_log_file="$this_cs_label.txt"
+
+        set +u
+        cpu_partitioning=0
+        if [ ! -z "${cpuPartitioning[$this_cs_label]}" ]; then
+            cpu_partitioning=${cpuPartitioning[$this_cs_label]}
+        elif [ ! -z "${cpuPartitioning[default]}" ]; then
+            cpu_partitioning=${cpuPartitioning[default]}
+        fi
+        set -u
+
+        numa_node=-1
+        this_disable_tools="$disable_tools"
+
+        if [ "${tmp_osruntime}" == "chroot" ]; then
+            echo "using chroot"
+
+            echo "Adding mount for chroot osruntime"
+            container_id=$(do_ssh ${user}@${host} $this_cs_ssh podman create --name ${container_name} ${image})
+            echo "container_id: ${container_id}"
+            echo "${this_cs_label} ${container_id}" >>${endpoint_run_dir}/chroot-container-id.txt
+            container_mount=$(do_ssh ${user}@${host} $this_cs_ssh podman mount "${container_id}")
+            echo "container_mount: ${container_mount}"
+            echo "${this_cs_label} ${container_mount}" >>${endpoint_run_dir}/chroot-container-mount.txt
+            echo "container_name: $container_name"
+            echo "${this_cs_label} ${container_name}" >>${endpoint_run_dir}/chroot-container-name.txt
+            if [ ! -z "${container_mount}" ]; then
+                echo "Container mount: ${container_mount}"
+                # Allow the user to more easily inspect failed runs
+                echo "Mapping container /tmp to host ${remote_data_dir}"
+                do_ssh ${user}@${host} $this_cs_ssh mkdir -p ${container_mount}/tmp
+                do_ssh ${user}@${host} $this_cs_ssh mount --verbose --options bind ${remote_data_dir} ${container_mount}/tmp
+                echo "Adding host directories to container mount"
+                if [ "${host_mounts}" != "" ]; then
+                    local oldIFS=${IFS}
+                    IFS=" "
+                    for fs in ${host_mounts}; do
+                        chroot_rbind_mounts+=" ${fs}"
+                    done
+                    IFS=${oldIFS}
+                fi
+                for fs in ${chroot_rbind_mounts}; do
+                    echo "Adding ${fs} to ${container_mount}"
+                    do_ssh ${user}@${host} $this_cs_ssh mkdir -p ${container_mount}/${fs}
+                    do_ssh ${user}@${host} $this_cs_ssh mount --verbose --options rbind /${fs} ${container_mount}/${fs}
+                    do_ssh ${user}@${host} $this_cs_ssh mount --verbose --make-rslave ${container_mount}/${fs}
+                    echo
+                done
+                echo "mounts:"
+                do_ssh ${user}@${host} $this_cs_ssh mount | grep ${container_mount}
+                # for chroot osruntime we can also simply copy the ssh key
+                echo "Copying ssh key to ${user}@${host}:${container_mount}/tmp/ for chroot runtime"
+                do_ssh ${user}@${host} $this_cs_scp /var/lib/crucible/tmp/rickshaw_id.rsa ${ips[$this_cs_label]}:"${container_mount}/tmp/"
+                do_ssh ${user}@${host} $this_cs_ssh /bin/cp /etc/hosts "${container_mount}/etc/"
+                do_ssh ${user}@${host} $this_cs_ssh /bin/cp /etc/resolv.conf "${container_mount}/etc/"
+            else
+                echo "Container mount not found, exiting"
+                exit 1
+            fi
+
+            base_cmd="/usr/local/bin/bootstrap"
+            base_cmd+=" --rickshaw-host=$controller_ipaddr"
+            base_cmd+=" --endpoint-run-dir=$endpoint_run_dir"
+            base_cmd+=" $cs_rb_opts"
+            base_cmd+=" --cs-label=$this_cs_label"
+            base_cmd+=" --base-run-dir=$base_run_dir"
+            base_cmd+=" --endpoint=remotehost"
+            base_cmd+=" --osruntime=${tmp_osruntime}"
+            base_cmd+=" --max-sample-failures=$max_sample_failures"
+            base_cmd+=" --max-rb-attempts=$max_rb_attempts"
+            base_cmd+=" --cpu-partitions=${total_cpu_partitions}"
+            base_cmd+=" --cpu-partition-index=${count}"
+            base_cmd+=" --cpu-partitioning=$cpu_partitioning"
+            base_cmd+=" --engine-script-start-timeout=$engine_script_start_timeout"
+            base_cmd+=" --disable-tools=$this_disable_tools"
+            if [ $numa_node -gt -1 ]; then
+                base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
+            fi
+
+            # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
+            # Same will be true for running podman
+            cs_cmd="nohup chroot $container_mount $base_cmd \>$remote_logs_dir/$this_cs_log_file"
+        elif [ "${tmp_osruntime}" == "podman" ]; then
+            echo "using podman"
+
+            env_file="${this_cs_label}_env.txt"
+            ssh_id=$(sed -z 's/\n/\\n/g' ${config_dir}/rickshaw_id.rsa)
+
+            echo "rickshaw_host=$controller_ipaddr"         >> ${endpoint_run_dir}/${env_file}
+            echo "endpoint_run_dir=$endpoint_run_dir"       >> ${endpoint_run_dir}/${env_file}
+            echo "cs_label=$this_cs_label"                  >> ${endpoint_run_dir}/${env_file}
+            echo "base_run_dir=$base_run_dir"               >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partitioning=$cpu_partitioning"       >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partitions=${total_cpu_partitions}"   >> ${endpoint_run_dir}/${env_file}
+            echo "cpu_partition_index=${count}"             >> ${endpoint_run_dir}/${env_file}
+            echo "endpoint=remotehost"                      >> ${endpoint_run_dir}/${env_file}
+            echo "osruntime=${tmp_osruntime}"               >> ${endpoint_run_dir}/${env_file}
+            echo "max_sample_failures=$max_sample_failures" >> ${endpoint_run_dir}/${env_file}
+            echo "max_rb_attempts=$max_rb_attempts"         >> ${endpoint_run_dir}/${env_file}
+            echo "ssh_id=${ssh_id}"                         >> ${endpoint_run_dir}/${env_file}
+            echo "disable_tools=$this_disable_tools"        >> ${endpoint_run_dir}/${env_file}
+
+            for cs_rb_opt in $cs_rb_opts; do
+                arg=$(echo $cs_rb_opt | awk -F'=' '{print $1}')
+                value=$(echo $cs_rb_opt | awk -F'=' '{print $2}')
+
+                arg=$(echo ${arg} | sed -e 's/^--//' -e 's/-/_/g' )
+
+                echo "${arg}=${value}"                      >> ${endpoint_run_dir}/${env_file}
+            done
+
+            if pushd ${endpoint_run_dir} >/dev/null; then
+                echo "Copying ${endpoint_run_dir}/${env_file} to ${user}@${host}:${remote_cfg_dir}"
+                do_scp "" "${env_file}" "${user}@${host}" "${remote_cfg_dir}"
+                echo "Copying from ${user}@${host}:${remote_cfg_dir} to ${ips[$this_cs_label]}:${remote_cfg_dir}"
+                do_ssh $user@$host $this_cs_scp ${remote_cfg_dir}/${env_file} ${ips[$this_cs_label]}:${remote_cfg_dir} 
+                popd >/dev/null
+            else
+                echo "Failed to pushd to ${endpoint_run_dir} to scp env file"
+                exit 1
+            fi
+
+            cs_cmd="podman run"
+            cs_cmd+=" --detach=true"
+            cs_cmd+=" --name=${container_name}"
+            cs_cmd+=" --env-file ${remote_cfg_dir}/${env_file}"
+            cs_cmd+=" --privileged"
+            cs_cmd+=" --ipc=host"
+            cs_cmd+=" --pid=host"
+            cs_cmd+=" --net=host"
+            cs_cmd+=" --security-opt=label=disable"
+            cs_cmd+=" --mount=type=bind,source=${remote_data_dir},destination=/tmp"
+            cs_cmd+=" --mount=type=bind,source=/lib/modules,destination=/lib/modules"
+            cs_cmd+=" --mount=type=bind,source=/usr/src,destination=/usr/src"
+            if [ "$host_mounts" != "" ]; then
+                local oldIFS=$IFS
+                IFS=" "
+                for fs in $host_mounts; do
+                   cs_cmd+=" --mount=type=bind,source=$fs,destination=$fs"
+                done
+                IFS=$oldIFS
+            fi
+            cs_cmd+=" ${image}"
+        fi
+
+        echo -e "About to run:\n${cs_cmd}\n"
+        if [ "${tmp_osruntime}" == "chroot" ]; then
+            do_ssh $user@$host $this_cs_ssh "${cs_cmd}" &
+        elif [ "${tmp_osruntime}" == "podman" ]; then
+            do_ssh $user@$host $this_cs_ssh "${cs_cmd}"
+        fi
+        ssh_rc=$?
+        if [ ${ssh_rc} -gt 0 ]; then
+            echo "running ${osruntime} failed"
+            exit 1
+        fi
+
+        let count=$count+1
+    done
+    echo "This endpoint deployed"
+    echo
+}
+
 
 function move_remotehost_logs() {
     local this_cs_label remote_cs_log_file container_name delete_remote_dir
@@ -241,29 +550,6 @@ function move_remotehost_logs() {
     fi
 }
 
-function delete_instances() {
-    if [ -z "$1" ]; then
-        abort_error "delete_instances(): at least 1 instance must be provided" endpoint-deploy-begin
-    fi
-    local instances_to_delete=""
-    while [ $# -gt 0 ]; do
-        local name="$1"; shift
-        echo "checking for existing instance $name with prefix $instance_prefix-"
-        #TODO use openstack cmd to check for existance of instance: local existing_instace="`do_ssh $user@$host 
-        if [ ! -z "$existing_instance" ]; then
-            echo "delete_instances(): found $name"
-            instances_to_delete+=" $instance_prefix-$name"
-        fi
-    done
-    if [ ! -z "$instances_to_delete" ]; then
-        echo "going to bulk-delete these instancess: $instances_to_delete"
-        #TODO: use openstack cmd to delete instances: local delete_output=`do_ssh $user@$host "kubectl -n $project_name delete pod $pods_to_delete 2>&1"`
-        if [ $? -gt 0 ]; then
-            abort_error "Error deleting instances $existing_instances: $delete_output" endpoint-deploy-begin
-        fi
-    fi
-}
-
 function get_osp_config() {
     echo "getting OSP config"
     #TODO: get instances, networks, etc.
@@ -284,10 +570,16 @@ process_opts "$@"
 process_osp_opts "$endpoint_opts"
 init_common_dirs
 load_settings
+
+remote_base_dir="/var/lib/crucible"
+remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
+remote_cfg_dir="${remote_dir}/cfg"
+remote_logs_dir="${remote_dir}/logs"
+remote_data_dir="${remote_dir}/data/tmp"
+
 osp_req_check
 base_req_check
 get_osp_config
-delete_instances
 
 echo "This endpoint to run these clients: ${clients[@]}"
 echo "This endpoint to run these servers: ${servers[@]}"
@@ -296,10 +588,11 @@ echo "This endpoint to run these servers: ${servers[@]}"
 # where tools are run.  Once this is known, this information needs
 # to be sent back to the controller.
 new_osp_followers=""
-cs_instances=""
-create_instances cs_instances cs ${clients[@]} ${servers[@]}
-echo "These client/server instances were created: $cs_instancess"
-all_engines="$cs_instances"
+cs_servers=""
+create_servers cs_servers cs ${clients[@]} ${servers[@]}
+echo "These openstack servers were created: $cs_servers"
+all_engines="$cs_servers"
+launch_osruntime
 # TODO: get active compute nodes
 active_comput_nodes=""
 
@@ -323,3 +616,5 @@ if [ "${controllers_tool_collect}" == "1" ]; then
 fi
 
 process_roadblocks osp ${new_osp_followers}
+
+
