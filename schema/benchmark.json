@@ -64,7 +64,11 @@
                 "type": "boolean"
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "required": [
+              "src",
+              "dest"
+            ]
           },
           "additionalItems": false
         },
@@ -93,7 +97,12 @@
           "additionalItems": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "files-from-controller",
+        "runtime",
+        "start"
+      ]
     },
     "server": {
       "type": "object",
@@ -115,7 +124,11 @@
                 "type": "boolean"
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+              "required": [
+                "src",
+                "dest"
+            ]
           },
           "additionalItems": false
         },
@@ -139,9 +152,15 @@
           "type": "boolean"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "files-from-controller",
+          "start",
+          "stop"
+      ]
     }
   },
+  "additionalProperties": false,
   "required": [
     "rickshaw-benchmark",
     "client",
