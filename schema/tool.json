@@ -54,8 +54,13 @@
                 "type": "boolean"
               }
             },
-            "additionalProperties": false
-          }
+            "additionalProperties": false,
+            "required": [
+              "src",
+              "dest"
+            ]
+          },
+          "additionalItems": false
         },
         "blacklist": {
           "type": "array",
@@ -68,8 +73,26 @@
                   "remotehost",
                   "k8s"
                 ]
+              },
+              "collector-types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "profiler",
+                    "master",
+                    "worker",
+                    "client",
+                    "server"
+                  ]
+                }
               }
-            }
+            },
+            "additionalProperties": false,
+            "required": [
+              "endpoint",
+              "collector-types"
+            ]
           },
           "additionalItems": false
         },
@@ -84,8 +107,26 @@
                   "remotehost",
                   "k8s"
                 ]
+              },
+              "collector-types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "profiler",
+                    "master",
+                    "worker",
+                    "client",
+                    "server"
+                  ]
+                }
               }
-            }
+            },
+            "additionalProperties": false,
+            "required": [
+              "endpoint",
+              "collector-types"
+            ]
           },
           "additionalItems": false
         },
