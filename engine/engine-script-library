@@ -411,6 +411,8 @@ function get_data() {
 }
 
 function collect_sysinfo() {
+    local packrat_rc
+
     echo
     echo "Collecting sysinfo"
 
@@ -418,13 +420,18 @@ function collect_sysinfo() {
     if [ ! -z "${packrat_bin}" ]; then
         echo "Running packrat..."
         ${packrat_bin} ${sysinfo_dir}
+        packrat_rc=${?}
         echo "Packrat is finished"
+
+        echo "Contents of ${sysinfo_dir}:"
+        ls -l ${sysinfo_dir}
+
+        if [ ${packrat_rc} != 0 ]; then
+            abort_error "Critical error encountered by packrat during sysinfo collection" collect-sysinfo-end
+        fi
     else
         echo "Packrat is not available"
     fi
-
-    echo "Contents of ${sysinfo_dir}:"
-    ls -l ${sysinfo_dir}
 
     echo
 }
