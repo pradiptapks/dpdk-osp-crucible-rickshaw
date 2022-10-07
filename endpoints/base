@@ -673,7 +673,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            call_endpoint_specific_function "${endpoint_type}" "test_start" "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
+            call_endpoint_specific_function "${endpoint_type}" "test_start" "endpoint-start-end" "${roadblock_msgs_dir}" "${test_id}" "${cs_tx_msgs_dir}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "endpoint-start-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -742,7 +742,7 @@ function process_bench_roadblocks() {
             roadblock_rc=$?
             evaluate_test_roadblock "${rb_name}" ${roadblock_rc} ${iter_array_idx}
 
-            call_endpoint_specific_function "${endpoint_type}" "test_stop" "${roadblock_msgs_dir}" "${test_id}"
+            call_endpoint_specific_function "${endpoint_type}" "test_stop" "server-stop-end" "${roadblock_msgs_dir}" "${test_id}"
 
             rb_name=$(printf "%s%s" ${rb_prefix} "server-stop-end")
             prepare_roadblock_user_msgs_file "${iter_samp_dir}" "${rb_name}"
@@ -844,7 +844,7 @@ function process_roadblocks() {
     roadblock_rc=$?
     roadblock_exit_on_error ${roadblock_rc}
 
-    call_endpoint_specific_function "${endpoint_type}" "sysinfo"
+    call_endpoint_specific_function "${endpoint_type}" "sysinfo" "collect-sysinfo-end"
     if [ -d "${endpoint_run_dir}/sysinfo" ]; then
         mv ${endpoint_run_dir}/sysinfo ${run_dir}/sysinfo/endpoint/${endpoint_label}
     fi
@@ -876,7 +876,7 @@ function process_roadblocks() {
 
     do_roadblock "endpoint-cleanup-begin" ${default_timeout}
 
-    call_endpoint_specific_function "${endpoint_type}" "cleanup"
+    call_endpoint_specific_function "${endpoint_type}" "cleanup" "endpoint-cleanup-end"
 
     do_roadblock "endpoint-cleanup-end" ${default_timeout}
 }
@@ -986,34 +986,40 @@ function load_settings() {
 }
 
 function call_endpoint_specific_function() {
-    local endpoint_type function_postfix function_rc my_function_name endpoint_function_name
+    local endpoint_type function_postfix function_rc my_function_name endpoint_function_name roadblock_name
 
     my_function_name="call_endpoint_specific_function"
 
     endpoint_type=${1}; shift
     function_postfix=${1}; shift
+    roadblock_name=${1}; shift
 
-    if [ ! -z "${endpoint_type}" ]; then
-        if [ -z "${function_postfix}" ]; then
-            echo "${my_function_name}: function postfix not defined"
-            return 1
-        fi
+    if [ -z "${roadblock_name}" ]; then
+        exit_error "${my_function_name}: roadblock name not defined"
+    fi
 
-        endpoint_function_name="endpoint_${endpoint_type}_${function_postfix}"
-        if [ "$(type -t ${endpoint_function_name})" == "function" ]; then
-            echo "${my_function_name}: about to call '${endpoint_function_name} $@'"
-            ${endpoint_function_name} "$@"
-            function_rc=$?
-            echo "${my_function_name}: returning from ${endpoint_function_name} with rc=${function_rc}"
-            return ${function_rc}
-        else
-            echo "${my_function_name}: there is no defined function ${endpoint_function_name}"
-            return 0
+    if [ -z "${endpoint_type}" ]; then
+        abort_error "${my_function_name}: no endpoint type specified" ${roadblock_name}
+    fi
+
+    if [ -z "${function_postfix}" ]; then
+        abort_error "${my_function_name}: function postfix not defined" ${roadblock_name}
+    fi
+
+    endpoint_function_name="endpoint_${endpoint_type}_${function_postfix}"
+    if [ "$(type -t ${endpoint_function_name})" == "function" ]; then
+        echo "${my_function_name}: about to call '${endpoint_function_name} $@'"
+        ${endpoint_function_name} "$@"
+        function_rc=$?
+        echo "${my_function_name}: ${endpoint_function_name} returned rc=${function_rc}"
+        if [ ${function_rc} != 0 ]; then
+            abort_error "${my_function_name}: ${endpoint_function_name} returned an error (rc=${function_rc})" ${roadblock_name}
         fi
     else
-        echo "${my_function_name}: no endpoint type specified"
-        return 1
+        abort_error "${my_function_name}: there is no defined function ${endpoint_function_name}" ${roadblock_name}
     fi
+
+    return 0
 }
 
 get_benchmark_from_id() {
