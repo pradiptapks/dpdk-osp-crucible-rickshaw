@@ -546,9 +546,13 @@ function launch_osruntime() {
 }
 
 function move_remotehost_logs() {
-    local this_cs_label remote_cs_log_file container_name delete_remote_dir
+    local this_cs_label remote_cs_log_file container_name delete_remote_dir log_file total_rc
+
+    total_rc=0
     delete_remote_dir=0
-    mkdir -p "$engine_logs_dir"
+    mkdir -p "${engine_logs_dir}"
+
+    echo "Collecting engine logs:"
     for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
         tmp_osruntime=${osruntime[default]}
         set +u
@@ -557,42 +561,69 @@ function move_remotehost_logs() {
         fi
         set -u
 
+        log_file=${this_cs_label}.txt
+
+        echo "engine: ${this_cs_label}"
+        echo "osruntime: ${tmp_osruntime}"
+
         if [ "${tmp_osruntime}" == "chroot" ]; then
             delete_remote_dir=1
-            remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
-            pushd / >/dev/null
-            do_scp "$user@$host" "$remote_cs_log_file" "" / && \
-                mv $remote_cs_log_file $engine_logs_dir
-            popd >/dev/null
+
+            remote_cs_log_file="${remote_logs_dir}/${log_file}"
+            do_scp "${user}@${host}" "${remote_cs_log_file}" "" ${engine_logs_dir}
+            (( total_rc += ${?} ))
         elif [ "${tmp_osruntime}" == "podman" ]; then
             container_name="${endpoint_label}_${run_id}_${this_cs_label}_${tmp_osruntime}"
-            do_ssh $user@$host podman logs ${container_name} > "${engine_logs_dir}/${this_cs_label}.txt"
+            do_ssh ${user}@${host} podman logs ${container_name} > "${engine_logs_dir}/${log_file}"
+            (( total_rc += ${?} ))
         fi
     done
-    if [ "${delete_remote_dir}" == "1" ]; then
-        do_ssh ${user}@${host} /bin/rm -r ${remote_dir}
+
+    if [ "${delete_remote_dir}" == "1" -a ${total_rc} == 0 ]; then
+        echo "Deleting remote directory:"
+        do_ssh ${user}@${host} /bin/rm -rv ${remote_dir}
+        (( total_rc += ${?} ))
     fi
+
+    return ${total_rc}
 }
 
 function endpoint_remotehost_cleanup() {
+    local log_rc cleanup_rc
+
     move_remotehost_logs
+    log_rc=${?}
+
     cleanup_osruntime
+    cleanup_rc=${?}
+
+    return $(( ${log_rc} + ${cleanup_rc} ))
 }
 
 function endpoint_remotehost_sysinfo() {
-    local local_dir
+    local local_dir packrat_rc
+
+    packrat_rc=0
 
     local_dir="${endpoint_run_dir}/sysinfo"
     mkdir ${local_dir}
 
     do_scp "" "${packrat_dir}/packrat" "${user}@${host}" "${remote_dir}"
+    (( packrat_rc += ${?} ))
 
     do_ssh ${user}@${host} mkdir -p ${remote_dir}/sysinfo
+    (( packrat_rc += ${?} ))
+
     do_ssh ${user}@${host} ${remote_dir}/packrat ${remote_dir}/sysinfo
+    (( packrat_rc += ${?} ))
 
     do_scp "${user}@${host}" "${remote_dir}/sysinfo/packrat-archive" "" "${local_dir}"
+    (( packrat_rc += ${?} ))
 
     do_ssh ${user}@${host} rm -Rf ${remote_dir}/packrat ${remote_dir}/sysinfo
+    (( packrat_rc += ${?} ))
+
+    return ${packrat_rc}
 }
 
 process_opts $@
