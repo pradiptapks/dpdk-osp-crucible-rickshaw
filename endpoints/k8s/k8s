@@ -947,15 +947,25 @@ function verify_pods_running() {
 }
 
 function get_pod_logs() {
+    local name pod_name total_rc
+
+    total_rc=0
+
     if [ -z "$1" ]; then
         abort_error "get_pod_logs(): at least 1 pod must be provided" endpoint-deploy-begin
     fi
+
+    echo "Collecting pod logs:"
+
     while [ $# -gt 0 ]; do
         local name="$1"; shift
-        echo "Getting logs from pod $name"
-        pod_name="rickshaw-$name"
-        do_ssh $user@$host kubectl -n $project_name logs $pod_name >"$engine_logs_dir/$name.txt"
+        echo "Getting logs from pod ${name}"
+        pod_name="rickshaw-${name}"
+        do_ssh ${user}@${host} kubectl -n ${project_name} logs ${pod_name} >"${engine_logs_dir}/${name}.txt"
+        (( total_rc += ${?} ))
     done
+
+    return ${total_rc}
 }
 
 function delete_pods() {
@@ -980,8 +990,14 @@ function delete_pods() {
         fi
     fi
 }
+
 function delete_pods_namespace() {
-    do_ssh $user@$host kubectl -n $project_name delete pods --all
+    local delete_rc
+
+    do_ssh ${user}@${host} kubectl -n ${project_name} delete pods --all
+    delete_rc=${?}
+
+    return ${delete_rc}
 }
 
 function delete_old_pods() {
@@ -1046,9 +1062,30 @@ function create_k8s_project() {
     do_ssh $user@$host kubectl create namespace $project_name
 }
 function endpoint_k8s_cleanup() {
+    local log_rc delete_pods_rc delete_namespace_rc
+
+    log_rc=0
+    delete_pods_rc=0
+    delete_namespace_rc=0
+
     get_pod_logs $all_pods
-    delete_pods_namespace
-    do_ssh $user@$host kubectl delete namespace $project_name
+    log_rc=${?}
+
+    if [ ${log_rc} == 0 ]; then
+        delete_pods_namespace
+        delete_pods_rc=${?}
+
+        if [ ${delete_pods_rc} == 0 ]; then
+            do_ssh $user@$host kubectl delete namespace $project_name
+            delete_namespace_rc=${?}
+        else
+            echo "Error deleting namespace pods"
+        fi
+    else
+        echo "Error getting pod logs"
+    fi
+
+    return $(( ${log_c} + ${delete_pods_rc} + ${delete_namespace_rc} ))
 }
 
 process_opts "$@"
