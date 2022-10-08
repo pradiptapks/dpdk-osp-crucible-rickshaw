@@ -14,8 +14,13 @@
           },
           "required": [
             "version"
-          ]
-        }
+          ],
+          "additionalProperties": false
+        },
+        "required": [
+          "schema"
+        ],
+        "additionalProperties": false
       }
     },
     "tool": {
@@ -32,7 +37,8 @@
       },
       "required": [
         "post-script"
-      ]
+      ],
+      "additionalProperties": false
     },
     "collector": {
       "type": "object",
