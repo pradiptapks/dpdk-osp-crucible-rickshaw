@@ -64,12 +64,19 @@
                 "type": "boolean"
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "required": [
+              "src",
+              "dest"
+            ]
           },
           "additionalItems": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "files-from-controller"
+      ]
     }
   },
   "required": [
