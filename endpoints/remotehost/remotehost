@@ -541,8 +541,6 @@ function launch_osruntime() {
 
         let count=$count+1
     done
-    echo "This endpoint deployed"
-    echo
 }
 
 function move_remotehost_logs() {
@@ -631,6 +629,11 @@ process_remotehost_opts $endpoint_opts
 init_common_dirs
 load_settings
 remotehost_req_check
+if [ ! -f $config_dir/rickshaw_id.rsa ]; then
+    echo "could not find $config_dir/rickshaw_id.rsa"
+    exit 1;
+fi
+ssh_id=$(sed -z 's/\n/\\n/g' ${config_dir}/rickshaw_id.rsa)
 base_req_check
 launch_osruntime
 process_roadblocks remotehost

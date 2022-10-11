@@ -298,12 +298,12 @@ function do_ssh() {
     if [ -z "$host" ]; then
         exit_error "do_ssh: host was blank: $user_host"
     fi
-    # the k8s endpoint is the only endpoint (as of now) that doesn't
-    # force the user to have root privileges
-    if [ "${endpoint_name}" != "k8s" -a "${user}" != "root" ]; then
+    # the k8s & osp endpoints are the only endpoints (as of now) that doesn't
+    # force the user to have root privileges.
+    if [ "${endpoint_name}" != "k8s" -a "${endpoint_name}" != "osp" -a "${user}" != "root" ]; then
         ssh_cmd="ssh $ssh_opts $user_host sudo bash -c \"$@\""
     else
-        ssh_cmd="ssh $ssh_opts $user_host $@"
+        ssh_cmd="ssh $ssh_opts $user_host bash -c \"$@\""
     fi
     $ssh_cmd
     local rc=$?
@@ -349,6 +349,10 @@ function do_scp() {
         src_cmd="tar -C ${src_base} -cf - ${src_path}"
     fi
 
+    echo "pwd:"
+    /bin/pwd
+    echo "ls:"
+    /bin/ls -l
     echo "Going to run:"
     echo "$src_cmd | $dst_cmd"
     $src_cmd | $dst_cmd
@@ -1025,4 +1029,29 @@ function call_endpoint_specific_function() {
 get_benchmark_from_id() {
     local this_id = $1; shift
     echo ${ids_to_bench[$this_id]}
+}
+
+function make_osruntime_boostrap_script() {
+    # Create a copy of the osruntime-boostrap script with
+    # vars specific to this endpoint/cs_label.  Order of
+    # args is very important!
+    local outfile=$1; shift
+    echo "#!/bin/bash"             >$outfile
+    echo "run_id=$1"              >>$outfile; shift
+    echo "rickshaw_host=$1"       >>$outfile; shift
+    echo "endpoint_run_dir=$1"    >>$outfile; shift
+    echo "cs_label=$1"            >>$outfile; shift
+    echo "base_run_dir=$1"        >>$outfile; shift
+    echo "cpu_partitioning=$1"    >>$outfile; shift
+    echo "endpoint=$1"            >>$outfile; shift
+    echo "osruntime=$1"           >>$outfile; shift
+    echo "max_sample_failures=$1" >>$outfile; shift
+    echo "max_rb_attempts=$1"     >>$outfile; shift
+    echo "rb_passwd=$1"           >>$outfile; shift
+    echo "rb_id=$1"               >>$outfile; shift
+    echo "ssh_id=\"$1\""          >>$outfile; shift
+    echo "image=$1"               >>$outfile; shift
+    echo "disable_tools=$1"       >>$outfile; shift
+    cat $endpoint_base_dir/osruntime-bootstrap >>$outfile
+    chmod +x $outfile
 }

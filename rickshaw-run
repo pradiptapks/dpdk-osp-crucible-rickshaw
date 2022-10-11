@@ -1533,6 +1533,7 @@ sub validate_endpoints() {
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
         printf "endopoint validation command: [%s]\n", $cmd;
         ($cmd, my $output, my $cmd_rc) = run_cmd($cmd);
+        print "\n[$output]\n";
         my @output = grep(!/^#/, split(/\n/, $output));
         if ($cmd_rc > 0) {
             die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
