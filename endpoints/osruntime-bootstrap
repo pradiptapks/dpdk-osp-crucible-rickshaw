@@ -35,11 +35,18 @@ mkdir -p $logs_dir
 log_file_name="osruntime-bootstrap-logfile_${run_id}_$cs_label.txt"
 log_file="$logs_dir/$log_file_name"
 remote_log_file="$rickshaw_host:$endpoint_run_dir/$log_file_name"
-ssh_opts="-q -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
-ssh_id_file="/tmp/ssh-id_${run_id}_$cs_label.txt"
+ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
+ssh_id_dir="/root/.ssh"
+ssh_id_file="/tmp/ssh-id_${run_id}_$cs_label.id"
+ssh_pub_id_file="$ssh_id_dir/id_rsa.pub"
 if [ ! -z "$ssh_id" ]; then
-    echo -e "$ssh_id" >$ssh_id_file
-    chmod 600 $ssh_id_file
+    mkdir -p $ssh_id_dir
+    chmod 700 $ssh_id_dir
+    echo -e $ssh_id >$ssh_id_file && chmod 600 $ssh_id_file
+    echo "$ssh_id_dir: $ssh_id_dir"
+    /bin/ls -la $ssh_id_dir
+    echo "$ssh_id_file:"
+    cat $ssh_id_file
 else
     echo "ssh_id not defined, cannot continue"
     echo "$ssh_id"
@@ -59,12 +66,13 @@ function exit_error() {
     exit 1
 }
 
-function exit() {
+function exit_success() {
     # Note that if ssh_id, rickshaw_host, and endpoint_run_dir are not defined, scp will not work
     log_output $@
     log_output "Going to scp with: scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file"
     scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file
     exit 0
+}
 
 function validate_vars() {
     log_output "validate_vars() begin"
@@ -90,12 +98,12 @@ env_file="$cfg_dir/${cs_label}_env.sh"
 function run_cmd() {
     typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
     ref1=""
-    log_output "going to run: [$@]"
+    log_output "run_cmd() going to run: [$@]"
     if $@ >$cmd_stdout 2>$cmd_stderr; then
         # Assign stdout to var
         ref1="`cat $cmd_stdout`"
     else # non-zero exit from $@
-        exit_error "cmd [$@] failed:\nstdout:\n`cat $cmd_stdout`\nstderr:\n`cat $cmd_stderr`"
+        exit_error "run_cmd() failed:\nrun-cmd-stdout:\n`cat $cmd_stdout`\nrun-cmd-stderr:\n`cat $cmd_stderr`"
     fi
 }
 
@@ -103,14 +111,15 @@ function validate_reqs() {
     log_output "validate_reqs() begin"
     # This assumes package management is via rpm/dnf.
     # This could be later expanded to support other utils (apt-get, zypper, etc).
-    for pkg in podman util-linux-core; do
+    rpm -v || exit_error "Could not find rpm" 
+    for pkg in podman; do
         if rpm -qi $pkg; then
             echo "Found $pkg"
         else
             if dnf install -y $pkg; then
                 echo "Installed $pkg"
             else
-                exit_send_error "Could not install pkg"
+                exit_error "Could not install pkg $pkg"
             fi
         fi
     done
@@ -120,7 +129,6 @@ function validate_reqs() {
 function init_env() {
     log_output "init_env() begin"
     local novar # when using run_cmd and don't need to capture output to a var
-    echo "$ssh_id" >$ssh_id_file
     run_cmd novar podman pull $image
     echo $image $(date -u +%s) >> $remote_base_dir/$endpoint_label-container-image-census
     log_output "init_env() end"
@@ -218,11 +226,12 @@ function launch_osruntime() {
         cs_cmd+=" $base_cmd"
     fi
 
-    log_output "About to run:\n$cs_cmd\n"
-    bash -c "$cs_cmd"
+    log_output "launch_osruntime(): About to run:\n$cs_cmd\n"
+    run_cmd novar "$cs_cmd"
     log_output "launch_osruntime() end"
 }
 
+validate_reqs
 init_env
 launch_osruntime
-exit "Launch of osruntime complete"
+exit_success "Launch of osruntime complete"

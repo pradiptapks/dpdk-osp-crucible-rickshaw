@@ -326,7 +326,8 @@ function do_scp() {
     if echo $dst_userhost | grep -q -- "@"; then
         dst_sudo_cmd=""
         dst_user=`echo $dst_userhost | awk -F@ '{print $1}'`
-        if [ "$dst_user" != "root" ]; then
+        #if [ "$dst_user" != "root" ]; then
+        if [ "${endpoint_name}" != "k8s" -a "${endpoint_name}" != "osp" -a "${dst_user}" != "root" ]; then
             local dst_sudo_cmd="sudo"
         fi
         dst_host=`echo $dst_userhost | awk -F@ '{print $2}'`
@@ -349,10 +350,6 @@ function do_scp() {
         src_cmd="tar -C ${src_base} -cf - ${src_path}"
     fi
 
-    echo "pwd:"
-    /bin/pwd
-    echo "ls:"
-    /bin/ls -l
     echo "Going to run:"
     echo "$src_cmd | $dst_cmd"
     $src_cmd | $dst_cmd

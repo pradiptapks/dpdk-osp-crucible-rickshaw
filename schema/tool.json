@@ -76,6 +76,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
+                  "osp",
                   "remotehost",
                   "k8s"
                 ]
@@ -110,6 +111,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
+                  "osp",
                   "remotehost",
                   "k8s"
                 ]
