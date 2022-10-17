@@ -89,7 +89,7 @@ validate_vars
 
 image_cache_size=3
 chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
-host_mounts=""
+host_mounts="run/openvswitch"
 container_name="rickshaw_${run_id}_$cs_label"
 cmd_stdout="$logs_dir/cmd-stdout_$log_file_name"
 cmd_stderr="$logs_dir/cmd-stderr_$log_file_name"
@@ -183,9 +183,13 @@ function launch_osruntime() {
             fi
             for fs in $chroot_rbind_mounts; do
                 log_output "Adding $fs to $container_mount"
-                run_cmd novar mkdir -p ${container_mount}/${fs}
-                run_cmd novar mount --verbose --options rbind /${fs} ${container_mount}/${fs}
-                run_cmd novar mount --verbose --make-rslave ${container_mount}/${fs}
+                if [ -e /$fs ]; then
+                    run_cmd novar mkdir -p ${container_mount}/${fs}
+                    run_cmd novar mount --verbose --options rbind /${fs} ${container_mount}/${fs}
+                    run_cmd novar mount --verbose --make-rslave ${container_mount}/${fs}
+                else
+                    log_output "host fs $fs not found, not adding to chrot"
+                fi
             done
             log_output "mounts:\n`mount | grep ${container_mount}`"
         else
@@ -218,7 +222,11 @@ function launch_osruntime() {
             local oldIFS=$IFS
             IFS=" "
             for fs in $host_mounts; do
-            cs_cmd+=" --mount=type=bind,source=$fs,destination=$fs"
+            if [ -e /$fs ]; then
+                cs_cmd+=" --mount=type=bind,source=/$fs,destination=/$fs"
+            else
+                log_output "host fs /$fs not found, not adding to container"
+            fi
             done
             IFS=$oldIFS
         fi
