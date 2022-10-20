@@ -1,0 +1,267 @@
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+#
+# osruntime-bootstrap: To get a rickshaw engine running:
+# 1) Create a new script, by declaring the below variables
+# 2) Add the rest of this script to the new script
+# The above can be done with make_osruntime_boostrap_script() in ./base
+
+# Vars which should be declared when duplicating this script:
+# (If this list changes, assignment in load_osruntime also had to change)
+required_vars=""
+required_vars+=" run_id"
+required_vars+=" rickshaw_host"
+required_vars+=" endpoint_run_dir"
+required_vars+=" cs_label"
+required_vars+=" base_run_dir"
+required_vars+=" cpu_partitioning"
+required_vars+=" endpoint"
+required_vars+=" osruntime"
+required_vars+=" max_sample_failures"
+required_vars+=" max_rb_attempts"
+required_vars+=" rb_passwd"
+required_vars+=" rb_id"
+required_vars+=" ssh_id"
+required_vars+=" image"
+required_vars+=" disable_tools"
+
+base_dir="/var/lib/crucible"
+cfg_dir="${base_dir}/cfg"
+data_dir="${base_dir}/data/tmp"
+logs_dir="${base_dir}/logs"
+mkdir -p $cfg_dir
+mkdir -p $data_dir
+mkdir -p $logs_dir
+log_file_name="osruntime-bootstrap-logfile_${run_id}_$cs_label.txt"
+log_file="$logs_dir/$log_file_name"
+remote_log_file="$rickshaw_host:$endpoint_run_dir/$log_file_name"
+ssh_opts="-o StrictHostKeyChecking=no -o PasswordAuthentication=no"
+ssh_id_dir="/root/.ssh"
+ssh_id_file="/tmp/ssh-id_${run_id}_$cs_label.id"
+ssh_pub_id_file="$ssh_id_dir/id_rsa.pub"
+if [ ! -z "$ssh_id" ]; then
+    mkdir -p $ssh_id_dir
+    chmod 700 $ssh_id_dir
+    echo -e $ssh_id >$ssh_id_file && chmod 600 $ssh_id_file
+    echo "$ssh_id_dir: $ssh_id_dir"
+    /bin/ls -la $ssh_id_dir
+    echo "$ssh_id_file:"
+    cat $ssh_id_file
+else
+    echo "ssh_id not defined, cannot continue"
+    echo "$ssh_id"
+    exit 1
+fi
+
+function log_output() {
+    echo -e "$@"
+    echo -e "$@" >>$log_file
+}
+
+function exit_error() {
+    # Note that if ssh_id, rickshaw_host, and endpoint_run_dir are not defined, scp will not work
+    log_output "$@"
+    log_output "Going to scp with: scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file"
+    scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file
+    exit 1
+}
+
+function exit_success() {
+    # Note that if ssh_id, rickshaw_host, and endpoint_run_dir are not defined, scp will not work
+    log_output $@
+    log_output "Going to scp with: scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file"
+    scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file
+    exit 0
+}
+
+function validate_vars() {
+    log_output "validate_vars() begin"
+    # Fail if any required vars are missing
+    for this_var in $required_vars; do
+        if [[ -z  "${!this_var}" ]]; then
+            exit_error "variable $this_var is not initialized"
+        fi
+    done
+    log_output "validate_vars() end"
+}
+
+validate_vars
+
+image_cache_size=3
+chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
+host_mounts="run/openvswitch"
+container_name="rickshaw_${run_id}_$cs_label"
+cmd_stdout="$logs_dir/cmd-stdout_$log_file_name"
+cmd_stderr="$logs_dir/cmd-stderr_$log_file_name"
+env_file_name="env.sh"
+env_file="$cfg_dir/$env_file_name"
+
+function run_cmd() {
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    ref1=""
+    log_output "run_cmd() going to run: [$@]"
+    if eval $@ >$cmd_stdout 2>$cmd_stderr; then
+        # Assign stdout to var
+        ref1="`cat $cmd_stdout`"
+    else # non-zero exit from $@
+        exit_error "run_cmd() failed:\nrun-cmd-stdout:\n`cat $cmd_stdout`\nrun-cmd-stderr:\n`cat $cmd_stderr`"
+    fi
+}
+
+function validate_reqs() {
+    log_output "validate_reqs() begin"
+    # This assumes package management is via rpm/dnf.
+    # This could be later expanded to support other utils (apt-get, zypper, etc).
+    rpm -v || exit_error "Could not find rpm" 
+    for pkg in podman; do
+        if rpm -qi $pkg; then
+            echo "Found $pkg"
+        else
+            if dnf install -y $pkg; then
+                echo "Installed $pkg"
+            else
+                exit_error "Could not install pkg $pkg"
+            fi
+        fi
+    done
+    log_output "validate_reqs() end"
+}
+
+function init_env() {
+    log_output "init_env() begin"
+    local novar # when using run_cmd and don't need to capture output to a var
+    run_cmd novar podman pull $image
+    echo $image $(date -u +%s) >> $remote_base_dir/$endpoint_label-container-image-census
+    log_output "init_env() end"
+}
+
+function launch_osruntime() {
+    log_output "launch_osruntime() begin"
+    local novar # when using run_cmd and don't need to capture output to a var
+
+    if [ "$osruntime" == "chroot" ]; then
+        log_output "Using chroot"
+        log_output "Adding mount for chroot osruntime"
+        log_output "container_name: [$container_name]"
+        run_cmd container_id podman create --name $container_name $image
+        log_output "container_id: [$container_id]"
+        run_cmd container_mount podman mount $container_id
+        log_output "container_mount: [$container_mount]"
+        if [ ! -z "$container_mount" ]; then
+            log_output "Mapping container /tmp to host $data_dir"
+            run_cmd novar mkdir -p $container_mount/tmp
+            run_cmd novar mount --verbose --options bind $data_dir $container_mount/tmp
+            log_output "Adding host directories to container mount"
+            if [ "$host_mounts" != "" ]; then
+                local oldIFS=$IFS
+                IFS=" "
+                for fs in $host_mounts; do
+                    chroot_rbind_mounts+=" $fs"
+                done
+                IFS=$oldIFS
+            fi
+            for fs in $chroot_rbind_mounts; do
+                log_output "Adding $fs to $container_mount"
+                if [ -e /$fs ]; then
+                    run_cmd novar mkdir -p ${container_mount}/${fs}
+                    run_cmd novar mount --verbose --options rbind /${fs} ${container_mount}/${fs}
+                    run_cmd novar mount --verbose --make-rslave ${container_mount}/${fs}
+                else
+                    log_output "host fs $fs not found, not adding to chroot"
+                fi
+            done
+            log_output "mounts:\n`mount | grep ${container_mount}`"
+        else
+            exit_error "Container mount not found, exiting"
+        fi
+
+        base_cmd="/usr/local/bin/bootstrap"
+        base_cmd+=" --run-id=$run_id"
+        base_cmd+=" --rickshaw-host=$rickshaw_host"
+        base_cmd+=" --endpoint-run-dir=$endpoint_run_dir"
+        base_cmd+=" --cs-label=$cs_label"
+        base_cmd+=" --base-run-dir=$base_run_dir"
+        base_cmd+=" --cpu-partitioning=$cpu_partitioning"
+        base_cmd+=" --endpoint=$endpoint"
+        base_cmd+=" --osruntime=$osruntime"
+        base_cmd+=" --max-sample-failures=$max_sample_failures"
+        base_cmd+=" --max-rb-attempts=$max_rb_attempts"
+        base_cmd+=" --roadblock-passwd=$rb_passwd"
+        base_cmd+=" --roadblock-id=$rb_id"
+        base_cmd+=" --image=$image"
+        base_cmd+=" --disable-tools=$disable_tools"
+
+        ssh_id_file=$container_mount/tmp/rickshaw_id.rsa
+        echo -e "$ssh_id" >$ssh_id_file
+        cat $ssh_id_file
+        chmod 600 $ssh_id_file
+
+	    # FIXME
+        # if [ $numa_node -gt -1 ]; then
+            # base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
+        # fi
+        # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
+        # Same will be true for running podman
+
+        cs_cmd="nohup chroot $container_mount $base_cmd &"
+    
+    elif [ "$osruntime" == "podman" ]; then
+
+        base_cmd="/usr/local/bin/bootstrap"
+
+        # Build the env file which is either sourced (for chroot)
+        # or read (for podman)
+        echo "run_id=$run_id"                            >$env_file
+        echo "rickshaw_host=$rickshaw_host"             >>$env_file
+        echo "endpoint_run_dir=$endpoint_run_dir"       >>$env_file
+        echo "cs_label=$cs_label"                       >>$env_file
+        echo "base_run_dir=$base_run_dir"               >>$env_file
+        echo "cpu_partitioning=$cpu_partitioning"       >>$env_file
+        echo "endpoint=$endpoint"                       >>$env_file
+        echo "osruntime=$osruntime"                     >>$env_file
+        echo "max_sample_failures=$max_sample_failures" >>$env_file
+        echo "max_rb_attempts=$max_rb_attempts"         >>$env_file
+        echo "roadblock_passwd=$rb_passwd"              >>$env_file
+        echo "roadblock_id=$rb_id"                      >>$env_file
+        echo "ssh_id=$ssh_id"                           >>$env_file
+        echo "image=$image"                             >>$env_file
+        echo "disable_tools=$disable_tools"             >>$env_file
+
+        log_output "using podman"
+        cs_cmd="podman run"
+        cs_cmd+=" --detach=true"
+        cs_cmd+=" --name=$container_name"
+        cs_cmd+=" --env-file $env_file"
+        cs_cmd+=" --privileged"
+        cs_cmd+=" --ipc=host"
+        cs_cmd+=" --pid=host"
+        cs_cmd+=" --net=host"
+        cs_cmd+=" --security-opt=label=disable"
+        cs_cmd+=" --mount=type=bind,source=$data_dir,destination=/tmp"
+        cs_cmd+=" --mount=type=bind,source=/lib/modules,destination=/lib/modules"
+        cs_cmd+=" --mount=type=bind,source=/usr/src,destination=/usr/src"
+        if [ "$host_mounts" != "" ]; then
+            local oldIFS=$IFS
+            IFS=" "
+            for fs in $host_mounts; do
+            if [ -e /$fs ]; then
+                cs_cmd+=" --mount=type=bind,source=/$fs,destination=/$fs"
+            else
+                log_output "host fs /$fs not found, not adding to container"
+            fi
+            done
+            IFS=$oldIFS
+        fi
+        cs_cmd+=" $image"
+        cs_cmd+=" $base_cmd"
+    fi
+
+    log_output "launch_osruntime(): About to run:\n$cs_cmd\n"
+    run_cmd novar "$cs_cmd"
+    log_output "launch_osruntime() end"
+}
+
+validate_reqs
+init_env
+launch_osruntime
+exit_success "Launch of osruntime complete"

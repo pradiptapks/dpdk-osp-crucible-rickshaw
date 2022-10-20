@@ -1533,6 +1533,7 @@ sub validate_endpoints() {
         debug_log(sprintf "endopoint validation command: [%s]\n", $cmd);
         printf "endopoint validation command: [%s]\n", $cmd;
         ($cmd, my $output, my $cmd_rc) = run_cmd($cmd);
+        print "\n[$output]\n";
         my @output = grep(!/^#/, split(/\n/, $output));
         if ($cmd_rc > 0) {
             die "[ERROR]Endpoint " . $$endpoint{'type'} . " with options " . $$endpoint{'opts'} .
@@ -1853,7 +1854,7 @@ sub prepare_bench_tool_engines() {
     chmod 0755, "$engine_roadblock_script";
 
     my @collectors = grep(/[^client|^server]/, keys %clients_servers);
-    my @all_collector_types = qw(client server worker master profiler);
+    my @all_collector_types = qw(client server worker master profiler compute);
 
     # Each tool may specify, for specific endpoints, that it needs to run somewhere other than a client
     # or server (a "collector").  This preference is in the "whitelist" section.  Check each tool used
@@ -2020,8 +2021,11 @@ sub deploy_endpoints() {
     # Each endpoint is responible for launching a osruntime for each client and server.
     print "\nDeploying endpoints\n";
     $endpoint_deploy_timeout += scalar @endpoints * 120;
+    foreach my $engine (keys %clients_servers) {
+        $endpoint_deploy_timeout += scalar @{ $clients_servers{$engine} } * 15;
+        $engine_script_start_timeout += scalar @{ $clients_servers{$engine} } * 15;
+    }
     printf "endpoint-deploy-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
-    $engine_script_start_timeout += scalar @endpoints * 120;
     printf "engine-script-timeout adjusted to %d seconds\n", $endpoint_deploy_timeout;
     debug_log(sprintf "\nendpoint output:\n");
     for (my $i = 0; $i < scalar @endpoints; $i++) {
@@ -2200,7 +2204,7 @@ sub organize_run_data() {
                     }
                 }
             }
-            if (scalar dir_entries("tool-data", qr/\w+/) > 0) {
+            if (-e "tool-data" and scalar dir_entries("tool-data", qr/\w+/) > 0) {
                 my $tool_dir = pushd("tool-data");
                 my $cs_tool_dest_path = $run_dir . "/tool-data/" . $cs_type . "/" . $cs_id;
                 make_path($cs_tool_dest_path);

@@ -76,6 +76,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
+                  "osp",
                   "remotehost",
                   "k8s"
                 ]
@@ -85,6 +86,7 @@
                 "items": {
                   "type": "string",
                   "enum": [
+                    "compute",
                     "profiler",
                     "master",
                     "worker",
@@ -110,6 +112,7 @@
               "endpoint": {
                 "type": "string",
                 "enum": [
+                  "osp",
                   "remotehost",
                   "k8s"
                 ]
@@ -119,6 +122,7 @@
                 "items": {
                   "type": "string",
                   "enum": [
+                    "compute",
                     "profiler",
                     "master",
                     "worker",
