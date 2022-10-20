@@ -6,7 +6,7 @@
 # clients and servers as instances/VMs in an Openstack cluster.
 #
 # Usage:
-# osp [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,o-p,server:n-m,o-p 
+# osp [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,server:n-m 
 #                    --run-id <id> --base-run-dir --image <location>
 #                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
 #
@@ -25,37 +25,21 @@ fi
 
 echo "#running osp endpoint"
 clear_all_servers="1"
-chroot_rbind_mounts="proc dev sys lib/modules usr/src boot var/run"
-image_cache_size=3
-default_flavor="nfv-large"
+default_flavor="m1.small"
 default_availability_zone="nova"
 osruntime="podman"
-host_mounts=""
 endpoint_name="osp"
 instance_prefix="rickshaw"
 base_osruntime_bootstrap="$endpoint_base_dir/osruntime-bootstrap"
-project_name="crucible-rickshaw"
 new_osp_followers="" # engines which only run tools for openstack nodes
 vm_image="centos9"
 vm_user="centos"
+mgmt_network="management"
 declare -A cpuPartitioning
 declare -A flavor
 declare -A availability_zone
 declare -A ips
 declare -A active_compute_nodes
-echo "#phaseA"
-
-function cleanup_json() {
-    local json="$1"; shift
-
-    echo "cleanup_json: processing ${json}"
-    mv ${json} ${json}.tmp
-    if jq . ${json}.tmp > ${json}; then
-        rm ${json}.tmp
-    else
-        abort_error "cleanup_json failed to process ${json}" endpoint-deploy-begin
-    fi
-}
 
 function endpoint_osp_test_stop() {
     local msgs_dir="$1"; shift
@@ -95,7 +79,6 @@ function endpoint_osp_test_start() {
         echo "Did not find $this_msg_file"
     fi
 }
-echo "#phaseB"
 
 function osp_req_check() {
     if [ -z "$host" ]; then
@@ -104,7 +87,7 @@ function osp_req_check() {
     verify_ssh_login $user $host
     # TODO: source overcloudrc or equivalent init file to do osp stuff.  Error out if not found
     osp_cmd=". ./overcloudrc && openstack server list"
-    do_ssh ${user}@${host} "$osp_cmd 2>&1" 2>&1 >msg
+    do_ssh ${user}@${host} "$osp_cmd 2>&1" >/dev/null 2>&1
     rc=$?
     if [ $rc -gt 0 ]; then
         exit_error "Could not run 'openstack' on overcloud host: $osp_cmd"
@@ -158,14 +141,14 @@ function process_osp_opts() {
             user)
                 user=$val
                 ;;
+            vm-user)
+                vm_user=$val
+                ;;
+            vm-image)
+                vm_image=$val
+                ;;
             userenv)
                 userenv=$val
-                ;;
-            controllers-tool-collect)
-                controllers_tool_collect=$val
-                ;;
-            computes-tool-collect)
-                computes_tool_collect=$val
                 ;;
             cpu-partitioning)
                 # cpu-partitioning is per engine:
@@ -179,9 +162,6 @@ function process_osp_opts() {
                 else
                     exit_error "Could not properly decode cpu-partitioning for '$val'"
                 fi
-                ;;
-            vm-image)
-                vm_image=$val
                 ;;
             osruntime)
                 osruntime=$val
@@ -269,12 +249,7 @@ function process_osp_opts() {
                 ;;
         esac
     done
-
-    if [ "${unique_project}" == "1" ]; then
-        project_name+="--${run_id}-${endpoint_label}"
-    fi
 }
-echo "#phaseC"
 
 function create_remotehost_engines() {
     echo "create_remotehost_engines()"
@@ -311,6 +286,13 @@ function create_servers() {
 
     do_ssh ${user}@${host} "$osp_pre_cmd openstack flavor list -f value -c Name" >${endpoint_run_dir}/openstack-flavors.txt
     do_ssh ${user}@${host} "$osp_pre_cmd openstack image list -f value -c Name" >${endpoint_run_dir}/openstack-images.txt
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack network list -f value -c Name" >${endpoint_run_dir}/openstack-networks.txt
+
+    if grep -q $mgmt_network ${endpoint_run_dir}/openstack-networks.txt; then
+        echo "Confirmed network [$mgmt_network] is available"
+    else
+        abort_error "Network [$mgmt_network] does not exist" endpoint-deploy-begin
+    fi
 
     if [ "$clear_all_servers" == "1" ]; then # Clear all rickshaw servers, even from other run ids
         do_ssh ${user}@${host} "$osp_pre_cmd openstack server list -f value -c Name" >${endpoint_run_dir}/openstack-existing-servers.txt
@@ -361,13 +343,11 @@ function create_servers() {
         fi
 
         if [ "$clear_all_servers" == "0" ]; then # Clear only servers with same run id
-            #do_ssh ${user}@${host} "$osp_pre_cmd openstack server list -f value -c Name" >${endpoint_run_dir}/openstack-existing-servers.txt
             existing_servers=`cat ${endpoint_run_dir}/openstack-existing-servers.txt | grep $vm_name`
             if [ ! -z "$existing_servers" ]; then
                 echo "deleting existing server [$existing_servers]"
                 do_ssh ${user}@${host} "$osp_pre_cmd openstack server delete $existing_servers" 
             fi
-            #do_ssh ${user}@${host} "$osp_pre_cmd openstack port list -f value -c Name" >${endpoint_run_dir}/openstack-existing-ports.txt
             existing_ports=`cat ${endpoint_run_dir}/openstack-existing-ports.txt | grep $vm_name`
             if [ ! -z "$existing_ports" ]; then
                 echo "deleting existing ports [$existing_ports]"
@@ -467,7 +447,6 @@ function create_servers() {
     done
 }
 
-echo "#phaseD"
 function cleanup_osruntime() {
     local this_cs_label
     local vm_names=""
@@ -485,6 +464,7 @@ function cleanup_osruntime() {
     do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair delete $vm_ssh_key_name" >${endpoint_run_dir}/openstack-keypair-delete-$vm_ssh_key_name.txt
     echo "deletintg keyfile [$vm_ssh_key_name]"
     do_ssh ${user}@${host} "rm -f $vm_ssh_key_file"
+    do_ssh ${user}@${host} "rm -f *osruntime-bootstrap"
 
     do_ssh ${user}@${host} "$osp_pre_cmd openstack server list" >${endpoint_run_dir}/openstack-server-remaining.txt
     echo "remaining rickshaw openstack servers:"
@@ -544,13 +524,11 @@ function endpoint_osp_cleanup() {
     cleanup_osruntime
 }
 
-echo "#phase1"
 process_opts "$@"
 process_osp_opts "$endpoint_opts"
 init_common_dirs
 load_settings
 
-echo "#phase2"
 remote_base_dir="/var/lib/crucible"
 remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
 remote_cfg_dir="${remote_dir}/cfg"
@@ -561,12 +539,10 @@ vm_ssh_key_name="$run_id-ssh-key"
 vm_ssh_key_file="$vm_ssh_key_dir/$vm_ssh_key_name.pem"
 osp_pre_cmd=". ./overcloudrc && "
 
-echo "#phase3"
 osp_req_check
 base_req_check
 get_osp_config
 
-echo "#phase4"
 echo "This endpoint to run these clients: ${clients[@]}"
 echo "This endpoint to run these servers: ${servers[@]}"
 
@@ -577,6 +553,5 @@ cs_servers=""
 create_servers cs_servers cs ${clients[@]} ${servers[@]}
 echo "These openstack servers were created: $cs_servers"
 all_engines="$cs_servers"
-echo "#phase5"
 process_roadblocks osp ${new_osp_followers}
 echo "endpoint finished"

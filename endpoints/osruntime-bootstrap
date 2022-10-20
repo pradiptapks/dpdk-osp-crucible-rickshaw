@@ -60,7 +60,7 @@ function log_output() {
 
 function exit_error() {
     # Note that if ssh_id, rickshaw_host, and endpoint_run_dir are not defined, scp will not work
-    log_output $@
+    log_output "$@"
     log_output "Going to scp with: scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file"
     scp $ssh_opts -i $ssh_id_file $log_file $remote_log_file
     exit 1
@@ -93,13 +93,14 @@ host_mounts="run/openvswitch"
 container_name="rickshaw_${run_id}_$cs_label"
 cmd_stdout="$logs_dir/cmd-stdout_$log_file_name"
 cmd_stderr="$logs_dir/cmd-stderr_$log_file_name"
-env_file="$cfg_dir/${cs_label}_env.sh"
+env_file_name="env.sh"
+env_file="$cfg_dir/$env_file_name"
 
 function run_cmd() {
     typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
     ref1=""
     log_output "run_cmd() going to run: [$@]"
-    if $@ >$cmd_stdout 2>$cmd_stderr; then
+    if eval $@ >$cmd_stdout 2>$cmd_stderr; then
         # Assign stdout to var
         ref1="`cat $cmd_stdout`"
     else # non-zero exit from $@
@@ -138,31 +139,9 @@ function launch_osruntime() {
     log_output "launch_osruntime() begin"
     local novar # when using run_cmd and don't need to capture output to a var
 
-    # Build the env file which is either sourced (for chroot)
-    # or read (for podman)
-    echo "run_id=$run_id"                            >$env_file
-    echo "rickshaw_host=$rickshaw_host"             >>$env_file
-    echo "endpoint_run_dir=$endpoint_run_dir"       >>$env_file
-    echo "cs_label=$cs_label"                       >>$env_file
-    echo "base_run_dir=$base_run_dir"               >>$env_file
-    echo "cpu_partitioning=$cpu_partitioning"       >>$env_file
-    echo "endpoint=$endpoint"                       >>$env_file
-    echo "osruntime=$osruntime"                     >>$env_file
-    echo "max_sample_failures=$max_sample_failures" >>$env_file
-    echo "max_rb_attempts=$max_rb_attempts"         >>$env_file
-    echo "roadblock_passwd=$rb_passwd"              >>$env_file
-    echo "roadblock_id=$rb_id"                      >>$env_file
-    echo "ssh_id=${ssh_id}"                         >>$env_file
-    echo "image=$image"                             >>$env_file
-    echo "disable_tools=$disable_tools"             >>$env_file
-
-    base_cmd="/usr/local/bin/bootstrap"
-
     if [ "$osruntime" == "chroot" ]; then
         log_output "Using chroot"
         log_output "Adding mount for chroot osruntime"
-        run_cmd novar podman stop -a
-        run_cmd novar podman rm -a
         log_output "container_name: [$container_name]"
         run_cmd container_id podman create --name $container_name $image
         log_output "container_id: [$container_id]"
@@ -188,13 +167,35 @@ function launch_osruntime() {
                     run_cmd novar mount --verbose --options rbind /${fs} ${container_mount}/${fs}
                     run_cmd novar mount --verbose --make-rslave ${container_mount}/${fs}
                 else
-                    log_output "host fs $fs not found, not adding to chrot"
+                    log_output "host fs $fs not found, not adding to chroot"
                 fi
             done
             log_output "mounts:\n`mount | grep ${container_mount}`"
         else
             exit_error "Container mount not found, exiting"
         fi
+
+        base_cmd="/usr/local/bin/bootstrap"
+        base_cmd+=" --run-id=$run_id"
+        base_cmd+=" --rickshaw-host=$rickshaw_host"
+        base_cmd+=" --endpoint-run-dir=$endpoint_run_dir"
+        base_cmd+=" --cs-label=$cs_label"
+        base_cmd+=" --base-run-dir=$base_run_dir"
+        base_cmd+=" --cpu-partitioning=$cpu_partitioning"
+        base_cmd+=" --endpoint=$endpoint"
+        base_cmd+=" --osruntime=$osruntime"
+        base_cmd+=" --max-sample-failures=$max_sample_failures"
+        base_cmd+=" --max-rb-attempts=$max_rb_attempts"
+        base_cmd+=" --roadblock-passwd=$rb_passwd"
+        base_cmd+=" --roadblock-id=$rb_id"
+        base_cmd+=" --image=$image"
+        base_cmd+=" --disable-tools=$disable_tools"
+
+        ssh_id_file=$container_mount/tmp/rickshaw_id.rsa
+        echo -e "$ssh_id" >$ssh_id_file
+        cat $ssh_id_file
+        chmod 600 $ssh_id_file
+
 	    # FIXME
         # if [ $numa_node -gt -1 ]; then
             # base_cmd="numactl -N $numa_node -m $numa_node $base_cmd"
@@ -202,9 +203,30 @@ function launch_osruntime() {
         # Note that --endpoint-run value must be hard-coded to /endpoint-run becaue of chroot
         # Same will be true for running podman
 
-        cs_cmd=". $env_file; nohup chroot $container_mount $base_cmd"
+        cs_cmd="nohup chroot $container_mount $base_cmd &"
     
     elif [ "$osruntime" == "podman" ]; then
+
+        base_cmd="/usr/local/bin/bootstrap"
+
+        # Build the env file which is either sourced (for chroot)
+        # or read (for podman)
+        echo "run_id=$run_id"                            >$env_file
+        echo "rickshaw_host=$rickshaw_host"             >>$env_file
+        echo "endpoint_run_dir=$endpoint_run_dir"       >>$env_file
+        echo "cs_label=$cs_label"                       >>$env_file
+        echo "base_run_dir=$base_run_dir"               >>$env_file
+        echo "cpu_partitioning=$cpu_partitioning"       >>$env_file
+        echo "endpoint=$endpoint"                       >>$env_file
+        echo "osruntime=$osruntime"                     >>$env_file
+        echo "max_sample_failures=$max_sample_failures" >>$env_file
+        echo "max_rb_attempts=$max_rb_attempts"         >>$env_file
+        echo "roadblock_passwd=$rb_passwd"              >>$env_file
+        echo "roadblock_id=$rb_id"                      >>$env_file
+        echo "ssh_id=$ssh_id"                           >>$env_file
+        echo "image=$image"                             >>$env_file
+        echo "disable_tools=$disable_tools"             >>$env_file
+
         log_output "using podman"
         cs_cmd="podman run"
         cs_cmd+=" --detach=true"
