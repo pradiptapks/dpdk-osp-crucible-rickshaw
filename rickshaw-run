@@ -152,7 +152,10 @@ sub find_files {
 
             if (($entry =~ /^\.$/) ||
                 ($entry =~ /^\.\.$/) ||
-                ($entry =~ /^\.git$/)) {
+                ($entry =~ /^\.git$/) ||
+                ($entry =~ /^docs$/) ||
+                ($entry =~ /\.md$/) ||
+                ($entry =~ /^\.github$/)) {
                 next;
             }
 
