@@ -531,6 +531,7 @@ function endpoint_remotehost_sysinfo() {
 }
 
 process_opts $@
+process_common_endpoint_opts $endpoint_opts
 process_remotehost_opts $endpoint_opts
 init_common_dirs
 load_settings
