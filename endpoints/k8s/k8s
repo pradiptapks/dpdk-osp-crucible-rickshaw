@@ -1132,8 +1132,9 @@ function endpoint_k8s_cleanup() {
 }
 
 process_opts "$@"
-process_common_endpoint_opts "$endpoint_opts"
-process_k8s_opts "$endpoint_opts"
+process_common_endpoint_opts k8s_opts $endpoint_opts
+echo "#k8s opts: [$k8s_opts]"
+process_k8s_opts $k8s_opts
 init_common_dirs
 load_settings
 k8s_req_check

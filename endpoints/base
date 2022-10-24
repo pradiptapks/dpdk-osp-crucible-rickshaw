@@ -206,7 +206,9 @@ if [ -z "$max_rb_attempts" ]; then
 fi
 
 function process_common_endpoint_opts() {
-    local endpoint_opts="$1"
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    local endpoint_opts=$1; shift # endpoint options we process
+    local noncommon_endpoint_opts="" # endpoint options we return for endpoint-specific processing
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
         arg=`echo $opt| awk -F: '{print $1}'`
         # The $val may have : in it, so don't use awk to get only the second field
@@ -293,8 +295,12 @@ function process_common_endpoint_opts() {
                     exit_error "Could not properly decode numa-node for '$val'"
                 fi
                 ;;
+            *)
+                noncommon_endpoint_opts+=",$opt"
+                ;;
         esac
     done
+    ref1=`echo $noncommon_endpoint_opts | sed -e s/^,//`
 }
 
 
