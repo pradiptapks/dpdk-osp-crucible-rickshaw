@@ -1218,3 +1218,19 @@ function make_osruntime_boostrap_script() {
     cat $endpoint_base_dir/osruntime-bootstrap >>$outfile
     chmod +x $outfile
 }
+
+function get_opt_field() {
+    local input=${1}
+    local field=${2}
+
+    case "${field}" in
+        "key")
+            field="1"
+            ;;
+        "value")
+            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
+            ;;
+    esac
+
+    echo "${input}" | cut -d ':' -f ${field}
+}

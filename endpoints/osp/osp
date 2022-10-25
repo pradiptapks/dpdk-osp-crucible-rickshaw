@@ -99,22 +99,6 @@ function osp_req_check() {
     fi
 }
 
-function get_opt_field() {
-    local input=${1}
-    local field=${2}
-
-    case "${field}" in
-        "key")
-            field="1"
-            ;;
-        "value")
-            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
-            ;;
-    esac
-
-    echo "${input}" | cut -d ':' -f ${field}
-}
-
 function process_osp_opts() {
     local endpoint_opts="$1"
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
