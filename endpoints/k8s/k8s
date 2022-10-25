@@ -57,7 +57,7 @@ project_name="crucible-rickshaw"
 unique_project="0"
 hostNetwork="0"
 hugepage="0"
-osruntime="pod"
+osruntime[default]="pod"
 runtimeClassName=""
 masters_tool_collect="1"
 workers_tool_collect="1"
@@ -440,9 +440,6 @@ function process_k8s_opts() {
             workers-tool-collect)
                 workers_tool_collect=$val
                 ;;
-            osruntime)
-                osruntime=$val
-                ;;
             hostNetwork)
                 hostNetwork="$val"
                 ;;
@@ -644,6 +641,10 @@ function build_pod_spec() {
     local node=$1; shift
     local json="$dir/$name.json"
 
+    if [ "$type" == "cs" ]; then
+        set_osruntime_numanode_cpupart $name
+    fi
+
     echo "{" >$json
     echo "  \"apiVersion\": \"v1\"," >>$json
     echo "  \"kind\": \"Pod\"," >>$json
@@ -665,7 +666,7 @@ function build_pod_spec() {
     # This can be used for Perf Addon Profiles
     if [ "$type" == "cs" -a ! -z "$runtimeClassName" ]; then
         echo "    \"runtimeClassName\": \"$runtimeClassName\"," >>$json
-    elif [ "$type" == "cs" -a "$osruntime" == "kata" ]; then
+    elif [ "$type" == "cs" -a "$os_runtime" == "kata" ]; then
         echo "    \"runtimeClassName\": \"kata\"," >>$json
     fi
     echo "    \"restartPolicy\": \"Never\"," >>$json
@@ -747,7 +748,7 @@ function build_pod_spec() {
     echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"osruntime\"," >>$json
-    echo "            \"value\": \"$osruntime\"" >>$json
+    echo "            \"value\": \"$os_runtime\"" >>$json
     echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"roadblock_passwd\"," >>$json

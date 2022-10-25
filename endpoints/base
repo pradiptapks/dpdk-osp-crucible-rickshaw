@@ -257,7 +257,7 @@ function process_common_endpoint_opts() {
                 fi
                 label=`echo $name | awk -F- '{print $1}'`
                 range=`echo $name | sed -e s/$label-//`
-                if [ "$value" != "chroot" -a "$value" != "podman"]; then
+                if [ "$value" != "chroot" -a "$value" != "podman" ]; then
                     echo "#osruntime '${value}' for '${name}' not supported"
                     exit_error "osruntime '${value}' for '${name}' not supported"
                 fi
@@ -355,6 +355,7 @@ function set_total_cpupart() {
 }
 
 function set_osruntime_numanode_cpupart() {
+    local this_cs_label = $1
     set +u
     if [ ! -z "${osruntime[$this_cs_label]}" ]; then
         os_runtime=${osruntime[$this_cs_label]}

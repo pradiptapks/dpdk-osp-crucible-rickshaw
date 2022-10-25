@@ -332,7 +332,7 @@ function create_servers() {
         echo "creating openstack mgmt port for server $vm_name"
         do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network management --no-security-group --disable-port-security $mgmt_port_name"
 
-        set_osruntime_numanode_cpupart
+        set_osruntime_numanode_cpupart $cs_label
         echo "cpu_partitioning: [$cpu_partitioning]"
         echo "numa_node: [$numa_node]"
         echo "os_runtime: [$os_runtime]"
@@ -397,7 +397,7 @@ function create_servers() {
         cs_label="compute-$count"
         this_node_scp="scp $ssh_opts root@$this_node"
         this_osruntime_bootstrap="$this_node-osruntime-bootstrap"
-        set_osruntime_numanode_cpupart
+        set_osruntime_numanode_cpupart $cs_label
         echo "cpu_partitioning: [$cpu_partitioning]"
         echo "numa_node: [$numa_node]"
         echo "os_runtime: [$os_runtime]"
@@ -474,7 +474,7 @@ function move_osp_logs() {
         fi
         remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
         local_cs_log_file="$engine_logs_dir/$this_cs_label.txt"
-        set_osruntime_numanode_cpupart
+        set_osruntime_numanode_cpupart $this_cs_label
         echo "os_runtime: [$os_runtime]"
         if [ "$os_runtime" == "chroot" ]; then
             do_ssh $user@$host $this_cs_ssh cat $remote_cs_log_file >$local_cs_log_file &
