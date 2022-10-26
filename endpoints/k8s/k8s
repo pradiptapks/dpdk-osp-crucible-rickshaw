@@ -57,7 +57,7 @@ project_name="crucible-rickshaw"
 unique_project="0"
 hostNetwork="0"
 hugepage="0"
-osruntime="pod"
+osruntime[default]="pod"
 runtimeClassName=""
 masters_tool_collect="1"
 workers_tool_collect="1"
@@ -70,6 +70,7 @@ declare -A resources
 declare -A annotations
 declare -A volumes
 declare -A volumeMounts
+declare -A numaNode
 
 function cleanup_json() {
     local json="$1"; shift
@@ -383,22 +384,6 @@ function k8s_req_check() {
     fi
 }
 
-function get_opt_field() {
-    local input=${1}
-    local field=${2}
-
-    case "${field}" in
-        "key")
-            field="1"
-            ;;
-        "value")
-            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
-            ;;
-    esac
-
-    echo "${input}" | cut -d ':' -f ${field}
-}
-
 function process_k8s_opts() {
     local endpoint_opts="$1"
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
@@ -439,22 +424,6 @@ function process_k8s_opts() {
             workers-tool-collect)
                 workers_tool_collect=$val
                 ;;
-            cpu-partitioning)
-                # cpu-partitioning is per engine:
-                # option format::  cpu-partitioning:<engine-label>:<value>
-                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
-                #TODO: validate correct format of <engine-label>
-                name=$(get_opt_field "${val}" "key")
-                value=$(get_opt_field "${val}" "value")
-                if [ ! -z "$name" -a ! -z "$value" ]; then
-                    cpuPartitioning[$name]=$value
-                else
-                    exit_error "Could not properly decode cpu-partitioning for '$val'"
-                fi
-                ;;
-            osruntime)
-                osruntime=$val
-                ;;
             hostNetwork)
                 hostNetwork="$val"
                 ;;
@@ -465,6 +434,8 @@ function process_k8s_opts() {
                 # nodeSelector is per engine:
                 # option format::  nodeSelector:<engine-label>:<full-path-to-json-with-nodeSelector>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 # json file example (note no outer {}'s)
                 # "nodeSelector": {
                 #    "kubernetes.io/hostname": "worker000"
@@ -472,8 +443,17 @@ function process_k8s_opts() {
                 #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=$(get_opt_field "${val}" "key")
                 file=$(get_opt_field "${val}" "value")
+                label=`echo $name | awk -F- '{print $1}'`
+                range=`echo $name | sed -e s/$label-//`
                 if [ ! -z "$file" -o -e $file ]; then
-                    nodeSelector[$name]=`cat $file`
+                    if [ "$label" == "default" ]; then
+                        nodeSelector["default"]=`cat $file`
+                    else
+                        local list=`range_to_list $range`
+                        for this_id in $list; do
+                            nodeSelector[$label-$this_id]=`cat $file`
+                        done
+                    fi
                 else
                     exit_error "Could not find nodeSelector file $file for $name"
                 fi
@@ -482,6 +462,8 @@ function process_k8s_opts() {
                 # securityContext is per engine:
                 # option format::  securityContext:<engine-label>:<full-path-to-json-with-securityContext>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 # json file example (note no outer {}'s)
                 # "securityContext": {
                 #   "privileged": false,
@@ -492,8 +474,17 @@ function process_k8s_opts() {
                 #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=$(get_opt_field "${val}" "key")
                 file=$(get_opt_field "${val}" "value")
+                label=`echo $name | awk -F- '{print $1}'`
+                range=`echo $name | sed -e s/$label-//`
                 if [ ! -z "$file" -o -e $file ]; then
-                    securityContext[$name]=`cat $file`
+                    if [ "$label" == "default" ]; then
+                        securityContext["default"]=`cat $file`
+                    else
+                        local list=`range_to_list $range`
+                        for this_id in $list; do
+                            securityContext[$label-$this_id]=`cat $file`
+                        done
+                    fi
                 else
                     exit_error "Could not find securityContext file $file for $name"
                 fi
@@ -502,6 +493,8 @@ function process_k8s_opts() {
                 # PsecurityContext is per engine:
                 # option format::  PsecurityContext:<engine-label>:<full-path-to-json-with-securityContext>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 # json file example (note no outer {}'s)
                 # "securityContext": {
                 #       "sysctls": [
@@ -514,8 +507,17 @@ function process_k8s_opts() {
                 #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=$(get_opt_field "${val}" "key")
                 file=$(get_opt_field "${val}" "value")
+                label=`echo $name | awk -F- '{print $1}'`
+                range=`echo $name | sed -e s/$label-//`
                 if [ ! -z "$file" -o -e $file ]; then
-                    PsecurityContext[$name]=`cat $file`
+                    if [ "$label" == "default" ]; then
+                        PsecurityContext["default"]=`cat $file`
+                    else
+                        local list=`range_to_list $range`
+                        for this_id in $list; do
+                            PsecurityContext[$label-$this_id]=`cat $file`
+                        done
+                    fi
                 else
                     exit_error "Could not find PsecurityContext file $file for $name"
                 fi
@@ -524,6 +526,8 @@ function process_k8s_opts() {
                 # resources is per engine:
                 # option format::  resources:<engine-label>:<full-path-to-json-with-resources>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 # json file example (note no outer {}'s)
                 # "resources": {
                 #   "requests": {
@@ -538,8 +542,17 @@ function process_k8s_opts() {
                 #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=$(get_opt_field "${val}" "key")
                 file=$(get_opt_field "${val}" "value")
+                label=`echo $name | awk -F- '{print $1}'`
+                range=`echo $name | sed -e s/$label-//`
                 if [ ! -z "$file" -o -e $file ]; then
-                    resources[$name]=`cat $file`
+                    if [ "$label" == "default" ]; then
+                        resources["default"]=`cat $file`
+                    else
+                        local list=`range_to_list $range`
+                        for this_id in $list; do
+                            resources[$label-$this_id]=`cat $file`
+                        done
+                    fi
                 else
                     exit_error "Could not find resources file $file for $name"
                 fi
@@ -548,6 +561,8 @@ function process_k8s_opts() {
                 # resources is per engine:
                 # option format::  annotations:<engine-label>:<full-path-to-json-with-annotations>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 # json file example (note no outer {}'s)
                 # "annotations": {
                 #   "k8s.v1.cni.cncf.io/networks": "sriov-mellanox-b-pod, sriov-mellanox-a-pod"
@@ -555,8 +570,17 @@ function process_k8s_opts() {
                 #TODO: validate correct format of <engine-label>:<path-to-file>
                 name=$(get_opt_field "${val}" "key")
                 file=$(get_opt_field "${val}" "value")
+                label=`echo $name | awk -F- '{print $1}'`
+                range=`echo $name | sed -e s/$label-//`
                 if [ ! -z "$file" -o -e $file ]; then
-                    annotations[$name]=`cat $file`
+                    if [ "$label" == "default" ]; then
+                        annotations["default"]=`cat $file`
+                    else
+                        local list=`range_to_list $range`
+                        for this_id in $list; do
+                            annotations[$label-$this_id]=`cat $file`
+                        done
+                    fi
                 else
                     exit_error "Could not find annotations file $file for $name"
                 fi
@@ -601,6 +625,10 @@ function build_pod_spec() {
     local node=$1; shift
     local json="$dir/$name.json"
 
+    if [ "$type" == "cs" ]; then
+        set_osruntime_numanode_cpupart $name
+    fi
+
     echo "{" >$json
     echo "  \"apiVersion\": \"v1\"," >>$json
     echo "  \"kind\": \"Pod\"," >>$json
@@ -622,7 +650,7 @@ function build_pod_spec() {
     # This can be used for Perf Addon Profiles
     if [ "$type" == "cs" -a ! -z "$runtimeClassName" ]; then
         echo "    \"runtimeClassName\": \"$runtimeClassName\"," >>$json
-    elif [ "$type" == "cs" -a "$osruntime" == "kata" ]; then
+    elif [ "$type" == "cs" -a "$os_runtime" == "kata" ]; then
         echo "    \"runtimeClassName\": \"kata\"," >>$json
     fi
     echo "    \"restartPolicy\": \"Never\"," >>$json
@@ -704,7 +732,7 @@ function build_pod_spec() {
     echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"osruntime\"," >>$json
-    echo "            \"value\": \"$osruntime\"" >>$json
+    echo "            \"value\": \"$os_runtime\"" >>$json
     echo "          }," >>$json
     echo "          {" >>$json
     echo "            \"name\": \"roadblock_passwd\"," >>$json
@@ -1089,7 +1117,9 @@ function endpoint_k8s_cleanup() {
 }
 
 process_opts "$@"
-process_k8s_opts "$endpoint_opts"
+process_common_endpoint_opts k8s_opts $endpoint_opts
+echo "#k8s opts: [$k8s_opts]"
+process_k8s_opts $k8s_opts
 init_common_dirs
 load_settings
 k8s_req_check

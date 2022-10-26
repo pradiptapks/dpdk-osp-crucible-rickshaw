@@ -25,9 +25,6 @@ fi
 
 echo "#running osp endpoint"
 clear_all_servers="1"
-default_flavor="m1.small"
-default_availability_zone="nova"
-osruntime="podman"
 endpoint_name="osp"
 instance_prefix="rickshaw"
 base_osruntime_bootstrap="$endpoint_base_dir/osruntime-bootstrap"
@@ -35,11 +32,13 @@ new_osp_followers="" # engines which only run tools for openstack nodes
 vm_image="centos9"
 vm_user="centos"
 mgmt_network="management"
-declare -A cpuPartitioning
 declare -A flavor
 declare -A availability_zone
 declare -A ips
 declare -A active_compute_nodes
+osruntime[default]="podman"
+availability_zone[default]="nova"
+flavor[default]="m1.small"
 
 function endpoint_osp_test_stop() {
     local msgs_dir="$1"; shift
@@ -100,22 +99,6 @@ function osp_req_check() {
     fi
 }
 
-function get_opt_field() {
-    local input=${1}
-    local field=${2}
-
-    case "${field}" in
-        "key")
-            field="1"
-            ;;
-        "value")
-            field="2-" # return all fields from 2 on, allowing for the delimiter to be a part of the value
-            ;;
-    esac
-
-    echo "${input}" | cut -d ':' -f ${field}
-}
-
 function process_osp_opts() {
     local endpoint_opts="$1"
     for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
@@ -150,46 +133,19 @@ function process_osp_opts() {
             userenv)
                 userenv=$val
                 ;;
-            cpu-partitioning)
-                # cpu-partitioning is per engine:
-                # option format::  cpu-partitioning:<engine-label>:<value>
-                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
-                #TODO: validate correct format of <engine-label>
-                name=$(get_opt_field "${val}" "key")
-                value=$(get_opt_field "${val}" "value")
-                if [ ! -z "$name" -a ! -z "$value" ]; then
-                    cpuPartitioning[$name]=$value
-                else
-                    exit_error "Could not properly decode cpu-partitioning for '$val'"
-                fi
-                ;;
-            osruntime)
-                osruntime=$val
-                ;;
             flavor)
                 flavor="$val"
                 # flavor is per engine:
                 # option format::  flavor:<engine-label>:<flavor>
                 # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
-                # <engine-label> can also be <client|server>-<number-ranges>
-                # <number-ranges> can be something like:
-                # 1
-                # 1+3
-                # 1-4+5+7
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
                 this_key=$(get_opt_field "${val}" "key")
                 this_value=$(get_opt_field "${val}" "value")
-                #this_key=client-1-5+11-15+21+23+25+27+28
-                #this_value=dedicated-small
-                echo "#this_key: [$this_key]"
-                echo "#this_value: [$this_value]"
                 label=`echo $this_key | awk -F- '{print $1}'`
                 range=`echo $this_key | sed -e s/$label-//`
-                echo "#zone: [$this_value]"
-                echo "#label: [$label]"
-                echo "#range: [$range]"
                 if [ "$label" == "default" ]; then
-                    default_flavor=$this_value
-                    echo "#default flavor: [$this_value]"
+                    flavor["default"]=$this_value
                 else
                     for this_range in `echo $range | sed -e 's/+/ /g'`; do
                         if echo $this_range | grep -q "-"; then
@@ -201,7 +157,6 @@ function process_osp_opts() {
                         fi
                         for this_id in `seq $begin $end`; do
                             flavor[$label-$this_id]=$this_value
-                            echo "#flavor[$label-$this_id]: [$this_value]"
                         done
                     done
                 fi
@@ -222,8 +177,7 @@ function process_osp_opts() {
                 echo "#label: [$label]"
                 echo "#range: [$range]"
                 if [ "$label" == "default" ]; then
-                    default_availability_zone=$this_value
-                    echo "#default availability_zone: [$this_value]"
+                    availability_zone["default"]=$this_value
                 else
                     for this_range in `echo $range | sed -e 's/+/ /g'`; do
                         if echo $this_range | grep -q "-"; then
@@ -235,7 +189,6 @@ function process_osp_opts() {
                         fi
                         for this_id in `seq $begin $end`; do
                             availability_zone[$label-$this_id]=$this_value
-                            echo "#availability_zone[$label-$this_id]: [$this_value]"
                         done
                     done
                 fi
@@ -308,6 +261,10 @@ function create_servers() {
             do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $existing_ports" 
         fi
     fi
+
+    total_cpu_partitions=0
+    set_total_cpupart
+
     while [ $# -gt 0 ]; do
         cs_label=$1; shift
         this_cs_id=`echo $cs_label | awk -F- '{print $2}'`
@@ -317,12 +274,20 @@ function create_servers() {
         mgmt_port_name="mgmt-$vm_name"
         this_osruntime_bootstrap="$vm_name-osruntime-bootstrap"
 
-        this_flavor=$default_flavor
+        set +u
+        if [ ! -z "${availability_zone[$cs_label]}" ]; then
+            this_availability_zone=${availability_zone[$cs_label]}
+        else
+            this_availability_zone=${availability_zone[default]}
+        fi
+
         if [ ! -z "${flavor[$cs_label]}" ]; then
             this_flavor=${flavor[$cs_label]}
-        elif [ ! -z "${flavor[default]}" ]; then
+        else
             this_flavor=${flavor[default]}
         fi
+        set -u
+
         if grep -q $this_flavor ${endpoint_run_dir}/openstack-flavors.txt; then
             echo "Confirmed flavor [$this_flavor] is available"
         else
@@ -333,13 +298,6 @@ function create_servers() {
             echo "Confirmed image [$vm_image] is available"
         else
             abort_error "VM image [$vm_image] does not exist\nAvailable images: `cat ${endpoint_run_dir}/openstack-images.txt`" endpoint-deploy-begin
-        fi
-
-        this_availability_zone=$default_availability_zone
-        if [ ! -z "${availability_zone[$cs_label]}" ]; then
-            this_availability_zone=${availability_zone[$cs_label]}
-        elif [ ! -z "${availability_zone[default]}" ]; then
-            this_availability_zone=${availability_zone[default]}
         fi
 
         if [ "$clear_all_servers" == "0" ]; then # Clear only servers with same run id
@@ -358,6 +316,10 @@ function create_servers() {
         echo "creating openstack mgmt port for server $vm_name"
         do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network management --no-security-group --disable-port-security $mgmt_port_name"
 
+        set_osruntime_numanode_cpupart $cs_label
+        echo "cpu_partitioning: [$cpu_partitioning]"
+        echo "numa_node: [$numa_node]"
+        echo "os_runtime: [$os_runtime]"
 
         pushd $endpoint_run_dir >/dev/null
         make_osruntime_boostrap_script\
@@ -367,9 +329,9 @@ function create_servers() {
             "$endpoint_run_dir"\
             "$cs_label"\
             "$base_run_dir"\
-            "0"\
+            "$cpu_partitioning"\
             "$endpoint_label"\
-            "$osruntime"\
+            "$os_runtime"\
             "$max_sample_failures"\
             "$max_rb_attempts"\
             "$rb_passwd"\
@@ -419,6 +381,10 @@ function create_servers() {
         cs_label="compute-$count"
         this_node_scp="scp $ssh_opts root@$this_node"
         this_osruntime_bootstrap="$this_node-osruntime-bootstrap"
+        set_osruntime_numanode_cpupart $cs_label
+        echo "cpu_partitioning: [$cpu_partitioning]"
+        echo "numa_node: [$numa_node]"
+        echo "os_runtime: [$os_runtime]"
         pushd $endpoint_run_dir >/dev/null
         make_osruntime_boostrap_script\
             "$this_osruntime_bootstrap"\
@@ -429,7 +395,7 @@ function create_servers() {
             "$base_run_dir"\
             "0"\
             "$endpoint_label"\
-            "$osruntime"\
+            "$os_runtime"\
             "$max_sample_failures"\
             "$max_rb_attempts"\
             "$rb_passwd"\
@@ -492,9 +458,11 @@ function move_osp_logs() {
         fi
         remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
         local_cs_log_file="$engine_logs_dir/$this_cs_label.txt"
-        if [ "$osruntime" == "chroot" ]; then
+        set_osruntime_numanode_cpupart $this_cs_label
+        echo "os_runtime: [$os_runtime]"
+        if [ "$os_runtime" == "chroot" ]; then
             do_ssh $user@$host $this_cs_ssh cat $remote_cs_log_file >$local_cs_log_file &
-        elif [ "$osruntime" == "podman" ]; then
+        elif [ "$os_runtime" == "podman" ]; then
             container_name="rickshaw_${run_id}_$this_cs_label"
             echo "do_ssh $user@$host $this_cs_ssh sudo podman logs ${container_name}"
             do_ssh $user@$host $this_cs_ssh sudo podman logs ${container_name} >$local_cs_log_file &
@@ -525,7 +493,8 @@ function endpoint_osp_cleanup() {
 }
 
 process_opts "$@"
-process_osp_opts "$endpoint_opts"
+process_common_endpoint_opts osp_opts $endpoint_opts
+process_osp_opts $osp_opts
 init_common_dirs
 load_settings
 
