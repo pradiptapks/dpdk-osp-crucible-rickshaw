@@ -521,12 +521,6 @@ sub workshop_build_image {
             last;
         }
     }
-    my $image_tag = calc_image_md5($workshop_base_cmd, $userenv_arg, $req_args);
-    if ($tag ne $image_tag) {
-        printf "ERROR: workshop_build_image(): provided tag [%s] and calculated tag [%s] do not match\n",
-               $tag, $image_tag;
-        exit 1;
-    }
     # insert the hostname-hash after all tag checking has been done to
     # avoid creating unique tags per controller
     push(@{$cs_conf{'config'}{'labels'}}, 'hostname-hash=' . $hostname_hash);
@@ -546,11 +540,11 @@ sub workshop_build_image {
                              . " " . $req_args
                              . " --proj " . $proj
                              . " --label " . $run{'reg-label'}
-                             . " --tag " . $image_tag;
+                             . " --tag " . $tag;
     debug_log(sprintf "Going to generate a new engine container image with this workshop cmd:\n\n %s\n", $workshop_build_cmd);
     ($workshop_build_cmd, my $workshop_output, my $workshop_rc) = run_cmd($workshop_build_cmd);
     my @workshop_output = split(/\n/, $workshop_output);
-    my $workshop_output_file = $run_dir . "/workshop.stage-" . $stage . "." . $image_tag . ".stdout.txt";
+    my $workshop_output_file = $run_dir . "/workshop.stage-" . $stage . "." . $tag . ".stdout.txt";
     my $fh = open_write_text_file($workshop_output_file) || die "Failed to open " . $workshop_output_file . " for writing\n";
     printf $fh "%s\n", join("\n", @workshop_output);
     close($fh);
