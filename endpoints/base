@@ -355,7 +355,7 @@ function set_total_cpupart() {
 }
 
 function set_osruntime_numanode_cpupart() {
-    local this_cs_label = $1
+    local this_cs_label=$1
     set +u
     if [ ! -z "${osruntime[$this_cs_label]}" ]; then
         os_runtime=${osruntime[$this_cs_label]}
