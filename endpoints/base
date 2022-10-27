@@ -1234,3 +1234,29 @@ function get_opt_field() {
 
     echo "${input}" | cut -d ':' -f ${field}
 }
+
+function get_image() {
+    local var value
+    local type=$1; shift
+    local id=$1; shift
+    typeset -n var=$1; shift
+
+    if [ "$type" != "client" -a "$type" != "server" ]; then
+        # For any engine which is not running a benchmark client or server:
+        # We don't care what benchmark is in the image.  We only care that
+        # an image exists for the ID.  Since the ID for a non-client/server
+        # can exceed the ID range of a benchmark client[/server], (for example
+        # there could be a "worker-2" when there is only client-1 and server-1)
+        # always force the ID to 1 for purposes of looking up benchmark->image.
+        # When we build separate images for tools and benchmarks, this will 
+        # change (significantly) and a new method to find the correct image for
+        # en engine will be implemented.
+        id="1"
+    fi
+    bench=${id_to_bench[$id]}
+    value=${bench_to_image[$bench]}
+    echo "image for $type $id is [$value]"
+    var=$value
+}
+
+

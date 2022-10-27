@@ -624,6 +624,8 @@ function build_pod_spec() {
     local dir=$1; shift
     local node=$1; shift
     local json="$dir/$name.json"
+    local label=`echo $name | awk -F- '{print $1}'`
+    local id=`echo $name | awk -F- '{print $2}'`
 
     if [ "$type" == "cs" ]; then
         set_osruntime_numanode_cpupart $name
@@ -685,14 +687,11 @@ function build_pod_spec() {
     echo "    \"containers\": [" >>$json
     echo "      {" >>$json
     echo "        \"name\": \"$name\"," >>$json
-    echo "name: [$name]"
-    echo "id_to_bench: (keys) ${!id_to_bench[@]}"
-    echo "id_to_bench: (vals) ${id_to_bench[@]}"
-    echo "bench_to_image: (keys) ${!bench_to_image[@]}"
-    echo "bench_to_image: (vals) ${bench_to_image[@]}"
-    id=`echo $name | awk -F- '{print $2}'`
-    bench=${id_to_bench[$id]}
-    image=${bench_to_image[$bench]}
+    local image=""
+    get_image "$label" "$id" image
+    if [ -z "$image" ]; then
+        abort_error "Could not find image for $name" endpoint-deploy-begin
+    fi
     echo "        \"image\": \"$image\"," >>$json
     echo "        \"imagePullPolicy\": \"Always\"," >>$json
     echo "        \"env\": [" >>$json
