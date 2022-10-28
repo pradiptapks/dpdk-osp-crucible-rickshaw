@@ -266,13 +266,19 @@ function create_servers() {
     set_total_cpupart
 
     while [ $# -gt 0 ]; do
-        cs_label=$1; shift
-        this_cs_id=`echo $cs_label | awk -F- '{print $2}'`
-        this_bench=`echo ${id_to_bench[$this_cs_id]}`
-        this_image=`echo ${bench_to_image[$this_bench]}`
-        vm_name="rickshaw-$run_id-$cs_label"
-        mgmt_port_name="mgmt-$vm_name"
-        this_osruntime_bootstrap="$vm_name-osruntime-bootstrap"
+        local cs_label=$1; shift
+        local this_cs_type=`echo $cs_label | awk -F- '{print $1}'`
+        local this_cs_id=`echo $cs_label | awk -F- '{print $2}'`
+        local this_image=""
+        get_image "$this_cs_type" "$this_cs_id" this_image
+        echo "this_image: [$this_image]"
+        if [ -z "$this_image" ]; then
+            abort_error "Could not find image for $cs_label" endpoint-deploy-begin
+        fi
+        local vm_name="rickshaw-$run_id-$cs_label"
+        local mgmt_port_name="mgmt-$vm_name"
+        local this_osruntime_bootstrap="$vm_name-osruntime-bootstrap"
+        local this_availability_zone=""
 
         set +u
         if [ ! -z "${availability_zone[$cs_label]}" ]; then
@@ -281,6 +287,7 @@ function create_servers() {
             this_availability_zone=${availability_zone[default]}
         fi
 
+        local this_flavor=""
         if [ ! -z "${flavor[$cs_label]}" ]; then
             this_flavor=${flavor[$cs_label]}
         else
@@ -379,6 +386,11 @@ function create_servers() {
     count=1
     for this_node in ${!active_compute_nodes[@]}; do
         cs_label="compute-$count"
+        local this_image=""
+        get_image compute $count this_image
+        if [ -z "$this_image" ]; then
+            abort_error "Could not find image for $cs_label" endpoint-deploy-begin
+        fi
         this_node_scp="scp $ssh_opts root@$this_node"
         this_osruntime_bootstrap="$this_node-osruntime-bootstrap"
         set_osruntime_numanode_cpupart $cs_label
@@ -401,7 +413,7 @@ function create_servers() {
             "$rb_passwd"\
             "$rb_id"\
             "$ssh_id"\
-            "$image"\
+            "$this_image"\
             "0"
         do_scp "" "$this_osruntime_bootstrap" "${user}@${host}" "~"
         do_ssh ${user}@${host} scp $ssh_opts $this_osruntime_bootstrap root@$this_node:~/$this_osruntime_bootstrap

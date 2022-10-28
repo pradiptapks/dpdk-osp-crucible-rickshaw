@@ -280,9 +280,9 @@ function launch_osruntime() {
     # For each client and server launch the actual script which will run it.
     count=1
     for this_cs_label in ${clients[@]} ${servers[@]} ${collectors[@]}; do
+        this_cs_type=`echo $this_cs_label | awk -F- '{print $1}'`
         this_cs_id=`echo $this_cs_label | awk -F- '{print $2}'`
-        this_bench=`echo ${id_to_bench[$this_cs_id]}`
-        this_image=`echo ${bench_to_image[$this_bench]}`
+        get_image $this_cs_type $this_cs_id this_image
         set_osruntime_numanode_cpupart $this_cs_label
 
         container_name="${endpoint_label}_${run_id}_${this_cs_label}_${os_runtime}"
