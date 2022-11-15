@@ -51,10 +51,12 @@ my @queued_docs;
 my @queued_ndjson;
 my @queued_terms;
 my %num_docs_submitted = ('run' => 0, 'iteration' => 0, 'param' => 0, 'tag' => 0, 'sample' => 0, 'period' => 0);
+my $max_jobs = 200;
 
 sub usage {
     print "\nusage:\n\n";
     print "--base-run-dir <dir>  (this is a result-file in json that rickshaw-post-process generates)\n";
+    print "--max-jobs <num>  (maximum number of background jobs for indexing)\n";
 }
 
 sub http_request {
@@ -552,6 +554,9 @@ while (scalar @ARGV > 0) {
     } elsif ($arg =~ /^base-run-dir$/) {
         debug_log(sprintf "argument: [%s]\n", $arg);
         $base_run_dir = $val;
+    } elsif ($arg =~ /^max-jobs$/) {
+        debug_log(sprintf "argument: [%s]\n", $arg);
+        $max_jobs = $val;
     } else {
         printf "[ERROR]argument not valid: [%s]\n", $arg;
         usage;
@@ -658,6 +663,7 @@ if (indexed_doc_count("run") > 0) {
     exit 1;
 }
 
+my @jobs;
 if (-e $tool_dir and $index_tools == 1) {
     my $base_metric_doc_ref = create_es_doc("metric_desc");
     if (opendir(TOOLDIR, $tool_dir)) {
@@ -681,12 +687,13 @@ if (-e $tool_dir and $index_tools == 1) {
 
                                     $tool_file =~ s/(metric-data-\S+)\.json.*/$1/;
                                     printf "Working on tool_file: %s\n", $tool_file;
-                                    if (my $pid = fork) {
-                                        push(@pids, $pid);
-                                    } else {
-                                        my $num_metric_docs_submitted = index_metrics('index', $tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
-                                        exit 0;
-                                    }
+
+                                    my %job_args = ( 'tool-file' => $tool_dir . "/" . $tool_file,
+                                                     'collector' => $collector,
+                                                     'num' => $num,
+                                                     'doc-ref' => $base_metric_doc_ref );
+                                    push(@jobs, \%job_args);
+
 
                                 }
                             }
@@ -697,6 +704,30 @@ if (-e $tool_dir and $index_tools == 1) {
         }
     }
 }
+my $num_jobs = 0;
+foreach my $job_args (@jobs) {
+    if (my $pid = fork) {
+        push(@pids, $pid);
+        $num_jobs++;
+    } else {
+        my $num_metric_docs_submitted = index_metrics('index', $$job_args{'tool-file'}, $$job_args{'collector'}, $$job_args{'num'}, $$job_args{'doc-ref'});
+        #$tool_dir . "/" . $tool_file, $collector, $num, $base_metric_doc_ref);
+        exit 0;
+    }
+    if ($num_jobs > $max_jobs) {
+        printf "Waiting for %d indexing jobs to complete\n", $max_jobs;
+        while (1) {
+            my $wait_return = wait();
+            if ($wait_return < 0) {
+                last;
+            }
+        }
+        $num_jobs = 0;
+    }
+}
+@pids = ();
+
+
 if (exists $result{'iterations'}) {
     print "Indexing of benchmark data starting\n";
     my $iter_num = 1;
