@@ -45,6 +45,18 @@ if ! pushd $cs_dir; then
     exit 1
 fi
 
+if [ "${cpu_partitioning}" == "1" ]; then
+    if [ -z "${HK_CPUS}" ]; then
+        abort_error "cpu-partitioning is enabled but HK_CPUS is empty" engine-init-begin
+        exit 1
+    fi
+
+    if [ -z "${WORKLOAD_CPUS}" ]; then
+        abort_error "cpu-partitioning is enabled but WORKLOAD_CPUS is empty" engine-init-begin
+        exit 1
+    fi
+fi
+
 do_roadblock engine-init-begin ${engine_script_start_timeout}
 roadblock_rc=$?
 roadblock_exit_on_error ${roadblock_rc}
