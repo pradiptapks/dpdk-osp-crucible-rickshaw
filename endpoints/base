@@ -1143,7 +1143,7 @@ function load_settings() {
     load_json_setting "roadblock.timeouts.engine-start" engine_script_start_timeout
     load_json_setting "roadblock.timeouts.move-data" endpoint_move_data_timeout
 
-    if [ -z "${userenv}" ]; then
+    if [ -z "${userenv}" -o "${userenv}" == "default" ]; then
         load_json_setting "userenvs.default" userenv
     fi
 
