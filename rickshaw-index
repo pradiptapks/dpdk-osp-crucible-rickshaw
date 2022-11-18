@@ -605,8 +605,8 @@ if (defined $result_ref) {
 my $idx_resp_ref = http_request("GET", "localhost:9200", "_cat/indices?format=json", '');
 my $latest_ver;
 if (ref $idx_resp_ref eq ref [] ) {
-    my %shortnames;
-    my %fullnames;
+    my @fullnames;
+    my @all_indices;
     my %vers;
     foreach my $idx (@{ $idx_resp_ref } ) {
         my $idx_name = $$idx{'index'};
@@ -614,24 +614,38 @@ if (ref $idx_resp_ref eq ref [] ) {
             my $ver = $1;
             my $name = $2;
             $vers{$ver} = 1;
-            $shortnames{$name} = 1;
-            $fullnames{$idx_name} = 1;
+            push(@fullnames, $idx_name);
         }
+        push(@all_indices, $idx_name);
     }
     my @sorted_vers = sort(keys(%vers));
     $latest_ver = $sorted_vers[0];
-    printf "Latest CDM version found in local ES instance is %s\n", $latest_ver;
-    foreach my $req_name ("run", "iteration", "tag", "param", "sample", "period", "metric_desc", "metric_data") {
-        my $complete_index_name = "cdm" . $latest_ver . "-" . $req_name;
-        if (! exists $fullnames{$complete_index_name}) {
-            printf "Could not find index %s in Elastic\n", $complete_index_name;
-            exit 1;
-        } else {
-            printf "Found index %s\n", $req_name;
+    if (defined $latest_ver) {
+        printf "Latest CDM version found in local ES instance is %s\n", $latest_ver;
+        foreach my $req_name ("run", "iteration", "tag", "param", "sample", "period", "metric_desc", "metric_data") {
+            my $complete_index_name = "cdm" . $latest_ver . "-" . $req_name;
+            if (grep(/^$complete_index_name$/, @fullnames)) {
+                printf "Found index %s\n", $req_name;
+            } else {
+                printf "Could not find index [%s] in Elastic\n", $complete_index_name;
+                printf "The following indices are present:\n";
+                foreach my $index (@all_indices) {
+                    printf "    [%s]\n", $index;
+                }
+                printf "\n";
+                exit 1;
+            }
         }
+    } else {
+        print "Could not find any CDM versions in ES\n";
+        print "Query response:\n";
+        print Dumper $idx_resp_ref;
+        exit 1;
     }
 } else {
     printf "Could not find any indices in ES\n";
+    print "Query response:\n";
+    print Dumper $idx_resp_ref;
     exit 1;
 }
 
