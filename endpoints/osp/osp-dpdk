@@ -1,0 +1,552 @@
+#!/usr/bin/env bash
+# -*- mode: sh; indent-tabs-mode: nil; sh-basic-offset: 4 -*-
+# vim: autoindent tabstop=4 shiftwidth=4 expandtab softtabstop=4 filetype=bash
+
+# This script implements the 'osp' endpoint for rickshaw.  It runs 1 or more
+# clients and servers as instances/VMs in an Openstack cluster.
+#
+# Usage:
+# osp [--validate] --endpoint-opts=host=<host>,user=<user>,client:n-m,server:n-m 
+#                    --run-id <id> --base-run-dir --image <location>
+#                    --roadblock-server <host> --roadblock-id <id> --roadblock-passwd=<passwd>
+#
+# If --validate is used all options after client/server will be ignored
+#
+
+# Source the base file for common functions and config
+this_endpoint_dir=$(dirname `readlink -e $0` | sed -e 'sX/binXX')
+endpoint_base_dir=$(cd $this_endpoint_dir >/dev/null && cd .. && /bin/pwd)
+if [ -e "$endpoint_base_dir/base" ]; then
+    . "$endpoint_base_dir/base"
+else
+    echo "Could not find endpoint source file "$endpoint_base_dir/base", exiting"
+    exit 1
+fi
+
+echo "#running osp endpoint"
+clear_all_servers="1"
+endpoint_name="osp"
+instance_prefix="rickshaw"
+base_osruntime_bootstrap="$endpoint_base_dir/osruntime-bootstrap"
+new_osp_followers="" # engines which only run tools for openstack nodes
+vm_image="centos9"
+vm_user="centos"
+mgmt_network="management"
+declare -A flavor
+declare -A availability_zone
+declare -A ips
+declare -A active_compute_nodes
+osruntime[default]="podman"
+availability_zone[default]="nova"
+flavor[default]="m1.small"
+
+function endpoint_osp_test_stop() {
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    echo "Running endpoint_osp_test_stop"
+
+    # Delete network related openstack items here (router, floating ip, firewall?)
+}
+
+function endpoint_osp_test_start() {
+    # This function runs right after a server starts any service and right before a client starts
+    # and tries to contect the server's service.  The purpose of this function is to do any
+    # work which ensures the client can contact the server.  In some cases there may be nothing
+    # to do.  Regardless of the work, the endpoint needs to relay what IP & ports the client
+    # needs to use in order to reach the server.  In some cases that may be the information the
+    # server has provided to the endpoint, or this information has changed because the endpoint
+    # created some sort of proxy to reach the server.
+
+    local msgs_dir="$1"; shift
+    local test_id="$1"; shift
+    local tx_msgs_dir="$1"; shift
+    echo "Running endpoint_osp_test_start"
+    # Creating any service or ingress only works if any servers provided information about its
+    # IP and ports.
+    local this_msg_file="${msgs_dir}/${test_id}:server-start-end.json"
+    if [ -e $this_msg_file ]; then
+        echo "Found $this_msg_file"
+        # Extract the cs-label (server-n, client-y) the IP, and the ports this benchmark is using:
+        # server-1 1.2.3.4 30002 30003
+        cat $this_msg_file | jq -r '.received[] | if .payload.message.command == "user-object" and .payload.message."user-object".svc.ports then [ .payload.sender.id, .payload.message."user-object".svc.ip, .payload.message."user-object".svc.ports ] | flatten | tostring   else null end' | grep -v null | sed -e 's/"//g' -e 's/\[//' -e 's/\]//' -e 's/,/ /g' >"$endpoint_run_dir/ports.txt"
+
+        while read -u 9 line; do
+            echo "line: $line"
+            # TODO: set up OSP network services here, like firewall, router, etc
+        done 9< "$endpoint_run_dir/ports.txt"
+    else
+        echo "Did not find $this_msg_file"
+    fi
+}
+
+function osp_req_check() {
+    if [ -z "$host" ]; then
+        exit_error "osp host is not defined"
+    fi
+    verify_ssh_login $user $host
+    # TODO: source overcloudrc or equivalent init file to do osp stuff.  Error out if not found
+    osp_cmd=". ./overcloudrc && openstack server list"
+    do_ssh ${user}@${host} "$osp_cmd 2>&1" >/dev/null 2>&1
+    rc=$?
+    if [ $rc -gt 0 ]; then
+        exit_error "Could not run 'openstack' on overcloud host: $osp_cmd"
+    fi
+    # Validation returns what clients and servers would be used and the userenv
+    if [ "$do_validate" == 1 ]; then
+        echo_clients_servers
+        echo "userenv $userenv"
+        exit
+    fi
+}
+
+function process_osp_opts() {
+    local endpoint_opts="$1"
+    for opt in `echo $endpoint_opts | sed -e 's/,/ /g'`; do
+        arg=`echo $opt| awk -F: '{print $1}'`
+        # The $val may have : in it, so don't use awk to get only the second field
+        val=`echo $opt | sed -e s/^$arg://`
+        case "$arg" in
+            ospconfig)
+                ospconfig=$val
+                ;;
+            client|server|clients|servers)
+                addto_clients_servers "$arg" "$val"
+                ;;
+            host)
+                host=$val
+                if [ -z "$controller_ipaddr" ]; then
+                    controller_ipaddr=`get_controller_ip $host`
+                fi
+                ;;
+            controller-ip)
+                controller_ipaddr=$val
+                ;;
+            user)
+                user=$val
+                ;;
+            vm-user)
+                vm_user=$val
+                ;;
+            vm-image)
+                vm_image=$val
+                ;;
+            userenv)
+                userenv=$val
+                ;;
+            flavor)
+                flavor="$val"
+                # flavor is per engine:
+                # option format::  flavor:<engine-label>:<flavor>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                # <engine-label> can be an engine type (client, server) and a '-', followed by range(s) of numbers:
+                #   client-1-3+5-7+9-11   <-ranges must be separated with '+'
+                this_key=$(get_opt_field "${val}" "key")
+                this_value=$(get_opt_field "${val}" "value")
+                label=`echo $this_key | awk -F- '{print $1}'`
+                range=`echo $this_key | sed -e s/$label-//`
+                if [ "$label" == "default" ]; then
+                    flavor["default"]=$this_value
+                else
+                    for this_range in `echo $range | sed -e 's/+/ /g'`; do
+                        if echo $this_range | grep -q "-"; then
+                            begin=`echo $this_range | awk -F- '{print $1}'`
+                            end=`echo $this_range | awk -F- '{print $2}'`
+                        else
+                            begin=$this_range
+                            end=$this_range
+                        fi
+                        for this_id in `seq $begin $end`; do
+                            flavor[$label-$this_id]=$this_value
+                        done
+                    done
+                fi
+                ;;
+            availability-zone)
+                # node (compute node hostname) is per engine:
+                # option format::  node:<engine-label>:<node>
+                # <engine-label> can be 'default' to apply to any engine that is not explicitly specified
+                this_key=$(get_opt_field "${val}" "key")
+                this_value=$(get_opt_field "${val}" "value")
+                #this_key=client-1-5+11-15+21+23+25+27+28
+                #this_value=nova:compute-r650-0.localdomain
+                echo "#this_key: [$this_key]"
+                echo "#this_value: [$this_value]"
+                label=`echo $this_key | awk -F- '{print $1}'`
+                range=`echo $this_key | sed -e s/$label-//`
+                echo "#zone: [$this_value]"
+                echo "#label: [$label]"
+                echo "#range: [$range]"
+                if [ "$label" == "default" ]; then
+                    availability_zone["default"]=$this_value
+                else
+                    for this_range in `echo $range | sed -e 's/+/ /g'`; do
+                        if echo $this_range | grep -q "-"; then
+                            begin=`echo $this_range | awk -F- '{print $1}'`
+                            end=`echo $this_range | awk -F- '{print $2}'`
+                        else
+                            begin=$this_range
+                            end=$this_range
+                        fi
+                        for this_id in `seq $begin $end`; do
+                            availability_zone[$label-$this_id]=$this_value
+                        done
+                    done
+                fi
+                ;;
+            *)
+                if echo $arg | grep -q -- "="; then
+                    echo "You can't use a \"=\" for assignment in endpoint options"
+                    echo "You must use \":\", like `echo $arg | sed -e 's/=/:/'`"
+                fi
+                exit_error "osp endpoint option [$arg] not supported"
+                ;;
+        esac
+    done
+}
+
+function create_remotehost_engines() {
+    echo "create_remotehost_engines()"
+}
+
+function create_servers() {
+    typeset -n ref1=$1; shift # caller-provided variable name (call-by-reference)
+    ref1=""
+    local type="$1"; shift
+    local instances=""
+
+    ssh_id=$(sed -z 's/\n/\\n/g' ${config_dir}/rickshaw_id.rsa)
+
+    # One openstack server (VM, instance, etc) is created per client and server benchmark engine
+    # Servers are not created for collecting tools on compute, controller, network nodes.
+    # An osruntime (chroot or podman container) will be created on each of those nodes via launch_osruntime()
+
+    echo "vm_ssh_key_name: [$vm_ssh_key_name]"
+    echo "vm_ssh_key_file: [$vm_ssh_key_file]"
+    do_ssh ${user}@${host} "mkdir -p $vm_ssh_key_dir"
+    echo "checking for existence of ssh key"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair list --quote minimal -f csv | grep -v Name,Fingerprint" >${endpoint_run_dir}/openstack-keys.txt
+    existing_key=`cat ${endpoint_run_dir}/openstack-keys.txt | awk -F, '{print $1}' | grep -v \"Name\" | grep $vm_ssh_key_name` 
+    if [ "[$existing_key]" == "[$vm_ssh_key_name]" ]; then
+        echo "deleting existing ssh key [$vm_ssh_key_name]"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair delete $vm_ssh_key_name" 
+        echo "remaining keypairs"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair list --quote minimal -f csv"
+    fi
+    echo "creating new ssh key:"
+    echo "[$osp_pre_cmd openstack keypair create $vm_ssh_key_name >$vm_ssh_key_file && chmod 600 $vm_ssh_key_file]"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair create $vm_ssh_key_name >$vm_ssh_key_file && chmod 600 $vm_ssh_key_file"
+    local osp_servers=""
+
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack flavor list -f value -c Name" >${endpoint_run_dir}/openstack-flavors.txt
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack image list -f value -c Name" >${endpoint_run_dir}/openstack-images.txt
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack network list -f value -c Name" >${endpoint_run_dir}/openstack-networks.txt
+
+    if grep -q $mgmt_network ${endpoint_run_dir}/openstack-networks.txt; then
+        echo "Confirmed network [$mgmt_network] is available"
+    else
+        abort_error "Network [$mgmt_network] does not exist" endpoint-deploy-begin
+    fi
+
+    if [ "$clear_all_servers" == "1" ]; then # Clear all rickshaw servers, even from other run ids
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack server list -f value -c Name" >${endpoint_run_dir}/openstack-existing-servers.txt
+        existing_servers=`cat ${endpoint_run_dir}/openstack-existing-servers.txt | grep rickshaw`
+        if [ ! -z "$existing_servers" ]; then
+            echo "deleting existing servers [$existing_servers]"
+            do_ssh ${user}@${host} "$osp_pre_cmd openstack server delete $existing_servers" 
+        fi
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port list -f value -c Name" >${endpoint_run_dir}/openstack-existing-ports.txt
+        existing_ports=`cat ${endpoint_run_dir}/openstack-existing-ports.txt | grep rickshaw`
+        if [ ! -z "$existing_ports" ]; then
+            echo "deleting existing ports [$existing_ports]"
+            do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $existing_ports" 
+        fi
+    fi
+
+    total_cpu_partitions=0
+    set_total_cpupart
+
+    while [ $# -gt 0 ]; do
+        local cs_label=$1; shift
+        local this_cs_type=`echo $cs_label | awk -F- '{print $1}'`
+        local this_cs_id=`echo $cs_label | awk -F- '{print $2}'`
+        local this_image=""
+        get_image "$this_cs_type" "$this_cs_id" this_image
+        echo "this_image: [$this_image]"
+        if [ -z "$this_image" ]; then
+            abort_error "Could not find image for $cs_label" endpoint-deploy-begin
+        fi
+        local vm_name="rickshaw-$run_id-$cs_label"
+        local mgmt_port_name="mgmt-$vm_name"
+        local provider1_port_name="provider1-$vm_name"
+        local provider2_port_name="provider2-$vm_name"
+        local this_osruntime_bootstrap="$vm_name-osruntime-bootstrap"
+        local this_availability_zone=""
+
+        set +u
+        if [ ! -z "${availability_zone[$cs_label]}" ]; then
+            this_availability_zone=${availability_zone[$cs_label]}
+        else
+            this_availability_zone=${availability_zone[default]}
+        fi
+
+        local this_flavor=""
+        if [ ! -z "${flavor[$cs_label]}" ]; then
+            this_flavor=${flavor[$cs_label]}
+        else
+            this_flavor=${flavor[default]}
+        fi
+        set -u
+
+        if grep -q $this_flavor ${endpoint_run_dir}/openstack-flavors.txt; then
+            echo "Confirmed flavor [$this_flavor] is available"
+        else
+            abort_error "Flavor [$this_flavor] does not exist" endpoint-deploy-begin
+        fi
+
+        if grep -q $vm_image ${endpoint_run_dir}/openstack-images.txt; then
+            echo "Confirmed image [$vm_image] is available"
+        else
+            abort_error "VM image [$vm_image] does not exist\nAvailable images: `cat ${endpoint_run_dir}/openstack-images.txt`" endpoint-deploy-begin
+        fi
+
+        if [ "$clear_all_servers" == "0" ]; then # Clear only servers with same run id
+            existing_servers=`cat ${endpoint_run_dir}/openstack-existing-servers.txt | grep $vm_name`
+            if [ ! -z "$existing_servers" ]; then
+                echo "deleting existing server [$existing_servers]"
+                do_ssh ${user}@${host} "$osp_pre_cmd openstack server delete $existing_servers" 
+            fi
+            existing_ports=`cat ${endpoint_run_dir}/openstack-existing-ports.txt | grep $vm_name`
+            if [ ! -z "$existing_ports" ]; then
+                echo "deleting existing ports [$existing_ports]"
+                do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $existing_ports" 
+            fi
+        fi
+
+        echo "creating openstack mgmt port for server $vm_name"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network management --no-security-group --disable-port-security $mgmt_port_name"
+
+        echo "creating openstack providers ports for server $vm_name"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network provider-1 --no-security-group --disable-port-security --no-fixed-ip $provider1_port_name"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port create --network provider-2 --no-security-group --disable-port-security --no-fixed-ip $provider2_port_name"
+
+
+        set_osruntime_numanode_cpupart $cs_label
+        echo "cpu_partitioning: [$cpu_partitioning]"
+        echo "numa_node: [$numa_node]"
+        echo "os_runtime: [$os_runtime]"
+
+        pushd $endpoint_run_dir >/dev/null
+        make_osruntime_boostrap_script\
+            "$this_osruntime_bootstrap"\
+            "$run_id"\
+            "$controller_ipaddr"\
+            "$endpoint_run_dir"\
+            "$cs_label"\
+            "$base_run_dir"\
+            "$cpu_partitioning"\
+            "$endpoint_label"\
+            "$os_runtime"\
+            "$max_sample_failures"\
+            "$max_rb_attempts"\
+            "$rb_passwd"\
+            "$rb_id"\
+            "$ssh_id"\
+            "$this_image"\
+            "0"
+        do_scp "" "$this_osruntime_bootstrap" "${user}@${host}" "~"
+        popd >/dev/null
+
+
+        # Server is created with --user-data <osruntime-bootstrap-script>, and the server will run this script right after boot.
+        echo "creating openstack server $vm_name"
+        #server_create_cmd="$osp_pre_cmd openstack server create --flavor $this_flavor --nic port-id=$mgmt_port_name --image $vm_image --availability-zone $this_availability_zone --key-name $vm_ssh_key_name --user-data $this_osruntime_bootstrap --key-name $vm_ssh_key_name $vm_name"
+        server_create_cmd="$osp_pre_cmd openstack server create --flavor $this_flavor --nic port-id=$mgmt_port_name --nic port-id=$provider1_port_name --nic port-id=$provider2_port_name --image $vm_image --availability-zone $this_availability_zone --key-name $vm_ssh_key_name --user-data $this_osruntime_bootstrap --key-name $vm_ssh_key_name $vm_name"
+        echo "Going to run via ssh: $server_create_cmd"
+        do_ssh ${user}@${host} $server_create_cmd >${endpoint_run_dir}/openstack-create-$vm_name.txt 2>&1
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "openstack server create exit code: $rc"
+            cat ${endpoint_run_dir}/openstack-create-$vm_name.txt
+            abort_error "`cat ${endpoint_run_dir}/openstack-create-$vm_name.txt`" endpoint-deploy-begin
+        fi
+
+        # The following is necessary to get engine logs
+        echo "getting openstack port information for $vm_name"
+        do_ssh ${user}@${host} "$osp_pre_cmd openstack port show $mgmt_port_name -f json" >${endpoint_run_dir}/openstack-port-$mgmt_port_name.json
+        echo "finding server IP"
+        this_server_ip=`jq -r .fixed_ips[0].ip_address ${endpoint_run_dir}/openstack-port-$mgmt_port_name.json`
+        echo "this_server_ip: [$this_server_ip]"
+        do_ssh ${user}@${host} "$osp_pre_cmd ssh-keygen -R $this_server_ip"
+        osp_servers+=" $cs_label"
+        ips[$cs_label]=$this_server_ip
+
+        # Remember the compute nodes that are hosting VMs, so tool-collection osruntimes can be launched on them later
+        this_compute_node=`do_ssh ${user}@${host} $osp_pre_cmd openstack server show $vm_name -f json | jq -r '."OS-EXT-SRV-ATTR:hypervisor_hostname"'`
+        if [ "[$this_compute_node]" != "[]" ]; then
+            active_compute_nodes[$this_compute_node]="1"
+        else
+            echo "Something went wrong getting compute node for $vm_name, exiting"
+        fi
+    done
+
+    # Run engines (for tool collection) on any compute nodes that host our VMs
+    echo "Compute nodes which host these VMs: ${!active_compute_nodes[@]}"
+    count=1
+    for this_node in ${!active_compute_nodes[@]}; do
+        cs_label="compute-$count"
+        local this_image=""
+        get_image compute $count this_image
+        if [ -z "$this_image" ]; then
+            abort_error "Could not find image for $cs_label" endpoint-deploy-begin
+        fi
+        this_node_scp="scp $ssh_opts root@$this_node"
+        this_osruntime_bootstrap="$this_node-osruntime-bootstrap"
+        set_osruntime_numanode_cpupart $cs_label
+        echo "cpu_partitioning: [$cpu_partitioning]"
+        echo "numa_node: [$numa_node]"
+        echo "os_runtime: [$os_runtime]"
+        pushd $endpoint_run_dir >/dev/null
+        make_osruntime_boostrap_script\
+            "$this_osruntime_bootstrap"\
+            "$run_id"\
+            "$controller_ipaddr"\
+            "$endpoint_run_dir"\
+            "$cs_label"\
+            "$base_run_dir"\
+            "0"\
+            "$endpoint_label"\
+            "$os_runtime"\
+            "$max_sample_failures"\
+            "$max_rb_attempts"\
+            "$rb_passwd"\
+            "$rb_id"\
+            "$ssh_id"\
+            "$this_image"\
+            "0"
+        do_scp "" "$this_osruntime_bootstrap" "${user}@${host}" "~"
+        do_ssh ${user}@${host} scp $ssh_opts $this_osruntime_bootstrap root@$this_node:~/$this_osruntime_bootstrap
+        do_ssh ${user}@${host} ssh $ssh_opts root@$this_node ./$this_osruntime_bootstrap
+        new_osp_followers+=" $cs_label"
+        ips[$cs_label]=$this_node
+        let count=$count+1
+        popd >/dev/null
+    done
+}
+
+function cleanup_osruntime() {
+    local this_cs_label
+    local vm_names=""
+    local mgmt_port_names=""
+    local provider1_port_name=""
+    local provider2_port_name=""
+    echo "Going to delete VMs for these clients and servers: ${clients[@]} ${servers[@]}"
+    for this_cs_label in ${clients[@]} ${servers[@]}; do
+        vm_names+=" rickshaw-$run_id-$this_cs_label"
+        mgmt_port_names+=" mgmt-rickshaw-$run_id-$this_cs_label"
+        provider1_port_name+=" provider1-rickshaw-$run_id-$this_cs_label"
+        provider2_port_name+=" provider2-rickshaw-$run_id-$this_cs_label"
+    done
+    echo "deletintg VM [$vm_names]"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack server delete $vm_names" >${endpoint_run_dir}/openstack-server-delete-vms.txt
+    echo "deletintg network port [$mgmt_port_names, $provider1_port_name, $provider2_port_name]"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $mgmt_port_names" >${endpoint_run_dir}/openstack-port-delete-mgmt-ports.txt
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $provider1_port_name" >${endpoint_run_dir}/openstack-port-delete-proider1-ports.txt
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack port delete $provider2_port_name" >${endpoint_run_dir}/openstack-port-delete-provider2-ports.txt
+    echo "deletintg keypair [$vm_ssh_key_name]"
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack keypair delete $vm_ssh_key_name" >${endpoint_run_dir}/openstack-keypair-delete-$vm_ssh_key_name.txt
+    echo "deletintg keyfile [$vm_ssh_key_name]"
+    do_ssh ${user}@${host} "rm -f $vm_ssh_key_file"
+    do_ssh ${user}@${host} "rm -f *osruntime-bootstrap"
+
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack server list" >${endpoint_run_dir}/openstack-server-remaining.txt
+    echo "remaining rickshaw openstack servers:"
+    grep rickshaw ${endpoint_run_dir}/openstack-server-remaining.txt
+
+    do_ssh ${user}@${host} "$osp_pre_cmd openstack port list" >${endpoint_run_dir}/openstack-port-remaining.txt
+    echo "remaining rickshaw openstack ports:"
+    grep rickshaw ${endpoint_run_dir}/openstack-port-remaining.txt
+
+    return 0
+}
+
+
+function move_osp_logs() {
+    echo "moving engine logs"
+    local this_cs_label remote_cs_log_file container_name delete_remote_dir
+    mkdir -p $engine_logs_dir
+    for this_cs_label in ${clients[@]} ${servers[@]} $new_osp_followers; do
+        echo "this_cs_label: [$this_cs_label]"
+        if echo $this_cs_label | grep -q ^compute; then
+            # This assumes user stack on undercloud can ssh passwordless to root@controllers
+            this_cs_ssh="ssh $ssh_opts root@${ips[$this_cs_label]}"
+        else
+            this_cs_ssh="ssh $ssh_opts -i $vm_ssh_key_file $vm_user@${ips[$this_cs_label]}"
+        fi
+        remote_cs_log_file="$remote_logs_dir/$this_cs_label.txt"
+        local_cs_log_file="$engine_logs_dir/$this_cs_label.txt"
+        set_osruntime_numanode_cpupart $this_cs_label
+        echo "os_runtime: [$os_runtime]"
+        if [ "$os_runtime" == "chroot" ]; then
+            do_ssh $user@$host $this_cs_ssh cat $remote_cs_log_file >$local_cs_log_file &
+        elif [ "$os_runtime" == "podman" ]; then
+            container_name="rickshaw_${run_id}_$this_cs_label"
+            echo "do_ssh $user@$host $this_cs_ssh sudo podman logs ${container_name}"
+            do_ssh $user@$host $this_cs_ssh sudo podman logs ${container_name} >$local_cs_log_file &
+        fi
+    done
+    wait
+}
+
+function get_osp_config() {
+    echo "getting OSP config"
+    #TODO: get instances, networks, etc.
+}
+
+function endpoint_osp_sysinfo() {
+    local remote_base_dir remote_dir local_dir
+    remote_base_dir="/var/lib/crucible"
+    remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
+    local_dir="${endpoint_run_dir}/sysinfo"
+
+    mkdir ${local_dir}
+
+    #TODO: get cluster version info, sosreport, etc
+}
+
+function endpoint_osp_cleanup() {
+    move_osp_logs
+    cleanup_osruntime
+}
+
+process_opts "$@"
+process_common_endpoint_opts osp_opts $endpoint_opts
+process_osp_opts $osp_opts
+init_common_dirs
+load_settings
+
+remote_base_dir="/var/lib/crucible"
+remote_dir="${remote_base_dir}/${endpoint_label}_${run_id}"
+remote_cfg_dir="${remote_dir}/cfg"
+remote_logs_dir="${remote_dir}/logs"
+remote_data_dir="${remote_dir}/data/tmp"
+vm_ssh_key_dir=".rickshaw"
+vm_ssh_key_name="$run_id-ssh-key"
+vm_ssh_key_file="$vm_ssh_key_dir/$vm_ssh_key_name.pem"
+osp_pre_cmd=". ./overcloudrc && "
+
+osp_req_check
+base_req_check
+get_osp_config
+
+echo "This endpoint to run these clients: ${clients[@]}"
+echo "This endpoint to run these servers: ${servers[@]}"
+
+# All roadblock particpants are not determined until it is known
+# where tools are run.  Once this is known, this information needs
+# to be sent back to the controller.
+cs_servers=""
+create_servers cs_servers cs ${clients[@]} ${servers[@]}
+echo "These openstack servers were created: $cs_servers"
+all_engines="$cs_servers"
+process_roadblocks osp ${new_osp_followers}
+echo "endpoint finished"
